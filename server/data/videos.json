@@ -1,0 +1,22 @@
+{
+  "playlists": [
+    {
+      "id": "meri-maano",
+      "name": "meri maano",
+      "items": [
+        {
+          "id": "j0ohu0dxy9smeobs209",
+          "title": "monkey",
+          "url": "/uploads/video/1755957535738-zhhxn1ullqj.mp4",
+          "createdAt": "2025-08-23T13:58:55.785Z"
+        },
+        {
+          "id": "8mn56iaxbocmeobsl24",
+          "title": "hudda",
+          "url": "/uploads/video/1755957560401-e5e724hpj3.mp4",
+          "createdAt": "2025-08-23T13:59:20.476Z"
+        }
+      ]
+    }
+  ]
+}

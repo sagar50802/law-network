@@ -1,0 +1,20 @@
+[
+  {
+    "id": "1755966772625",
+    "title": "fame",
+    "link": "",
+    "type": "image",
+    "url": "/uploads/banners/1755966772611.jpg",
+    "createdAt": 1755966772625
+  },
+  {
+    "id": "1755646365775",
+    "url": "/uploads/banners/1755646365770.jpg",
+    "type": "image/jpeg"
+  },
+  {
+    "id": "1755646394065",
+    "url": "/uploads/banners/1755646394062.jpg",
+    "type": "image/jpeg"
+  }
+]

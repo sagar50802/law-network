@@ -1,0 +1,24 @@
+@import "tailwindcss";
+
+/* custom util used in app */
+.no-copy { user-select: none; -webkit-user-select: none; -ms-user-select: none; }
+/* ✅ Add CSS somewhere global (tailwind.css or index.css) */
+@keyframes blink {
+  50% { opacity: 0.5; }
+}
+.animate-blink {
+  animation: blink 1s infinite;
+}
+@keyframes tick-pop {
+  0%   { transform: scale(0); opacity: 0; }
+  60%  { transform: scale(1.3); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+.tick-animate {
+  display: inline-block;
+  color: green;
+  font-weight: bold;
+  margin-left: 4px;
+  animation: tick-pop 0.4s ease-out;
+}

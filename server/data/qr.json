@@ -1,0 +1,18 @@
+{
+  "url": "/uploads/qr/1755754459182.jpg",
+  "currency": "₹",
+  "plans": {
+    "weekly": {
+      "label": "Weekly",
+      "price": 500
+    },
+    "monthly": {
+      "label": "Monthly",
+      "price": 2000
+    },
+    "yearly": {
+      "label": "Yearly",
+      "price": 3500
+    }
+  }
+}

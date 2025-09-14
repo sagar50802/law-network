@@ -1,0 +1,23 @@
+{
+  "playlists": [
+    {
+      "id": "default",
+      "name": "Featured",
+      "items": [
+        {
+          "id": "1755637372321",
+          "title": "cpc",
+          "artist": "sagar",
+          "url": "/uploads/audio/1755637372297.mp3",
+          "locked": true,
+          "createdAt": 1755637372321
+        }
+      ]
+    },
+    {
+      "id": "1755667968259",
+      "name": "pumma2",
+      "items": []
+    }
+  ]
+}

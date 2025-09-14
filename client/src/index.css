@@ -1,0 +1,16 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Global smooth scrolling for scrollIntoView + anchor jumps */
+html {
+  scroll-behavior: smooth;
+}
+
+/* No-copy on viewer content */
+.no-copy {
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+}
