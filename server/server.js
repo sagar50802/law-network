@@ -20,15 +20,9 @@ mongoose
   });
 
 // ── CORS Setup ──────────────────────────────────────────────────
-const ALLOW = [
-  /^http:\/\/localhost:\d+$/,
-  /^http:\/\/127\.0\.0\.1:\d+$/,
-  /^https:\/\/law-network\.onrender\.com$/,
-];
-
 app.use(
   cors({
-    origin: "https://law-network-client.onrender.com", // ✅ Your actual frontend
+    origin: "https://law-network-client.onrender.com",
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization", "X-Owner-Key", "x-owner-key"],
@@ -118,16 +112,23 @@ app.get("/api/access/status", async (req, res) => {
   }
 });
 
-// ── Dynamic Route Mounting ─────────────────────────────────────
+// ── Safe Dynamic Route Mounting ─────────────────────────────────
 function mount(url, routePath) {
+  const absPath = path.resolve(__dirname, routePath);
+  if (!fs.existsSync(absPath)) {
+    console.warn(`⚠️  Route file not found: ${routePath} → Skipping ${url}`);
+    return;
+  }
   try {
-    app.use(url, require(routePath));
-    console.log("✓ mounted", routePath, "→", url);
+    const routeModule = require(absPath);
+    app.use(url, routeModule);
+    console.log(`✓ Mounted ${routePath} → ${url}`);
   } catch (err) {
-    console.error("✗ failed to mount", routePath, "→", url, "\n→", err.message);
+    console.error(`✗ Failed to mount ${routePath} → ${url}\n→ ${err.message}`);
   }
 }
 
+// ✅ Add All Route Mounts Here
 mount("/api/banners", "./routes/banners");
 mount("/api/articles", "./routes/articles");
 mount("/api/videos", "./routes/videos");
