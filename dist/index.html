@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Law Network</title>
+    <script type="module" crossorigin src="/assets/index-CvhNV_rn.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-kXmdKgC_.css">
+  </head>
+  <body>
+    <div id="root"></div>
+
+    <!-- On-screen boot errors (so a bad import doesn't look like a "blank site") -->
+    <pre id="boot-error" style="
+      display:none; white-space:pre-wrap; 
+      font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      color:#b91c1c; background:#fff3f3; border:1px solid #fecaca; padding:8px; margin:8px;">
+    </pre>
+    <script>
+      const box = document.getElementById('boot-error');
+      function showBootError(msg, stack) {
+        box.style.display = 'block';
+        box.textContent = `[Boot error]\n${msg}\n\n${stack || ''}`;
+        console.error('[Boot error]', msg, stack);
+      }
+      window.addEventListener('error', (e) => showBootError(e.message, e.error && e.error.stack));
+      window.addEventListener('unhandledrejection', (e) => showBootError(String(e.reason), e.reason && e.reason.stack));
+    </script>
+
+  </body>
+</html>
