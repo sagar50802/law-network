@@ -1,32 +1,69 @@
 require("dotenv").config();
-
 const express = require("express");
 const cors = require("cors");
+const mongoose = require("mongoose");
 const path = require("path");
 const fs = require("fs");
-const mongoose = require("mongoose");
-const qrRoutes = require("./routes/qr");
-const scholarRoutes = require("./routes/scholar");
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 const ADMIN_KEY = process.env.ADMIN_KEY || "LAWNOWNER2025";
-
-// ── DB ──────────────────────────────────────────────────────────
 const MONGO_URI = process.env.MONGO_URI || "mongodb://localhost:27017/lawnetwork";
 
+// ── Database ─────────────────────────────────────────────────────
 mongoose
-  .connect(MONGO_URI, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-  })
+  .connect(MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true })
   .then(() => console.log("✅ MongoDB connected"))
   .catch((err) => {
     console.error("✗ MongoDB connection failed:", err.message);
     process.exit(1);
   });
 
-// ── Access Model ────────────────────────────────────────────────
+// ── CORS Setup ──────────────────────────────────────────────────
+const ALLOW = [
+  /^http:\/\/localhost:\d+$/,
+  /^http:\/\/127\.0\.0\.1:\d+$/,
+  /^https:\/\/law-network\.onrender\.com$/,
+];
+
+app.use(
+  cors({
+    origin: "https://law-network-client.onrender.com", // ✅ Your actual frontend
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Owner-Key", "x-owner-key"],
+  })
+);
+app.options("*", cors());
+
+// ── Global Middleware ──────────────────────────────────────────
+app.use(express.json({ limit: "20mb" }));
+app.use(express.urlencoded({ extended: true }));
+app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+
+app.use((req, _res, next) => {
+  req.ADMIN_KEY = ADMIN_KEY;
+  console.log(`[API] ${req.method} ${req.url}`);
+  next();
+});
+
+// ── Ensure Upload Folders ──────────────────────────────────────
+[
+  "uploads",
+  "uploads/consultancy",
+  "uploads/banners",
+  "uploads/articles",
+  "uploads/video",
+  "uploads/audio",
+  "uploads/pdfs",
+  "uploads/qr",
+  "data",
+].forEach((dir) => {
+  const abs = path.join(__dirname, dir);
+  if (!fs.existsSync(abs)) fs.mkdirSync(abs, { recursive: true });
+});
+
+// ── MongoDB Access Model ───────────────────────────────────────
 const Access = mongoose.model(
   "Access",
   new mongoose.Schema({
@@ -38,87 +75,7 @@ const Access = mongoose.model(
   })
 );
 
-// ── CORS ────────────────────────────────────────────────────────
-const ALLOW = [
-  /^http:\/\/localhost:\d+$/, 
-  /^http:\/\/127\.0\.0\.1:\d+$/,
-  /^https:\/\/law-network\.onrender\.com$/
-];
-
-app.use(
-  cors({
-    origin: (origin, cb) => {
-      if (!origin) return cb(null, true);
-      cb(null, ALLOW.some((r) => r.test(origin)));
-    },
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Owner-Key", "x-owner-key"],
-  })
-);
-app.options(/.*/, cors());
-
-// ── Parsers ─────────────────────────────────────────────────────
-app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ extended: true }));
-
-// ── Scholar routes ──────────────────────────────────────────────
-app.use("/api/scholar", scholarRoutes);
-
-// ── Ensure Upload Folders ───────────────────────────────────────
-[
-  "uploads",
-  "uploads/consultancy",
-  "uploads/banners",
-  "uploads/articles",
-  "uploads/video",
-  "uploads/audio",
-  "uploads/pdfs",
-  "uploads/qr",
-  "data",
-].forEach((rel) => {
-  const dir = path.join(__dirname, rel);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-});
-
-// ── Static ──────────────────────────────────────────────────────
-app.use("/uploads", express.static(path.join(__dirname, "uploads")));
-
-// ── Global Middleware ───────────────────────────────────────────
-app.use((req, _res, next) => {
-  req.ADMIN_KEY = ADMIN_KEY;
-  next();
-});
-
-app.use((req, _res, next) => {
-  console.log(`[API] ${req.method} ${req.url}`);
-  next();
-});
-
-// ── Dynamic Route Mount Helper ─────────────────────────────────
-function mount(url, file) {
-  try {
-    app.use(url, require(file));
-    console.log("✓ mounted", file, "→", url);
-  } catch (e) {
-    console.error("✗ failed mounting", file, "→", url, "\n  Reason:", e.message);
-    process.exit(1);
-  }
-}
-
-// ── Mount All Routes ────────────────────────────────────────────
-mount("/api/banners", "./routes/banners");
-mount("/api/articles", "./routes/articles");
-mount("/api/videos", "./routes/videos");
-mount("/api/podcasts", "./routes/podcasts");
-mount("/api/pdfs", "./routes/pdfs");
-mount("/api/submissions", "./routes/submissions");
-mount("/api/qr", "./routes/qr");
-mount("/api/consultancy", "./routes/consultancy");
-mount("/api/news", "./routes/news");
-mount("/api/plagiarism", "./routes/plagiarism");
-
-// ── Access Control Routes ───────────────────────────────────────
+// ── Access Routes ──────────────────────────────────────────────
 app.post("/api/access/grant", async (req, res) => {
   const { email, feature, featureId, expiry, message } = req.body;
   if (!email || !feature || !featureId) return res.status(400).json({ error: "Missing fields" });
@@ -161,13 +118,33 @@ app.get("/api/access/status", async (req, res) => {
   }
 });
 
-// ── Health Check ────────────────────────────────────────────────
+// ── Dynamic Route Mounting ─────────────────────────────────────
+function mount(url, routePath) {
+  try {
+    app.use(url, require(routePath));
+    console.log("✓ mounted", routePath, "→", url);
+  } catch (err) {
+    console.error("✗ failed to mount", routePath, "→", url, "\n→", err.message);
+  }
+}
+
+mount("/api/banners", "./routes/banners");
+mount("/api/articles", "./routes/articles");
+mount("/api/videos", "./routes/videos");
+mount("/api/podcasts", "./routes/podcasts");
+mount("/api/pdfs", "./routes/pdfs");
+mount("/api/submissions", "./routes/submissions");
+mount("/api/qr", "./routes/qr");
+mount("/api/consultancy", "./routes/consultancy");
+mount("/api/news", "./routes/news");
+mount("/api/scholar", "./routes/scholar");
+mount("/api/plagiarism", "./routes/plagiarism");
+
+// ── Health Check + Root ────────────────────────────────────────
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
+app.get("/", (_req, res) => res.send("🚀 Law Network Backend is Live"));
 
-// ✅ Root route (for Render.com status)
-app.get("/", (_req, res) => {
-  res.send("🚀 Law Network Backend is Live");
+// ── Start Server ───────────────────────────────────────────────
+app.listen(PORT, () => {
+  console.log(`🚀 API running on http://localhost:${PORT}`);
 });
-
-// ── Start Server ────────────────────────────────────────────────
-app.listen(PORT, () => console.log(`🚀 API running on http://localhost:${PORT}`));
