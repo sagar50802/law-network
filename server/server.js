@@ -13,21 +13,25 @@ const PORT = process.env.PORT || 5000;
 const ADMIN_KEY = process.env.ADMIN_KEY || "LAWNOWNER2025";
 
 // ── DB ──────────────────────────────────────────────────────────
-const MONGO_URI = process.env.MONGO_URI || "mongodb://127.0.0.1:27017/lawnowner";
+const MONGO_URI = process.env.MONGO_URI || "mongodb://localhost:27017/lawnetwork";
+
 mongoose
-  .connect(MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true })
-  .then(() => console.log("✓ MongoDB connected"))
+  .connect(MONGO_URI, {
+    useNewUrlParser: true,
+    useUnifiedTopology: true,
+  })
+  .then(() => console.log("✅ MongoDB connected"))
   .catch((err) => {
     console.error("✗ MongoDB connection failed:", err.message);
     process.exit(1);
   });
 
-// Access model (unchanged)
+// ── Access Model ────────────────────────────────────────────────
 const Access = mongoose.model(
   "Access",
   new mongoose.Schema({
     email: { type: String, required: true },
-    feature: { type: String, required: true }, // playlist, video, pdf, podcast, article
+    feature: { type: String, required: true },
     featureId: { type: String, required: true },
     expiry: { type: Date },
     message: { type: String },
@@ -35,7 +39,12 @@ const Access = mongoose.model(
 );
 
 // ── CORS ────────────────────────────────────────────────────────
-const ALLOW = [/^http:\/\/localhost:\d+$/, /^http:\/\/127\.0\.0\.1:\d+$/];
+const ALLOW = [
+  /^http:\/\/localhost:\d+$/, 
+  /^http:\/\/127\.0\.0\.1:\d+$/,
+  /^https:\/\/law-network\.onrender\.com$/
+];
+
 app.use(
   cors({
     origin: (origin, cb) => {
@@ -53,10 +62,10 @@ app.options(/.*/, cors());
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 
-// Scholar routes (as you had)
+// ── Scholar routes ──────────────────────────────────────────────
 app.use("/api/scholar", scholarRoutes);
 
-// ── Ensure folders ──────────────────────────────────────────────
+// ── Ensure Upload Folders ───────────────────────────────────────
 [
   "uploads",
   "uploads/consultancy",
@@ -75,19 +84,18 @@ app.use("/api/scholar", scholarRoutes);
 // ── Static ──────────────────────────────────────────────────────
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
-// Make admin key available
+// ── Global Middleware ───────────────────────────────────────────
 app.use((req, _res, next) => {
   req.ADMIN_KEY = ADMIN_KEY;
   next();
 });
 
-// ✅ Tiny request logger (this is the only new middleware)
 app.use((req, _res, next) => {
   console.log(`[API] ${req.method} ${req.url}`);
   next();
 });
 
-// ── Mount helper ────────────────────────────────────────────────
+// ── Dynamic Route Mount Helper ─────────────────────────────────
 function mount(url, file) {
   try {
     app.use(url, require(file));
@@ -98,7 +106,7 @@ function mount(url, file) {
   }
 }
 
-// ── Routes ─────────────────────────────────────────────────────
+// ── Mount All Routes ────────────────────────────────────────────
 mount("/api/banners", "./routes/banners");
 mount("/api/articles", "./routes/articles");
 mount("/api/videos", "./routes/videos");
@@ -108,11 +116,9 @@ mount("/api/submissions", "./routes/submissions");
 mount("/api/qr", "./routes/qr");
 mount("/api/consultancy", "./routes/consultancy");
 mount("/api/news", "./routes/news");
-
-// ✅ NEW plagiarism analyzer
 mount("/api/plagiarism", "./routes/plagiarism");
 
-// Access helpers (unchanged)
+// ── Access Control Routes ───────────────────────────────────────
 app.post("/api/access/grant", async (req, res) => {
   const { email, feature, featureId, expiry, message } = req.body;
   if (!email || !feature || !featureId) return res.status(400).json({ error: "Missing fields" });
@@ -155,6 +161,13 @@ app.get("/api/access/status", async (req, res) => {
   }
 });
 
+// ── Health Check ────────────────────────────────────────────────
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 
-app.listen(PORT, () => console.log(`🚀 API on http://localhost:${PORT}`));
+// ✅ Root route (for Render.com status)
+app.get("/", (_req, res) => {
+  res.send("🚀 Law Network Backend is Live");
+});
+
+// ── Start Server ────────────────────────────────────────────────
+app.listen(PORT, () => console.log(`🚀 API running on http://localhost:${PORT}`));
