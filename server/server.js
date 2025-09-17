@@ -57,6 +57,91 @@ app.use((req, _res, next) => {
   if (!fs.existsSync(abs)) fs.mkdirSync(abs, { recursive: true });
 });
 
+// ── MongoDB Access Model ───────────────────────────────────────
+const Access = mongoose.model(
+  "Access",
+  new mongoose.Schema({
+    email: { type: String, required: true },
+    feature: { type: String, required: true },
+    featureId: { type: String, required: true },
+    expiry: { type: Date },
+    message: { type: String },
+  })
+);
+
+// ── Access Routes ──────────────────────────────────────────────
+app.post("/api/access/grant", async (req, res) => {
+  const { email, feature, featureId, expiry, message } = req.body;
+  if (!email || !feature || !featureId) return res.status(400).json({ error: "Missing fields" });
+  try {
+    await Access.findOneAndUpdate(
+      { email, feature, featureId },
+      { expiry: expiry ? new Date(expiry) : null, message },
+      { upsert: true, new: true }
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post("/api/access/revoke", async (req, res) => {
+  const { email, feature, featureId } = req.body;
+  if (!email || !feature || !featureId) return res.status(400).json({ error: "Missing fields" });
+  try {
+    await Access.deleteOne({ email, feature, featureId });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get("/api/access/status", async (req, res) => {
+  const { email, feature, featureId } = req.query;
+  if (!email || !feature || !featureId) return res.json({ access: false });
+  try {
+    const record = await Access.findOne({ email, feature, featureId });
+    if (!record) return res.json({ access: false });
+    if (record.expiry && record.expiry < new Date()) {
+      await Access.deleteOne({ _id: record._id });
+      return res.json({ access: false });
+    }
+    res.json({ access: true, expiry: record.expiry, message: record.message });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── Safe Dynamic Route Mounting ─────────────────────────────────
+function mount(url, routePath) {
+  const absPath = path.resolve(__dirname, routePath);
+  if (!fs.existsSync(absPath)) {
+    console.warn(`⚠️  Route file not found: ${routePath} → Skipping ${url}`);
+    return;
+  }
+  try {
+    const routeModule = require(absPath);
+    console.log(`Trying to mount ${url} from ${routePath}`);
+    app.use(url, routeModule);
+    console.log(`✓ Mounted ${routePath} → ${url}`);
+  } catch (err) {
+    console.error(`✗ Failed to mount ${routePath} → ${url}\n→ ${err.message}`);
+  }
+}
+
+// ✅ Add All Route Mounts Here (with .js extensions)
+mount("/api/banners", "./routes/banners.js");
+mount("/api/articles", "./routes/articles.js");
+mount("/api/videos", "./routes/videos.js");
+mount("/api/podcasts", "./routes/podcasts.js");
+mount("/api/pdfs", "./routes/pdfs.js");
+mount("/api/submissions", "./routes/submissions.js");
+mount("/api/qr", "./routes/qr.js");
+mount("/api/consultancy", "./routes/consultancy.js");
+mount("/api/news", "./routes/news.js");
+mount("/api/scholar", "./routes/scholar.js");
+mount("/api/plagiarism", "./routes/plagiarism.js");
+
 // ── Health Check + Root ────────────────────────────────────────
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 app.get("/", (_req, res) => res.send("🚀 Law Network Backend is Live"));
