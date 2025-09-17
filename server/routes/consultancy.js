@@ -2,6 +2,7 @@
 const express = require("express");
 const path = require("path");
 const fs = require("fs");
+const fsp = require("fs/promises");
 const multer = require("multer");
 const mongoose = require("mongoose");
 
@@ -35,9 +36,10 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-// Admin guard (same header your client sends)
+// Admin guard
 function assertOwner(req, res, next) {
-  const key = req.headers["x-owner-key"] || req.headers["x-owner-key".toLowerCase()];
+  const key =
+    req.headers["x-owner-key"] || req.headers["x-owner-key".toLowerCase()];
   if (!key || key !== req.ADMIN_KEY) {
     return res.status(401).json({ error: "Unauthorized" });
   }
@@ -58,8 +60,10 @@ router.get("/", async (_req, res) => {
 router.post("/", assertOwner, upload.single("image"), async (req, res) => {
   try {
     const { title, subtitle, intro, order } = req.body;
-    if (!title) return res.status(400).json({ success: false, error: "Title required" });
-    if (!req.file) return res.status(400).json({ success: false, error: "Image required" });
+    if (!title)
+      return res.status(400).json({ success: false, error: "Title required" });
+    if (!req.file)
+      return res.status(400).json({ success: false, error: "Image required" });
 
     const rel = "/uploads/consultancy/" + req.file.filename;
     const doc = await Consultancy.create({
@@ -75,7 +79,7 @@ router.post("/", assertOwner, upload.single("image"), async (req, res) => {
   }
 });
 
-// Update (admin) – image optional
+// Update (admin)
 router.patch("/:id", assertOwner, upload.single("image"), async (req, res) => {
   try {
     const { id } = req.params;
@@ -88,8 +92,11 @@ router.patch("/:id", assertOwner, upload.single("image"), async (req, res) => {
     if (req.file) {
       patch.image = "/uploads/consultancy/" + req.file.filename;
     }
-    const updated = await Consultancy.findByIdAndUpdate(id, patch, { new: true });
-    if (!updated) return res.status(404).json({ success: false, error: "Not found" });
+    const updated = await Consultancy.findByIdAndUpdate(id, patch, {
+      new: true,
+    });
+    if (!updated)
+      return res.status(404).json({ success: false, error: "Not found" });
     res.json({ success: true, item: updated });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
@@ -102,7 +109,16 @@ router.delete("/:id", assertOwner, async (req, res) => {
     const { id } = req.params;
     const doc = await Consultancy.findByIdAndDelete(id);
     if (!doc) return res.status(404).json({ success: false, error: "Not found" });
-    res.json({ success: true });
+
+    if (doc.image && doc.image.startsWith("/uploads/consultancy/")) {
+      const abs = path.join(__dirname, "..", doc.image.replace(/^\//, ""));
+      const safeRoot = path.join(__dirname, "..", "uploads", "consultancy");
+      if (abs.startsWith(safeRoot)) {
+        await fsp.unlink(abs).catch(() => {});
+      }
+    }
+
+    res.json({ success: true, removed: doc });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }

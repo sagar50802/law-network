@@ -1,3 +1,4 @@
+// server/routes/plagiarism.js
 const express = require("express");
 const multer = require("multer");
 const fs = require("fs");
@@ -7,11 +8,39 @@ const nspell = require("nspell");
 const { htmlToText } = require("html-to-text");
 
 const router = express.Router();
-const upload = multer({ dest: "uploads/" });
 
+/* ---------------- Upload setup ---------------- */
+const UP_DIR = path.join(__dirname, "..", "uploads", "plagiarism");
+fs.mkdirSync(UP_DIR, { recursive: true });
+
+const storage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, UP_DIR),
+  filename: (_req, file, cb) => {
+    const safe = Date.now() + "-" + file.originalname.replace(/\s+/g, "_");
+    cb(null, safe);
+  },
+});
+
+const upload = multer({
+  storage,
+  fileFilter: (_req, file, cb) => {
+    // Allow only plain text or HTML-like files
+    if (
+      file.mimetype.includes("text") ||
+      file.originalname.endsWith(".txt") ||
+      file.originalname.endsWith(".html") ||
+      file.originalname.endsWith(".htm")
+    ) {
+      cb(null, true);
+    } else {
+      cb(new Error("Only .txt or .html files are supported"));
+    }
+  },
+});
+
+/* ---------------- Spell checker ---------------- */
 let SPELL = null;
 
-// Load English dictionary for nspell
 async function loadSpell() {
   if (SPELL) return SPELL;
 
@@ -29,16 +58,18 @@ async function loadSpell() {
   return SPELL;
 }
 
-// Extract plain text from HTML content
+/* ---------------- Helpers ---------------- */
+
+// Extract plain text from HTML
 function extractTextFromHTML(html) {
   try {
     return htmlToText(html, { wordwrap: 130 });
-  } catch (err) {
+  } catch {
     return "";
   }
 }
 
-// Language detection
+// Detect language
 function detectLanguage(text) {
   try {
     return franc(text || "");
@@ -47,7 +78,7 @@ function detectLanguage(text) {
   }
 }
 
-// Analyze plagiarism-like issues (basic linguistic analysis)
+// Analyze text for plagiarism-like issues
 function analyzePlagiarism(text) {
   const sentences = text.split(/[.?!]\s+/);
   const result = {
@@ -60,7 +91,7 @@ function analyzePlagiarism(text) {
     if (sentence.length < 15) return;
 
     const language = detectLanguage(sentence);
-    if (language !== "eng") {
+    if (language !== "eng" && language !== "und") {
       result.issues.push({ index, sentence, issue: "Non-English content", language });
     }
 
@@ -72,14 +103,19 @@ function analyzePlagiarism(text) {
   return result;
 }
 
-// Spell checker using nspell
+// Spell checker
 async function analyzeSpelling(text) {
   const spell = await loadSpell();
   const words = text.match(/\b\w+\b/g) || [];
 
   const mistakes = [];
+  const seen = new Set();
 
   for (const word of words) {
+    const lower = word.toLowerCase();
+    if (seen.has(lower)) continue; // skip duplicates
+    seen.add(lower);
+
     if (!spell.correct(word)) {
       mistakes.push({
         word,
@@ -91,13 +127,13 @@ async function analyzeSpelling(text) {
   return mistakes;
 }
 
-// Main API Route
+/* ---------------- Routes ---------------- */
+
 // POST /api/plagiarism/analyze
 router.post("/analyze", upload.single("file"), async (req, res) => {
   const filePath = req.file?.path;
-
   if (!filePath) {
-    return res.status(400).json({ error: "No file uploaded" });
+    return res.status(400).json({ success: false, error: "No file uploaded" });
   }
 
   try {
@@ -120,12 +156,12 @@ router.post("/analyze", upload.single("file"), async (req, res) => {
       spelling,
     });
   } catch (err) {
-    res.status(500).json({ error: "Error analyzing text", details: err.message });
+    res.status(500).json({ success: false, error: "Error analyzing text", details: err.message });
   } finally {
     try {
       fs.unlinkSync(filePath);
-    } catch (e) {
-      console.warn("Failed to delete uploaded file:", e.message);
+    } catch {
+      // ignore cleanup errors
     }
   }
 });

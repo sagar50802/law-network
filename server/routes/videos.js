@@ -1,4 +1,4 @@
-// server/routes/videos.js
+// server/routes/videos.js 
 const express = require("express");
 const path = require("path");
 const fs = require("fs");
@@ -129,9 +129,11 @@ router.delete("/items/:id", async (req, res) => {
       removed = pl.items[idx];
       pl.items.splice(idx, 1);
       try {
-        if (removed.url?.startsWith("/uploads/video/")) {
+        if (removed?.url?.startsWith("/uploads/video/")) {
           const abs = path.join(ROOT, removed.url.replace(/^\//, ""));
-          await fsp.unlink(abs).catch(() => {});
+          if (abs.startsWith(path.join(ROOT, "uploads", "video"))) {
+            await fsp.unlink(abs).catch(() => {});
+          }
         }
       } catch {}
       break;
@@ -142,7 +144,7 @@ router.delete("/items/:id", async (req, res) => {
 });
 
 // DELETE a whole playlist (+ uploaded files)
-router.delete(["/:playlist", "/playlists/:playlist"], async (req, res) => {
+async function deletePlaylist(req, res) {
   const db = await readDB();
   const key = req.params.playlist;
   const idx = db.playlists.findIndex(p => (p._id || p.id || p.name) === key);
@@ -153,13 +155,19 @@ router.delete(["/:playlist", "/playlists/:playlist"], async (req, res) => {
     try {
       if (it.url?.startsWith("/uploads/video/")) {
         const abs = path.join(ROOT, it.url.replace(/^\//, ""));
-        await fsp.unlink(abs).catch(() => {});
+        if (abs.startsWith(path.join(ROOT, "uploads", "video"))) {
+          await fsp.unlink(abs).catch(() => {});
+        }
       }
     } catch {}
   }
   db.playlists.splice(idx, 1);
   await writeDB(db);
   res.json({ success: true });
-});
+}
+
+// register both routes separately (instead of array)
+router.delete("/:playlist", deletePlaylist);
+router.delete("/playlists/:playlist", deletePlaylist);
 
 module.exports = router;

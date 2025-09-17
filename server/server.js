@@ -1,3 +1,4 @@
+// server.js
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
@@ -47,8 +48,8 @@ app.use((req, _res, next) => {
   "uploads/consultancy",
   "uploads/banners",
   "uploads/articles",
-  "uploads/video",
-  "uploads/audio",
+  "uploads/videos",   // fixed plural
+  "uploads/audios",   // fixed plural
   "uploads/pdfs",
   "uploads/qr",
   "data",
@@ -129,7 +130,7 @@ function mount(url, routePath) {
   }
 }
 
-// ✅ Add All Route Mounts Here (with .js extensions)
+// ✅ Add All Route Mounts Here
 mount("/api/banners", "./routes/banners.js");
 mount("/api/articles", "./routes/articles.js");
 mount("/api/videos", "./routes/videos.js");
@@ -141,6 +142,7 @@ mount("/api/consultancy", "./routes/consultancy.js");
 mount("/api/news", "./routes/news.js");
 mount("/api/scholar", "./routes/scholar.js");
 mount("/api/plagiarism", "./routes/plagiarism.js");
+mount("/api/footer", "./routes/footer.js"); // added footer
 
 // ── Health Check + Root ────────────────────────────────────────
 app.get("/api/health", (_req, res) => res.json({ ok: true }));

@@ -2,6 +2,7 @@
 const express = require("express");
 const path = require("path");
 const fs = require("fs");
+const fsp = require("fs/promises");
 const multer = require("multer");
 const mongoose = require("mongoose");
 
@@ -37,7 +38,8 @@ const upload = multer({ storage });
 
 /* -------------------- Admin guard --------------------- */
 function assertOwner(req, res, next) {
-  const key = req.headers["x-owner-key"] || req.headers["x-owner-key".toLowerCase()];
+  const key =
+    req.headers["x-owner-key"] || req.headers["x-owner-key".toLowerCase()];
   if (!key || key !== req.ADMIN_KEY) {
     return res.status(401).json({ error: "Unauthorized" });
   }
@@ -48,12 +50,11 @@ function assertOwner(req, res, next) {
 router.get("/", async (_req, res) => {
   try {
     const docs = await News.find({}).sort({ order: 1, createdAt: -1 });
-    // shape to match your client expectation (id + image path for <img src={`${API_BASE}${n.image}`}>)
     const news = docs.map((d) => ({
       id: d._id.toString(),
       title: d.title,
       link: d.link,
-      image: d.image, // e.g. "/uploads/news/xxx.jpg"
+      image: d.image,
       order: d.order,
       createdAt: d.createdAt,
       publishedAt: d.publishedAt,
@@ -102,10 +103,7 @@ router.patch("/:id", assertOwner, upload.single("image"), async (req, res) => {
     if (req.body.title != null) patch.title = String(req.body.title).trim();
     if (req.body.link != null) patch.link = String(req.body.link).trim();
     if (req.body.order != null) patch.order = Number(req.body.order);
-
-    if (req.file) {
-      patch.image = "/uploads/news/" + req.file.filename;
-    }
+    if (req.file) patch.image = "/uploads/news/" + req.file.filename;
 
     const updated = await News.findByIdAndUpdate(id, patch, { new: true });
     if (!updated) return res.status(404).json({ error: "Not found" });
@@ -133,13 +131,15 @@ router.delete("/:id", assertOwner, async (req, res) => {
     const doc = await News.findByIdAndDelete(id);
     if (!doc) return res.status(404).json({ error: "Not found" });
 
-    // (optional) try remove the file from disk
     if (doc.image && doc.image.startsWith("/uploads/news/")) {
-      const abs = path.join(__dirname, "..", doc.image);
-      fs.promises.unlink(abs).catch(() => {}); // ignore if already gone
+      const abs = path.join(__dirname, "..", doc.image.replace(/^\//, ""));
+      const safeRoot = path.join(__dirname, "..", "uploads", "news");
+      if (abs.startsWith(safeRoot)) {
+        await fs.promises.unlink(abs).catch(() => {});
+      }
     }
 
-    res.json({ ok: true });
+    res.json({ ok: true, removed: doc });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

@@ -17,8 +17,8 @@ const isOwner = require("../middlewares/isOwner");
 
 const router = express.Router();
 
-// ---------------- GET (public) ----------------
-router.get("/", async (req, res) => {
+/* ---------------- GET (public) ---------------- */
+router.get("/", async (_req, res) => {
   try {
     const doc = await Footer.findOne().lean();
     return res.status(200).json({ ok: true, data: doc ? [doc] : [] });
@@ -28,29 +28,29 @@ router.get("/", async (req, res) => {
   }
 });
 
-// ---------------- PUT (admin only) ----------------
+/* ---------------- PUT (admin only) ---------------- */
 router.put("/", isOwner, async (req, res) => {
   try {
-    const { text, links } = req.body || {};
+    const { text = "", links = [] } = req.body || {};
 
-    // Ensure array format for links
     const safeLinks = Array.isArray(links)
       ? links.map((l) => ({
-          label: String(l.label || "").trim(),
-          url: String(l.url || "").trim(),
+          label: String(l?.label || "").trim(),
+          url: String(l?.url || "").trim(),
         }))
       : [];
 
     const update = {
-      text: String(text || "").trim(),
+      text: String(text).trim(),
       links: safeLinks,
       updatedAt: new Date(),
     };
 
     const doc = await Footer.findOneAndUpdate({}, update, {
       new: true,
-      upsert: true, // create if not exists
-    });
+      upsert: true,
+      setDefaultsOnInsert: true,
+    }).lean();
 
     return res.status(200).json({ ok: true, data: doc });
   } catch (err) {

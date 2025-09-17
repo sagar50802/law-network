@@ -273,29 +273,41 @@ router.post("/:id/revoke", isAdmin, async (req, res) => {
 });
 
 // ADMIN: reject/remove (soft delete)
-router.post("/:id/reject", isAdmin, (req, res) => {
+router.post("/:id/reject", isAdmin, async (req, res) => {
   const items = readAll();
   const i = items.findIndex(x => x.id === req.params.id || x._id === req.params.id);
   if (i === -1) return res.status(404).json({ success:false, message:"Not found" });
   const [removed] = items.splice(i, 1);
   writeAll(items);
-  if (removed.proofUrl && removed.proofUrl.startsWith("/uploads/")) {
-    try { fs.unlinkSync(path.join(__dirname, "..", removed.proofUrl.replace(/^\//,""))); } catch {}
+
+  if (removed.proofUrl?.startsWith("/uploads/submissions/")) {
+    const abs = path.join(__dirname, "..", removed.proofUrl.replace(/^\//,""));
+    const safeRoot = path.join(__dirname, "..", "uploads", "submissions");
+    if (abs.startsWith(safeRoot)) {
+      await fs.promises.unlink(abs).catch(() => {});
+    }
   }
-  res.json({ success: true });
+
+  res.json({ success: true, removed });
 });
 
 // Optional hard delete
-router.delete("/:id", isAdmin, (req, res) => {
+router.delete("/:id", isAdmin, async (req, res) => {
   const items = readAll();
   const i = items.findIndex(x => x.id === req.params.id || x._id === req.params.id);
   if (i === -1) return res.status(404).json({ success:false, message:"Not found" });
   const [removed] = items.splice(i, 1);
   writeAll(items);
-  if (removed.proofUrl && removed.proofUrl.startsWith("/uploads/")) {
-    try { fs.unlinkSync(path.join(__dirname, "..", removed.proofUrl.replace(/^\//,""))); } catch {}
+
+  if (removed.proofUrl?.startsWith("/uploads/submissions/")) {
+    const abs = path.join(__dirname, "..", removed.proofUrl.replace(/^\//,""));
+    const safeRoot = path.join(__dirname, "..", "uploads", "submissions");
+    if (abs.startsWith(safeRoot)) {
+      await fs.promises.unlink(abs).catch(() => {});
+    }
   }
-  res.json({ success: true });
+
+  res.json({ success: true, removed });
 });
 
 // PUBLIC: check my submission (polling fallback)

@@ -157,16 +157,18 @@ router.delete("/items/:id", async (req, res) => {
       removed = pl.items[idx];
       pl.items.splice(idx, 1);
       try {
-        if (removed.url?.startsWith("/uploads/podcasts/")) {
+        if (removed?.url?.startsWith("/uploads/podcasts/")) {
           const abs = path.join(ROOT, removed.url.replace(/^\//, ""));
-          await fsp.unlink(abs).catch(() => {});
+          if (abs.startsWith(path.join(ROOT, "uploads", "podcasts"))) {
+            await fsp.unlink(abs).catch(() => {});
+          }
         }
       } catch {}
       break;
     }
   }
   await writeDB(db);
-  res.json({ success: true, removed: !!removed });
+  res.json({ success: true, removed });
 });
 
 // delete compat: /playlists/:playlist/items/:id (used by public page)
@@ -198,7 +200,9 @@ router.delete("/playlists/:playlist/items/:id", async (req, res) => {
   try {
     if (removed?.url?.startsWith("/uploads/podcasts/")) {
       const abs = path.join(ROOT, removed.url.replace(/^\//, ""));
-      await fsp.unlink(abs).catch(() => {});
+      if (abs.startsWith(path.join(ROOT, "uploads", "podcasts"))) {
+        await fsp.unlink(abs).catch(() => {});
+      }
     }
   } catch {}
 
@@ -215,10 +219,7 @@ router.patch("/playlists/:playlist/items/:id/lock", express.json(), async (req, 
   const it = (pl.items || []).find(x => (x.id || x._id) === req.params.id);
   if (!it) return res.status(404).json({ success: false, message: "Item not found" });
 
-  const locked =
-    typeof req.body.locked === "string"
-      ? req.body.locked.toLowerCase() !== "false"
-      : !!req.body.locked;
+  const locked = String(req.body.locked).toLowerCase() === "true";
 
   it.locked = locked;
   await writeDB(db);
@@ -236,7 +237,9 @@ router.delete("/:playlist", async (req, res) => {
     try {
       if (it.url?.startsWith("/uploads/podcasts/")) {
         const abs = path.join(ROOT, it.url.replace(/^\//, ""));
-        await fsp.unlink(abs).catch(() => {});
+        if (abs.startsWith(path.join(ROOT, "uploads", "podcasts"))) {
+          await fsp.unlink(abs).catch(() => {});
+        }
       }
     } catch {}
   }

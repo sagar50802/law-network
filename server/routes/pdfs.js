@@ -1,3 +1,4 @@
+// server/routes/pdfs.js
 const express = require("express");
 const path = require("path");
 const fs = require("fs");
@@ -82,7 +83,7 @@ router.post("/subjects/:sid/chapters", uploadAny, async (req, res) => {
   const sub = db.subjects.find((s) => s.id === req.params.sid);
   if (!sub) return res.status(404).json({ success: false, message: "Subject not found" });
 
-  const title = (req.body.title || "Untitled").trim();
+  const title = String(req.body.title || "Untitled").slice(0, 200);
   const locked = req.body.locked === "true";
 
   let url = (req.body.url || "").trim();
@@ -110,11 +111,13 @@ router.delete("/subjects/:sid/chapters/:cid", async (req, res) => {
   const removed = sub.chapters.splice(idx, 1)[0];
   if (removed.url?.startsWith("/uploads/pdfs/")) {
     const abs = path.join(ROOT, removed.url.replace(/^\//, ""));
-    await fsp.unlink(abs).catch(() => {});
+    if (abs.startsWith(path.join(ROOT, "uploads", "pdfs"))) {
+      await fsp.unlink(abs).catch(() => {});
+    }
   }
   await writeDB(db);
 
-  res.json({ success: true });
+  res.json({ success: true, removed });
 });
 
 /* ---------- delete subject ---------- */
@@ -127,7 +130,9 @@ router.delete("/subjects/:sid", async (req, res) => {
   for (const ch of sub.chapters || []) {
     if (ch.url?.startsWith("/uploads/pdfs/")) {
       const abs = path.join(ROOT, ch.url.replace(/^\//, ""));
-      await fsp.unlink(abs).catch(() => {});
+      if (abs.startsWith(path.join(ROOT, "uploads", "pdfs"))) {
+        await fsp.unlink(abs).catch(() => {});
+      }
     }
   }
   db.subjects.splice(idx, 1);
