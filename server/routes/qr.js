@@ -78,7 +78,7 @@ const upload = multer({ storage, limits: { fileSize: 20 * 1024 * 1024 } });
 // ---------------- ROUTES ----------------
 
 // GET full config
-router.get(["/", ""], async (_req, res) => {
+router.get("/", async (_req, res) => {
   const cfg = await ensureConfig();
   res.json({ success: true, qr: cfg });
 });
@@ -95,7 +95,7 @@ router.get("/current", async (_req, res) => {
 });
 
 // POST update (image + labels/prices)
-router.post(["/", ""], isAdmin, upload.single("image"), async (req, res) => {
+router.post("/", isAdmin, upload.single("image"), async (req, res) => {
   const cfg = await ensureConfig();
 
   if (req.file) {
