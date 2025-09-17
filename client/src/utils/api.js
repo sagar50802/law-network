@@ -1,29 +1,45 @@
 // client/src/utils/api.js
 
-// ✅ Safe fallback to "/api" if VITE_API_BASE is missing
-const RAW_BASE = (import.meta.env?.VITE_API_BASE ?? "/api").trim();
+// ✅ Decide base depending on environment
+let RAW_BASE;
 
-// ✅ Clean final base without trailing slashes
+if (import.meta.env?.VITE_API_BASE) {
+  // use .env if provided
+  RAW_BASE = import.meta.env.VITE_API_BASE;
+} else if (window.location.hostname === "localhost") {
+  // local dev → backend on localhost:2025
+  RAW_BASE = "http://localhost:2025/api";
+} else {
+  // production (Render)
+  RAW_BASE = "https://law-network.onrender.com/api";
+}
+
+RAW_BASE = RAW_BASE.trim();
+
+// ✅ Clean final base (remove trailing /)
 export const API_BASE = RAW_BASE.replace(/\/+$/, "");
 
-// ✅ Joins API_BASE and path safely
-const join = (base, path) =>
-  (base ? `${base}${path.startsWith("/") ? "" : "/"}${path}` : path)
-    .replace(/([^:]\/)\/+/g, "$1"); // avoid duplicate slashes
+// ✅ Helper to join base + path without duplicate slashes
+function join(base, path) {
+  return (base ? `${base}${path.startsWith("/") ? "" : "/"}${path}` : path)
+    .replace(/([^:]\/)\/+/g, "$1");
+}
 
-// ✅ Auth header injection (admin-only)
+// ✅ Injects admin auth headers if key exists in localStorage
 export function authHeaders() {
   const key = localStorage.getItem("ownerKey");
-  return key ? { Authorization: `Bearer ${key}`, "X-Owner-Key": key } : {};
+  return key
+    ? { Authorization: `Bearer ${key}`, "X-Owner-Key": key }
+    : {};
 }
 
-// ✅ Builds full URL for API routes
+// ✅ Resolve absolute API URL
 export function apiUrl(path) {
-  if (/^https?:\/\//i.test(path)) return path;
-  return join(API_BASE, path); // "" in dev so we use Vite proxy (/api/*)
+  if (/^https?:\/\//i.test(path)) return path; // if already full URL
+  return join(API_BASE, path); // fallback to /api/*
 }
 
-// ✅ Main request logic
+// ✅ Core request logic
 async function requestJSON(path, options = {}) {
   const { method = "GET", headers = {}, body } = options;
 
@@ -35,7 +51,12 @@ async function requestJSON(path, options = {}) {
       ...authHeaders(),
       ...headers,
     },
-    body: body instanceof FormData ? body : body != null ? JSON.stringify(body) : undefined,
+    body:
+      body instanceof FormData
+        ? body
+        : body != null
+        ? JSON.stringify(body)
+        : undefined,
   });
 
   if (!res.ok) {
@@ -47,14 +68,14 @@ async function requestJSON(path, options = {}) {
   return ct.includes("application/json") ? res.json() : res.text();
 }
 
-// ✅ Method wrappers
+// ✅ Shorthand wrappers
 export const getJSON   = (p, o) => requestJSON(p, { ...o, method: "GET" });
 export const postJSON  = (p, d, o) => requestJSON(p, { ...o, method: "POST",  body: d });
 export const putJSON   = (p, d, o) => requestJSON(p, { ...o, method: "PUT",   body: d });
 export const patchJSON = (p, d, o) => requestJSON(p, { ...o, method: "PATCH", body: d });
 export const delJSON   = (p, o)    => requestJSON(p, { ...o, method: "DELETE" });
 
-// ✅ Compatibility alias
+// ✅ Compatibility alias (so old code using fetchJSON still works)
 export const fetchJSON = getJSON;
 
 // ✅ File upload helpers
@@ -69,13 +90,10 @@ export async function uploadFile(path, file, field = "file", extra = {}, opts = 
   return upload(path, fd, opts);
 }
 
-// ✅ Media path resolver
+// ✅ Absolute media path resolver
 export const absUrl = (p) => (/^https?:\/\//i.test(p) ? p : apiUrl(p));
 
-// ✅ Optional alias
-export { apiUrl as apiurl };
-
-// ✅ Full export for `import api from`
+// ✅ Default export (bundle everything)
 export default {
   API_BASE,
   authHeaders,

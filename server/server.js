@@ -11,7 +11,7 @@ const PORT = process.env.PORT || 5000;
 const ADMIN_KEY = process.env.ADMIN_KEY || "LAWNOWNER2025";
 const MONGO_URI = process.env.MONGO_URI || "mongodb://localhost:27017/lawnetwork";
 
-// ── Database ─────────────────────────────────────────────────────
+// ── Database ───────────────────────────────────────────────
 mongoose
   .connect(MONGO_URI)
   .then(() => console.log("✅ MongoDB connected"))
@@ -20,18 +20,30 @@ mongoose
     process.exit(1);
   });
 
-// ── CORS Setup ──────────────────────────────────────────────────
+// ── CORS Setup ─────────────────────────────────────────────
+const allowedOrigins = [
+  "http://localhost:5173",                   // local dev
+  "https://law-network-client.onrender.com", // frontend on Render
+];
+
 app.use(
   cors({
-    origin: "https://law-network-client.onrender.com",
+    origin: function (origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        console.warn("❌ CORS blocked:", origin);
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
     credentials: true,
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Owner-Key", "x-owner-key"],
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
   })
 );
+
 app.options("*", cors());
 
-// ── Global Middleware ──────────────────────────────────────────
+// ── Global Middleware ─────────────────────────────────────
 app.use(express.json({ limit: "20mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
@@ -42,14 +54,14 @@ app.use((req, _res, next) => {
   next();
 });
 
-// ── Ensure Upload Folders ──────────────────────────────────────
+// ── Ensure Upload Folders ─────────────────────────────────
 [
   "uploads",
   "uploads/consultancy",
   "uploads/banners",
   "uploads/articles",
-  "uploads/videos",   // fixed plural
-  "uploads/audios",   // fixed plural
+  "uploads/videos",
+  "uploads/audios",
   "uploads/pdfs",
   "uploads/qr",
   "data",
@@ -58,7 +70,7 @@ app.use((req, _res, next) => {
   if (!fs.existsSync(abs)) fs.mkdirSync(abs, { recursive: true });
 });
 
-// ── MongoDB Access Model ───────────────────────────────────────
+// ── MongoDB Access Model ──────────────────────────────────
 const Access = mongoose.model(
   "Access",
   new mongoose.Schema({
@@ -70,7 +82,7 @@ const Access = mongoose.model(
   })
 );
 
-// ── Access Routes ──────────────────────────────────────────────
+// ── Access Routes ─────────────────────────────────────────
 app.post("/api/access/grant", async (req, res) => {
   const { email, feature, featureId, expiry, message } = req.body;
   if (!email || !feature || !featureId) return res.status(400).json({ error: "Missing fields" });
@@ -113,16 +125,15 @@ app.get("/api/access/status", async (req, res) => {
   }
 });
 
-// ── Safe Dynamic Route Mounting ─────────────────────────────────
+// ── Safe Dynamic Route Mounting ───────────────────────────
 function mount(url, routePath) {
   const absPath = path.resolve(__dirname, routePath);
   if (!fs.existsSync(absPath)) {
-    console.warn(`⚠️  Route file not found: ${routePath} → Skipping ${url}`);
+    console.warn(`⚠️ Route file not found: ${routePath} → Skipping ${url}`);
     return;
   }
   try {
     const routeModule = require(absPath);
-    console.log(`Trying to mount ${url} from ${routePath}`);
     app.use(url, routeModule);
     console.log(`✓ Mounted ${routePath} → ${url}`);
   } catch (err) {
@@ -142,13 +153,13 @@ mount("/api/consultancy", "./routes/consultancy.js");
 mount("/api/news", "./routes/news.js");
 mount("/api/scholar", "./routes/scholar.js");
 mount("/api/plagiarism", "./routes/plagiarism.js");
-mount("/api/footer", "./routes/footer.js"); // added footer
+mount("/api/footer", "./routes/footer.js");
 
-// ── Health Check + Root ────────────────────────────────────────
+// ── Health Check + Root ──────────────────────────────────
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 app.get("/", (_req, res) => res.send("🚀 Law Network Backend is Live"));
 
-// ── Start Server ───────────────────────────────────────────────
+// ── Start Server ─────────────────────────────────────────
 app.listen(PORT, () => {
   console.log(`🚀 API running on http://localhost:${PORT}`);
 });
