@@ -10,8 +10,8 @@ if (import.meta.env?.VITE_API_BASE) {
   // local dev → backend on localhost:2025
   RAW_BASE = "http://localhost:2025/api";
 } else {
-  // production (Render)
-  RAW_BASE = "https://law-network.onrender.com/api";
+  // production (Render backend URL)
+  RAW_BASE = "https://lawnetwork-api.onrender.com/api";
 }
 
 RAW_BASE = RAW_BASE.trim();
