@@ -26,22 +26,31 @@ const allowedOrigins = [
   "https://law-network-client.onrender.com", // frontend on Render
 ];
 
- app.use(
+app.use(
   cors({
     origin: function (origin, callback) {
       if (!origin || allowedOrigins.includes(origin)) {
         callback(null, true);
       } else {
-        console.warn("❌ CORS blocked:", origin);
-        callback(new Error("Not allowed by CORS"));
+        callback(null, true); // ✅ fallback: still allow instead of blocking
       }
     },
     credentials: true,
-    methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Owner-Key", "x-owner-key"], // ✅ Add this
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Owner-Key", "x-owner-key"],
   })
 );
 
+// ✅ Always attach CORS headers (even for 404/500 responses)
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", req.headers.origin || "*");
+  res.header(
+    "Access-Control-Allow-Headers",
+    "Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Owner-Key, x-owner-key"
+  );
+  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS");
+  next();
+});
 
 app.options("*", cors());
 
