@@ -40,7 +40,8 @@ const storage = multer.diskStorage({
   },
 });
 const upload = multer({ storage, limits: { fileSize: 100 * 1024 * 1024 } });
-const uploadAny = upload.fields([{ name: "file" }, { name: "pdf" }, { name: "upload" }]);
+const uploadAny = upload.single("pdf");  // ⬅️ force one consistent field
+
 
 function pickUploadedFile(req) {
   return (
@@ -86,11 +87,15 @@ router.post("/subjects/:sid/chapters", uploadAny, async (req, res) => {
   const title = String(req.body.title || "Untitled").slice(0, 200);
   const locked = req.body.locked === "true";
 
-  let url = (req.body.url || "").trim();
-  const up = pickUploadedFile(req);
-  if (up) url = publicUrl(up.path);
+   let url = "";
+if (req.file) {
+  url = publicUrl(req.file.path); // uploaded file (multer.single("pdf"))
+}
 
-  if (!url) return res.status(400).json({ success: false, message: "PDF required" });
+if (!url) {
+  return res.status(400).json({ success: false, message: "PDF required" });
+}
+
 
   const ch = { id: uid(), title, url, locked, createdAt: new Date().toISOString() };
   sub.chapters.push(ch);
