@@ -40,19 +40,7 @@ const storage = multer.diskStorage({
   },
 });
 const upload = multer({ storage, limits: { fileSize: 100 * 1024 * 1024 } });
-const uploadAny = upload.single("pdf");  // ⬅️ force one consistent field
-
-
-function pickUploadedFile(req) {
-  return (
-    req.file ||
-    req.files?.file?.[0] ||
-    req.files?.pdf?.[0] ||
-    req.files?.upload?.[0] ||
-    (Array.isArray(req.files) && req.files[0]) ||
-    null
-  );
-}
+const uploadAny = upload.single("pdf"); // ⬅️ exactly matches FormData.append("pdf", ...)
 
 /* ---------- list ---------- */
 router.get("/", async (_req, res) => {
@@ -87,15 +75,14 @@ router.post("/subjects/:sid/chapters", uploadAny, async (req, res) => {
   const title = String(req.body.title || "Untitled").slice(0, 200);
   const locked = req.body.locked === "true";
 
-   let url = "";
-if (req.file) {
-  url = publicUrl(req.file.path); // uploaded file (multer.single("pdf"))
-}
+  let url = "";
+  if (req.file) {
+    url = publicUrl(req.file.path); // ✅ multer.single("pdf")
+  }
 
-if (!url) {
-  return res.status(400).json({ success: false, message: "PDF required" });
-}
-
+  if (!url) {
+    return res.status(400).json({ success: false, message: "PDF required" });
+  }
 
   const ch = { id: uid(), title, url, locked, createdAt: new Date().toISOString() };
   sub.chapters.push(ch);
