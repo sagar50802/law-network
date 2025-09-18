@@ -165,6 +165,8 @@ mount("/api/news", "./routes/news.js");
 mount("/api/scholar", "./routes/scholar.js");
 mount("/api/plagiarism", "./routes/plagiarism.js");
 mount("/api/footer", "./routes/footer.js");
+mount("/api/gridfs", "./routes/gridfs.js");
+
 
 // ── Health Check + Root ──────────────────────────────────
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
