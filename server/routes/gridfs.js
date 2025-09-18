@@ -14,28 +14,33 @@ const mongoURI = process.env.MONGO_URI;
 const storage = new GridFsStorage({
   url: mongoURI,
   file: (req, file) => {
+    // ✅ Only allow PDFs for now
+    if (!file.mimetype.includes("pdf")) {
+      return null;
+    }
     return {
       filename: `${Date.now()}-${file.originalname}`,
-      bucketName: "uploads", // collection will be fs.files / fs.chunks
+      bucketName: "pdfs", // gridfs collection name (pdfs.files + pdfs.chunks)
     };
   },
 });
 
 const upload = multer({ storage });
 
-// ✅ Upload File
-router.post("/upload", upload.single("file"), (req, res) => {
-  if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+// ✅ Upload PDF (demo only)
+router.post("/pdf/upload", upload.single("file"), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: "No PDF uploaded" });
   res.json({ fileId: req.file.id, filename: req.file.filename });
 });
 
-// ✅ Stream File
-router.get("/file/:filename", async (req, res) => {
+// ✅ Stream PDF (demo only)
+router.get("/pdf/:filename", async (req, res) => {
   try {
-    const conn = mongoose.connection;
-    const bucket = new GridFSBucket(conn.db, { bucketName: "uploads" });
-
+    const bucket = new mongoose.mongo.GridFSBucket(mongoose.connection.db, {
+      bucketName: "pdfs",
+    });
     const stream = bucket.openDownloadStreamByName(req.params.filename);
+    res.set("Content-Type", "application/pdf");
     stream.on("error", () => res.status(404).json({ error: "File not found" }));
     stream.pipe(res);
   } catch (err) {

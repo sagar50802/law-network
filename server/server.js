@@ -168,6 +168,7 @@ mount("/api/footer", "./routes/footer.js");
 mount("/api/gridfs", "./routes/gridfs.js");
 
 
+
 // ── Health Check + Root ──────────────────────────────────
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 app.get("/", (_req, res) => res.send("🚀 Law Network Backend is Live"));
