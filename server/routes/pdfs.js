@@ -10,6 +10,21 @@ const path = require("path");
 const router = express.Router();
 const mongoURI = process.env.MONGO_URI;
 
+// 🔹 Ensure CORS headers always apply to this router
+router.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", req.headers.origin || "*");
+  res.header(
+    "Access-Control-Allow-Headers",
+    "Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Owner-Key, x-owner-key"
+  );
+  res.header(
+    "Access-Control-Allow-Methods",
+    "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+  );
+  res.header("Cross-Origin-Resource-Policy", "cross-origin");
+  next();
+});
+
 // 🔹 Metadata still stored in JSON (subjects/chapters)
 const ROOT = path.join(__dirname, "..");
 const DATA_DIR = path.join(ROOT, "data");
