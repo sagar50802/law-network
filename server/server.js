@@ -23,7 +23,8 @@ mongoose
 // ── CORS Setup ─────────────────────────────────────────────
 const allowedOrigins = [
   "http://localhost:5173",                   // local dev
-  "https://law-network-client.onrender.com", // frontend on Render
+  "https://law-network-client.onrender.com", // frontend
+  "https://law-network.onrender.com",        // backend domain itself
 ];
 
 app.use(
@@ -32,12 +33,17 @@ app.use(
       if (!origin || allowedOrigins.includes(origin)) {
         callback(null, true);
       } else {
-        callback(null, true); // ✅ fallback: still allow instead of blocking
+        callback(null, true); // fallback: still allow instead of blocking
       }
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Owner-Key", "x-owner-key"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "X-Owner-Key",
+      "x-owner-key",
+    ],
   })
 );
 
@@ -48,7 +54,10 @@ app.use((req, res, next) => {
     "Access-Control-Allow-Headers",
     "Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Owner-Key, x-owner-key"
   );
-  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS");
+  res.header(
+    "Access-Control-Allow-Methods",
+    "GET, POST, PUT, DELETE, PATCH, OPTIONS"
+  );
   next();
 });
 
@@ -111,7 +120,8 @@ const Access = mongoose.model(
 // ── Access Routes ─────────────────────────────────────────
 app.post("/api/access/grant", async (req, res) => {
   const { email, feature, featureId, expiry, message } = req.body;
-  if (!email || !feature || !featureId) return res.status(400).json({ error: "Missing fields" });
+  if (!email || !feature || !featureId)
+    return res.status(400).json({ error: "Missing fields" });
   try {
     await Access.findOneAndUpdate(
       { email, feature, featureId },
@@ -126,7 +136,8 @@ app.post("/api/access/grant", async (req, res) => {
 
 app.post("/api/access/revoke", async (req, res) => {
   const { email, feature, featureId } = req.body;
-  if (!email || !feature || !featureId) return res.status(400).json({ error: "Missing fields" });
+  if (!email || !feature || !featureId)
+    return res.status(400).json({ error: "Missing fields" });
   try {
     await Access.deleteOne({ email, feature, featureId });
     res.json({ ok: true });
@@ -145,7 +156,11 @@ app.get("/api/access/status", async (req, res) => {
       await Access.deleteOne({ _id: record._id });
       return res.json({ access: false });
     }
-    res.json({ access: true, expiry: record.expiry, message: record.message });
+    res.json({
+      access: true,
+      expiry: record.expiry,
+      message: record.message,
+    });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -163,7 +178,9 @@ function mount(url, routePath) {
     app.use(url, routeModule);
     console.log(`✓ Mounted ${routePath} → ${url}`);
   } catch (err) {
-    console.error(`✗ Failed to mount ${routePath} → ${url}\n→ ${err.message}`);
+    console.error(
+      `✗ Failed to mount ${routePath} → ${url}\n→ ${err.message}`
+    );
   }
 }
 
