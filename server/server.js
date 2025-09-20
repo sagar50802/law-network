@@ -1,7 +1,6 @@
 // server.js
 require("dotenv").config();
 const express = require("express");
-const cors = require("cors");
 const mongoose = require("mongoose");
 const path = require("path");
 const fs = require("fs");
@@ -21,34 +20,7 @@ mongoose
     process.exit(1);
   });
 
-// ── CORS Setup ─────────────────────────────────────────────
-const allowedOrigins = [
-  "http://localhost:5173", // local dev
-  "https://law-network-client.onrender.com", // frontend
-  "https://law-network.onrender.com", // backend
-];
-
-app.use(
-  cors({
-    origin: function (origin, callback) {
-      if (!origin || allowedOrigins.includes(origin)) {
-        callback(null, true);
-      } else {
-        callback(null, true); // fallback: allow others (avoids CORS crash)
-      }
-    },
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    allowedHeaders: [
-      "Content-Type",
-      "Authorization",
-      "X-Owner-Key",
-      "x-owner-key",
-    ],
-  })
-);
-
-// 🔹 Global CORS headers (even on errors & preflight)
+// ── Global CORS headers (apply everywhere, even errors) ─────
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", req.headers.origin || "*");
   res.header(
@@ -60,9 +32,9 @@ app.use((req, res, next) => {
     "GET, POST, PUT, PATCH, DELETE, OPTIONS"
   );
   res.header("Cross-Origin-Resource-Policy", "cross-origin");
+  if (req.method === "OPTIONS") return res.sendStatus(200);
   next();
 });
-app.options("*", cors());
 
 // ── Global Middleware ─────────────────────────────────────
 app.use(express.json({ limit: "20mb" }));
@@ -98,7 +70,7 @@ app.use((req, _res, next) => {
   "uploads/banners",
   "uploads/articles",
   "uploads/videos",
-  "uploads/audios",
+  "uploads/audio",
   "uploads/pdfs",
   "uploads/qr",
   "data",
