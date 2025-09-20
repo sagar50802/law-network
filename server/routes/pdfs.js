@@ -3,6 +3,7 @@ const express = require("express");
 const multer = require("multer");
 const { GridFsStorage } = require("multer-gridfs-storage");
 const mongoose = require("mongoose");
+const { ObjectId } = require("mongodb"); // ✅ added for safe _id
 const fsp = require("fs/promises");
 const path = require("path");
 
@@ -35,12 +36,19 @@ const uid = () =>
   Math.random().toString(36).slice(2) + Date.now().toString(36);
 
 // ---------------- GridFS Storage ----------------
+// ✅ Upgrade: always return valid object with _id, prevent null crash
 const storage = new GridFsStorage({
   url: mongoURI,
   file: (req, file) => {
-    if (!file.mimetype.includes("pdf")) return null;
+    if (!file.mimetype || !file.mimetype.includes("pdf")) {
+      return Promise.reject(new Error("Only PDF files allowed"));
+    }
     return {
-      filename: `${Date.now()}-${file.originalname}`,
+      _id: new ObjectId(), // ensure GridFS always has a safe unique id
+      filename: `${Date.now()}-${(file.originalname || "file.pdf").replace(
+        /\s+/g,
+        "_"
+      )}`,
       bucketName: "pdfs",
     };
   },
@@ -188,15 +196,19 @@ router.delete("/subjects/:sid", async (req, res) => {
 });
 
 // ---------------- Toggle lock ----------------
-router.patch("/subjects/:sid/chapters/:cid/lock", express.json(), async (req, res) => {
-  const db = await readDB();
-  const sub = db.subjects.find((s) => s.id === req.params.sid);
-  const ch = sub?.chapters.find((c) => c.id === req.params.cid);
-  if (!ch) return res.status(404).json({ success: false });
+router.patch(
+  "/subjects/:sid/chapters/:cid/lock",
+  express.json(),
+  async (req, res) => {
+    const db = await readDB();
+    const sub = db.subjects.find((s) => s.id === req.params.sid);
+    const ch = sub?.chapters.find((c) => c.id === req.params.cid);
+    if (!ch) return res.status(404).json({ success: false });
 
-  ch.locked = !!req.body.locked;
-  await writeDB(db);
-  res.json({ success: true, chapter: ch });
-});
+    ch.locked = !!req.body.locked;
+    await writeDB(db);
+    res.json({ success: true, chapter: ch });
+  }
+);
 
 module.exports = router;

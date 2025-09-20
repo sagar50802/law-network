@@ -3,19 +3,26 @@ const express = require("express");
 const mongoose = require("mongoose");
 const multer = require("multer");
 const { GridFsStorage } = require("multer-gridfs-storage");
+const { ObjectId } = require("mongodb");
 
 const router = express.Router();
-
 const mongoURI = process.env.MONGO_URI;
 
 // ---------------- GridFS Storage ----------------
+// ✅ Safe: always generate _id, reject non-PDFs cleanly
 const storage = new GridFsStorage({
   url: mongoURI,
   file: (req, file) => {
-    if (!file.mimetype.includes("pdf")) return null;
+    if (!file.mimetype || !file.mimetype.includes("pdf")) {
+      return Promise.reject(new Error("Only PDF files allowed"));
+    }
     return {
-      filename: `${Date.now()}-${file.originalname}`,
-      bucketName: "pdfs", // collection pdfs.files + pdfs.chunks
+      _id: new ObjectId(),
+      filename: `${Date.now()}-${(file.originalname || "file.pdf").replace(
+        /\s+/g,
+        "_"
+      )}`,
+      bucketName: "pdfs", // GridFS bucket (pdfs.files + pdfs.chunks)
     };
   },
 });
@@ -23,15 +30,15 @@ const storage = new GridFsStorage({
 const upload = multer({ storage });
 
 // ---------------- Upload (manual/demo) ----------------
-// You probably don’t need this because pdfs.js already handles uploads,
-// but keeping it for testing/debugging.
+// ⚠️ Optional: pdfs.js already handles real uploads.
+// Keeping this only for testing/debugging GridFS directly.
 router.post("/pdf/upload", upload.single("file"), (req, res) => {
   if (!req.file) return res.status(400).json({ error: "No PDF uploaded" });
   res.json({
     success: true,
     fileId: req.file.id,
     filename: req.file.filename,
-    url: `/api/gridfs/pdf/${req.file.filename}`, // 🔹 same format as pdfs.js
+    url: `/api/gridfs/pdf/${req.file.filename}`, // 🔹 matches pdfs.js
   });
 });
 
@@ -45,7 +52,6 @@ router.get("/pdf/:filename", async (req, res) => {
     const stream = bucket.openDownloadStreamByName(req.params.filename);
 
     res.set("Content-Type", "application/pdf");
-
     stream.on("error", () => res.status(404).json({ error: "File not found" }));
     stream.pipe(res);
   } catch (err) {
@@ -64,7 +70,6 @@ router.get("/pdf/id/:id", async (req, res) => {
     const stream = bucket.openDownloadStream(fileId);
 
     res.set("Content-Type", "application/pdf");
-
     stream.on("error", () => res.status(404).json({ error: "File not found" }));
     stream.pipe(res);
   } catch (err) {
