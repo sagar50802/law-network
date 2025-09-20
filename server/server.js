@@ -58,20 +58,21 @@ app.options("*", cors());
 app.use(express.json({ limit: "20mb" }));
 app.use(express.urlencoded({ extended: true }));
 
-// Serve static uploads with CORS headers
 // ✅ Serve static uploads with forced CORS headers
-app.use("/uploads", (req, res, next) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader(
-    "Access-Control-Allow-Headers",
-    "Origin, X-Requested-With, Content-Type, Accept"
-  );
-  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
-  res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
-  next();
-}, express.static(path.join(__dirname, "uploads")));
-
-
+app.use(
+  "/uploads",
+  (req, res, next) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader(
+      "Access-Control-Allow-Headers",
+      "Origin, X-Requested-With, Content-Type, Accept"
+    );
+    res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+    res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+    next();
+  },
+  express.static(path.join(__dirname, "uploads"))
+);
 
 app.use((req, _res, next) => {
   req.ADMIN_KEY = ADMIN_KEY;
@@ -179,9 +180,9 @@ mount("/api/news", "./routes/news.js");
 mount("/api/scholar", "./routes/scholar.js");
 mount("/api/plagiarism", "./routes/plagiarism.js");
 mount("/api/footer", "./routes/footer.js");
+
+// 🔹 NEW: GridFS route for persistent PDFs
 mount("/api/gridfs", "./routes/gridfs.js");
-
-
 
 // ── Health Check + Root ──────────────────────────────────
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
