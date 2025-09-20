@@ -1,8 +1,20 @@
+# Dependencies
 node_modules/
+
+# Environment files
 .env
 *.zip
 
-# Ignore uploads content but keep .gitkeep
+# Ignore all uploaded files (runtime content)
 uploads/*
+
+# But keep folder structure tracked with .gitkeep
 !uploads/.gitkeep
+!uploads/audio/.gitkeep
+!uploads/video/.gitkeep
+!uploads/articles/.gitkeep
+!uploads/banners/.gitkeep
+!uploads/consultancy/.gitkeep
 !uploads/pdfs/.gitkeep
+!uploads/qr/.gitkeep
+!uploads/submissions/.gitkeep
