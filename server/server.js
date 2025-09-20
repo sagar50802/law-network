@@ -9,7 +9,8 @@ const fs = require("fs");
 const app = express();
 const PORT = process.env.PORT || 5000;
 const ADMIN_KEY = process.env.ADMIN_KEY || "LAWNOWNER2025";
-const MONGO_URI = process.env.MONGO_URI || "mongodb://localhost:27017/lawnetwork";
+const MONGO_URI =
+  process.env.MONGO_URI || "mongodb://localhost:27017/lawnetwork";
 
 // ── Database ───────────────────────────────────────────────
 mongoose
@@ -22,9 +23,9 @@ mongoose
 
 // ── CORS Setup ─────────────────────────────────────────────
 const allowedOrigins = [
-  "http://localhost:5173",                   // local dev
+  "http://localhost:5173", // local dev
   "https://law-network-client.onrender.com", // frontend
-  "https://law-network.onrender.com",        // backend domain itself
+  "https://law-network.onrender.com", // backend
 ];
 
 app.use(
@@ -33,7 +34,7 @@ app.use(
       if (!origin || allowedOrigins.includes(origin)) {
         callback(null, true);
       } else {
-        callback(null, true); // fallback: still allow instead of blocking
+        callback(null, true); // fallback: allow others (avoids CORS crash)
       }
     },
     credentials: true,
@@ -47,7 +48,7 @@ app.use(
   })
 );
 
-// ✅ Always attach CORS headers (even for 404/500 responses)
+// 🔹 Global CORS headers (even on errors & preflight)
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", req.headers.origin || "*");
   res.header(
@@ -56,18 +57,18 @@ app.use((req, res, next) => {
   );
   res.header(
     "Access-Control-Allow-Methods",
-    "GET, POST, PUT, DELETE, PATCH, OPTIONS"
+    "GET, POST, PUT, PATCH, DELETE, OPTIONS"
   );
+  res.header("Cross-Origin-Resource-Policy", "cross-origin");
   next();
 });
-
 app.options("*", cors());
 
 // ── Global Middleware ─────────────────────────────────────
 app.use(express.json({ limit: "20mb" }));
 app.use(express.urlencoded({ extended: true }));
 
-// ✅ Serve static uploads with forced CORS headers
+// ✅ Serve static uploads with CORS headers
 app.use(
   "/uploads",
   (req, res, next) => {
@@ -83,6 +84,7 @@ app.use(
   express.static(path.join(__dirname, "uploads"))
 );
 
+// Attach admin key + logger
 app.use((req, _res, next) => {
   req.ADMIN_KEY = ADMIN_KEY;
   console.log(`[API] ${req.method} ${req.url}`);
@@ -178,9 +180,7 @@ function mount(url, routePath) {
     app.use(url, routeModule);
     console.log(`✓ Mounted ${routePath} → ${url}`);
   } catch (err) {
-    console.error(
-      `✗ Failed to mount ${routePath} → ${url}\n→ ${err.message}`
-    );
+    console.error(`✗ Failed to mount ${routePath} → ${url}\n→ ${err.message}`);
   }
 }
 
