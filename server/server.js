@@ -1,6 +1,7 @@
 // server.js
 require("dotenv").config();
 const express = require("express");
+const cors = require("cors");
 const mongoose = require("mongoose");
 const path = require("path");
 const fs = require("fs");
@@ -20,9 +21,40 @@ mongoose
     process.exit(1);
   });
 
-// ── Global CORS headers (apply everywhere, even errors) ─────
+// ── CORS Setup ─────────────────────────────────────────────
+const allowedOrigins = [
+  "http://localhost:5173", // local dev
+  "https://law-network-client.onrender.com", // frontend
+  "https://law-network.onrender.com", // backend
+];
+
+app.use(
+  cors({
+    origin: function (origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, origin); // ✅ echo exact origin
+      } else {
+        callback(null, false);
+      }
+    },
+    credentials: true, // ✅ allow cookies/credentials
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "X-Owner-Key",
+      "x-owner-key",
+    ],
+  })
+);
+
+// 🔹 Always attach CORS headers (including OPTIONS, errors, 404s)
 app.use((req, res, next) => {
-  res.header("Access-Control-Allow-Origin", req.headers.origin || "*");
+  const origin = allowedOrigins.includes(req.headers.origin)
+    ? req.headers.origin
+    : allowedOrigins[0]; // fallback to localhost
+  res.header("Access-Control-Allow-Origin", origin);
+  res.header("Access-Control-Allow-Credentials", "true"); // ✅ important
   res.header(
     "Access-Control-Allow-Headers",
     "Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Owner-Key, x-owner-key"
@@ -44,7 +76,7 @@ app.use(express.urlencoded({ extended: true }));
 app.use(
   "/uploads",
   (req, res, next) => {
-    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Origin", "*"); // static files safe
     res.setHeader(
       "Access-Control-Allow-Headers",
       "Origin, X-Requested-With, Content-Type, Accept"
@@ -70,7 +102,7 @@ app.use((req, _res, next) => {
   "uploads/banners",
   "uploads/articles",
   "uploads/videos",
-  "uploads/audio",
+  "uploads/audio", // ✅ keep singular, matches your routes/frontend
   "uploads/pdfs",
   "uploads/qr",
   "data",
