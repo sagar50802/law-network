@@ -9,8 +9,78 @@ const fs = require("fs");
 const app = express();
 const PORT = process.env.PORT || 5000;
 const ADMIN_KEY = process.env.ADMIN_KEY || "LAWNOWNER2025";
-const MONGO_URI =
-  process.env.MONGO_URI || "mongodb://localhost:27017/lawnetwork";
+const MONGO_URI = process.env.MONGO_URI || "mongodb://localhost:27017/lawnetwork";
+
+// trust proxy (Render/NGINX)
+app.set("trust proxy", 1);
+
+// ── CORS Setup ─────────────────────────────────────────────
+const allowedOrigins = [
+  "http://localhost:5173",                      // local dev
+  "https://law-network-client.onrender.com",    // frontend
+  "https://law-network.onrender.com",           // backend
+];
+
+// Primary CORS middleware
+app.use(
+  cors({
+    origin(origin, cb) {
+      if (!origin || allowedOrigins.includes(origin)) cb(null, origin || true);
+      else cb(null, false);
+    },
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "X-Owner-Key",
+      "x-owner-key",
+      "Origin",
+      "Accept",
+    ],
+  })
+);
+
+// Always attach headers (including 404s/errors)
+app.use((req, res, next) => {
+  const origin = allowedOrigins.includes(req.headers.origin)
+    ? req.headers.origin
+    : allowedOrigins[0]; // fallback to localhost
+  res.header("Access-Control-Allow-Origin", origin);
+  res.header("Vary", "Origin");
+  res.header("Access-Control-Allow-Credentials", "true");
+  res.header(
+    "Access-Control-Allow-Headers",
+    "Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Owner-Key, x-owner-key"
+  );
+  res.header(
+    "Access-Control-Allow-Methods",
+    "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+  );
+  res.header("Cross-Origin-Resource-Policy", "cross-origin");
+  if (req.method === "OPTIONS") return res.sendStatus(204); // preflight OK
+  next();
+});
+
+// Explicit OPTIONS (defensive)
+app.options("*", (req, res) => {
+  const origin = allowedOrigins.includes(req.headers.origin)
+    ? req.headers.origin
+    : allowedOrigins[0];
+  res.header("Access-Control-Allow-Origin", origin);
+  res.header("Vary", "Origin");
+  res.header("Access-Control-Allow-Credentials", "true");
+  res.header(
+    "Access-Control-Allow-Headers",
+    "Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Owner-Key, x-owner-key"
+  );
+  res.header(
+    "Access-Control-Allow-Methods",
+    "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+  );
+  res.header("Cross-Origin-Resource-Policy", "cross-origin");
+  return res.sendStatus(204);
+});
 
 // ── Database ───────────────────────────────────────────────
 mongoose
@@ -21,53 +91,6 @@ mongoose
     process.exit(1);
   });
 
-// ── CORS Setup ─────────────────────────────────────────────
-const allowedOrigins = [
-  "http://localhost:5173", // local dev
-  "https://law-network-client.onrender.com", // frontend
-  "https://law-network.onrender.com", // backend
-];
-
-app.use(
-  cors({
-    origin: function (origin, callback) {
-      if (!origin || allowedOrigins.includes(origin)) {
-        callback(null, origin); // ✅ echo exact origin
-      } else {
-        callback(null, false);
-      }
-    },
-    credentials: true, // ✅ allow cookies/credentials
-    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    allowedHeaders: [
-      "Content-Type",
-      "Authorization",
-      "X-Owner-Key",
-      "x-owner-key",
-    ],
-  })
-);
-
-// 🔹 Always attach CORS headers (including OPTIONS, errors, 404s)
-app.use((req, res, next) => {
-  const origin = allowedOrigins.includes(req.headers.origin)
-    ? req.headers.origin
-    : allowedOrigins[0]; // fallback to localhost
-  res.header("Access-Control-Allow-Origin", origin);
-  res.header("Access-Control-Allow-Credentials", "true"); // ✅ important
-  res.header(
-    "Access-Control-Allow-Headers",
-    "Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Owner-Key, x-owner-key"
-  );
-  res.header(
-    "Access-Control-Allow-Methods",
-    "GET, POST, PUT, PATCH, DELETE, OPTIONS"
-  );
-  res.header("Cross-Origin-Resource-Policy", "cross-origin");
-  if (req.method === "OPTIONS") return res.sendStatus(200);
-  next();
-});
-
 // ── Global Middleware ─────────────────────────────────────
 app.use(express.json({ limit: "20mb" }));
 app.use(express.urlencoded({ extended: true }));
@@ -76,7 +99,7 @@ app.use(express.urlencoded({ extended: true }));
 app.use(
   "/uploads",
   (req, res, next) => {
-    res.setHeader("Access-Control-Allow-Origin", "*"); // static files safe
+    res.setHeader("Access-Control-Allow-Origin", "*"); // static files are safe
     res.setHeader(
       "Access-Control-Allow-Headers",
       "Origin, X-Requested-With, Content-Type, Accept"
@@ -102,7 +125,7 @@ app.use((req, _res, next) => {
   "uploads/banners",
   "uploads/articles",
   "uploads/videos",
-  "uploads/audio", // ✅ keep singular, matches your routes/frontend
+  "uploads/audio",  // keep singular
   "uploads/pdfs",
   "uploads/qr",
   "data",
@@ -115,17 +138,17 @@ app.use((req, _res, next) => {
 const Access = mongoose.model(
   "Access",
   new mongoose.Schema({
-    email: { type: String, required: true },
+    email:   { type: String, required: true },
     feature: { type: String, required: true },
     featureId: { type: String, required: true },
-    expiry: { type: Date },
+    expiry:  { type: Date },
     message: { type: String },
   })
 );
 
 // ── Access Routes ─────────────────────────────────────────
 app.post("/api/access/grant", async (req, res) => {
-  const { email, feature, featureId, expiry, message } = req.body;
+  const { email, feature, featureId, expiry, message } = req.body || {};
   if (!email || !feature || !featureId)
     return res.status(400).json({ error: "Missing fields" });
   try {
@@ -141,7 +164,7 @@ app.post("/api/access/grant", async (req, res) => {
 });
 
 app.post("/api/access/revoke", async (req, res) => {
-  const { email, feature, featureId } = req.body;
+  const { email, feature, featureId } = req.body || {};
   if (!email || !feature || !featureId)
     return res.status(400).json({ error: "Missing fields" });
   try {
@@ -153,7 +176,7 @@ app.post("/api/access/revoke", async (req, res) => {
 });
 
 app.get("/api/access/status", async (req, res) => {
-  const { email, feature, featureId } = req.query;
+  const { email, feature, featureId } = req.query || {};
   if (!email || !feature || !featureId) return res.json({ access: false });
   try {
     const record = await Access.findOne({ email, feature, featureId });
@@ -162,11 +185,7 @@ app.get("/api/access/status", async (req, res) => {
       await Access.deleteOne({ _id: record._id });
       return res.json({ access: false });
     }
-    res.json({
-      access: true,
-      expiry: record.expiry,
-      message: record.message,
-    });
+    res.json({ access: true, expiry: record.expiry, message: record.message });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -188,7 +207,7 @@ function mount(url, routePath) {
   }
 }
 
-// ✅ Add All Route Mounts Here
+// ✅ Route mounts
 mount("/api/banners", "./routes/banners.js");
 mount("/api/articles", "./routes/articles.js");
 mount("/api/videos", "./routes/videos.js");
@@ -202,12 +221,24 @@ mount("/api/scholar", "./routes/scholar.js");
 mount("/api/plagiarism", "./routes/plagiarism.js");
 mount("/api/footer", "./routes/footer.js");
 
-// 🔹 NEW: GridFS route for persistent PDFs
+// 🔹 GridFS route for persistent PDFs
 mount("/api/gridfs", "./routes/gridfs.js");
 
 // ── Health Check + Root ──────────────────────────────────
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
 app.get("/", (_req, res) => res.send("🚀 Law Network Backend is Live"));
+
+// ── Error handler (keeps CORS headers) ────────────────────
+app.use((err, req, res, _next) => {
+  const origin = allowedOrigins.includes(req.headers.origin)
+    ? req.headers.origin
+    : allowedOrigins[0];
+  res.header("Access-Control-Allow-Origin", origin);
+  res.header("Vary", "Origin");
+  res.header("Access-Control-Allow-Credentials", "true");
+  console.error("API error:", err);
+  res.status(err.status || 500).json({ error: err.message || "Server error" });
+});
 
 // ── Start Server ─────────────────────────────────────────
 app.listen(PORT, () => {
