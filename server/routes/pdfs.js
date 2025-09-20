@@ -3,19 +3,45 @@ const express = require("express");
 const multer = require("multer");
 const { GridFsStorage } = require("multer-gridfs-storage");
 const mongoose = require("mongoose");
-const { ObjectId } = require("mongodb"); // ✅ added for safe _id
+const { ObjectId } = require("mongodb");
 const fsp = require("fs/promises");
 const path = require("path");
 
 const router = express.Router();
 const mongoURI = process.env.MONGO_URI;
 
+// 🔹 Match server.js allowed origins
+const allowedOrigins = [
+  "http://localhost:5173",
+  "https://law-network-client.onrender.com",
+  "https://law-network.onrender.com",
+];
+
+// 🔹 Consistent CORS headers
+router.use((req, res, next) => {
+  const origin = allowedOrigins.includes(req.headers.origin)
+    ? req.headers.origin
+    : allowedOrigins[0]; // fallback
+  res.header("Access-Control-Allow-Origin", origin);
+  res.header("Access-Control-Allow-Credentials", "true");
+  res.header(
+    "Access-Control-Allow-Headers",
+    "Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Owner-Key, x-owner-key"
+  );
+  res.header(
+    "Access-Control-Allow-Methods",
+    "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+  );
+  res.header("Cross-Origin-Resource-Policy", "cross-origin");
+  if (req.method === "OPTIONS") return res.sendStatus(200);
+  next();
+});
+
 // 🔹 Metadata still stored in JSON (subjects/chapters)
 const ROOT = path.join(__dirname, "..");
 const DATA_DIR = path.join(ROOT, "data");
 const DB_FILE = path.join(DATA_DIR, "pdfs.json");
 
-// Ensure data dir exists
 fsp.mkdir(DATA_DIR, { recursive: true }).catch(() => {});
 
 async function readDB() {
@@ -36,7 +62,6 @@ const uid = () =>
   Math.random().toString(36).slice(2) + Date.now().toString(36);
 
 // ---------------- GridFS Storage ----------------
-// ✅ Upgrade: always return valid object with _id, prevent null crash
 const storage = new GridFsStorage({
   url: mongoURI,
   file: (req, file) => {
@@ -44,7 +69,7 @@ const storage = new GridFsStorage({
       return Promise.reject(new Error("Only PDF files allowed"));
     }
     return {
-      _id: new ObjectId(), // ensure GridFS always has a safe unique id
+      _id: new ObjectId(),
       filename: `${Date.now()}-${(file.originalname || "file.pdf").replace(
         /\s+/g,
         "_"
@@ -54,7 +79,7 @@ const storage = new GridFsStorage({
   },
 });
 const upload = multer({ storage });
-const uploadAny = upload.single("pdf"); // FormData.append("pdf", ...)
+const uploadAny = upload.single("pdf");
 
 // ---------------- List all subjects ----------------
 router.get("/", async (_req, res) => {
@@ -101,7 +126,6 @@ router.post("/subjects/:sid/chapters", uploadAny, async (req, res) => {
   const title = String(req.body.title || "Untitled").slice(0, 200);
   const locked = req.body.locked === "true";
 
-  // 🔹 URL points to GridFS streaming endpoint
   const url = `/api/gridfs/pdf/${req.file.filename}`;
 
   const ch = {
@@ -134,7 +158,6 @@ router.delete("/subjects/:sid/chapters/:cid", async (req, res) => {
 
   const removed = sub.chapters.splice(idx, 1)[0];
 
-  // 🔹 Delete file from GridFS if present
   if (removed?.url?.includes("/api/gridfs/pdf/")) {
     const filename = removed.url.split("/").pop();
     try {
@@ -168,7 +191,6 @@ router.delete("/subjects/:sid", async (req, res) => {
 
   const sub = db.subjects[idx];
 
-  // 🔹 Delete all related GridFS files
   try {
     const bucket = new mongoose.mongo.GridFSBucket(mongoose.connection.db, {
       bucketName: "pdfs",
