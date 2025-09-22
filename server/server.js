@@ -16,9 +16,9 @@ app.set("trust proxy", 1);
 
 // ── CORS Setup ─────────────────────────────────────────────
 const allowedOrigins = [
-  "http://localhost:5173",                      // local dev
-  "https://law-network-client.onrender.com",    // frontend
-  "https://law-network.onrender.com",           // backend
+  "http://localhost:5173",                   // local dev
+  "https://law-network-client.onrender.com", // frontend
+  "https://law-network.onrender.com",        // backend
 ];
 
 // Primary CORS middleware
@@ -45,7 +45,7 @@ app.use(
 app.use((req, res, next) => {
   const origin = allowedOrigins.includes(req.headers.origin)
     ? req.headers.origin
-    : allowedOrigins[0]; // fallback to localhost
+    : allowedOrigins[0];
   res.header("Access-Control-Allow-Origin", origin);
   res.header("Vary", "Origin");
   res.header("Access-Control-Allow-Credentials", "true");
@@ -58,7 +58,7 @@ app.use((req, res, next) => {
     "GET, POST, PUT, PATCH, DELETE, OPTIONS"
   );
   res.header("Cross-Origin-Resource-Policy", "cross-origin");
-  if (req.method === "OPTIONS") return res.sendStatus(204); // preflight OK
+  if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
 });
 
@@ -125,7 +125,7 @@ app.use((req, _res, next) => {
   "uploads/banners",
   "uploads/articles",
   "uploads/videos",
-  "uploads/audio",  // keep singular
+  "uploads/audio", // singular
   "uploads/pdfs",
   "uploads/qr",
   "data",
@@ -138,10 +138,10 @@ app.use((req, _res, next) => {
 const Access = mongoose.model(
   "Access",
   new mongoose.Schema({
-    email:   { type: String, required: true },
+    email: { type: String, required: true },
     feature: { type: String, required: true },
     featureId: { type: String, required: true },
-    expiry:  { type: Date },
+    expiry: { type: Date },
     message: { type: String },
   })
 );
@@ -221,7 +221,7 @@ mount("/api/scholar", "./routes/scholar.js");
 mount("/api/plagiarism", "./routes/plagiarism.js");
 mount("/api/footer", "./routes/footer.js");
 
-// 🔹 GridFS route for persistent PDFs
+// 🔹 GridFS route for persistent PDFs (streaming)
 mount("/api/gridfs", "./routes/gridfs.js");
 
 // ── Health Check + Root ──────────────────────────────────

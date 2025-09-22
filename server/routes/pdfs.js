@@ -17,12 +17,13 @@ const allowedOrigins = [
   "https://law-network.onrender.com",
 ];
 
-// 🔹 Consistent CORS headers
-router.use((req, res, next) => {
-  const origin = allowedOrigins.includes(req.headers.origin)
-    ? req.headers.origin
-    : allowedOrigins[0]; // fallback
+// ---------- CORS (router-level, covers every route here) ----------
+function setCors(res, originHeader) {
+  const origin = allowedOrigins.includes(originHeader)
+    ? originHeader
+    : allowedOrigins[0]; // fallback to localhost
   res.header("Access-Control-Allow-Origin", origin);
+  res.header("Vary", "Origin");
   res.header("Access-Control-Allow-Credentials", "true");
   res.header(
     "Access-Control-Allow-Headers",
@@ -33,11 +34,20 @@ router.use((req, res, next) => {
     "GET, POST, PUT, PATCH, DELETE, OPTIONS"
   );
   res.header("Cross-Origin-Resource-Policy", "cross-origin");
-  if (req.method === "OPTIONS") return res.sendStatus(200);
+}
+
+router.use((req, res, next) => {
+  setCors(res, req.headers.origin);
+  if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
 });
 
-// 🔹 Metadata still stored in JSON (subjects/chapters)
+router.options("*", (req, res) => {
+  setCors(res, req.headers.origin);
+  return res.sendStatus(204);
+});
+
+// ---------- JSON metadata store (subjects/chapters) ----------
 const ROOT = path.join(__dirname, "..");
 const DATA_DIR = path.join(ROOT, "data");
 const DB_FILE = path.join(DATA_DIR, "pdfs.json");
@@ -61,7 +71,7 @@ async function writeDB(db) {
 const uid = () =>
   Math.random().toString(36).slice(2) + Date.now().toString(36);
 
-// ---------------- GridFS Storage ----------------
+// ---------- GridFS storage (bucket: "pdfs") ----------
 const storage = new GridFsStorage({
   url: mongoURI,
   file: (req, file) => {
@@ -70,35 +80,45 @@ const storage = new GridFsStorage({
     }
     return {
       _id: new ObjectId(),
-      filename: `${Date.now()}-${(file.originalname || "file.pdf").replace(
-        /\s+/g,
-        "_"
-      )}`,
+      filename: `${Date.now()}-${(file.originalname || "file.pdf").replace(/\s+/g, "_")}`,
       bucketName: "pdfs",
     };
   },
 });
 const upload = multer({ storage });
-const uploadAny = upload.single("pdf");
 
-// ---------------- List all subjects ----------------
+// Safe wrapper to surface multer errors as JSON (and keep CORS headers)
+function multerSafe(mw) {
+  return (req, res, next) => {
+    mw(req, res, (err) => {
+      if (err) {
+        setCors(res, req.headers.origin);
+        return res.status(400).json({ success: false, message: err.message || "Upload error" });
+      }
+      next();
+    });
+  };
+}
+
+const uploadAny = multerSafe(upload.single("pdf"));
+
+// ---------- Routes ----------
+
+// List all subjects
 router.get("/", async (_req, res) => {
   const db = await readDB();
   res.json({ success: true, subjects: db.subjects });
 });
 
-// ---------------- Create subject ----------------
+// Create subject
 router.post("/subjects", express.json(), async (req, res) => {
   const name = (req.body?.name || "").trim();
-  if (!name)
-    return res.status(400).json({ success: false, message: "Name required" });
+  if (!name) return res.status(400).json({ success: false, message: "Name required" });
 
   const db = await readDB();
   const id = name.toLowerCase().replace(/\s+/g, "-") || uid();
   if (db.subjects.find((s) => s.id === id)) {
-    return res
-      .status(409)
-      .json({ success: false, message: "Subject already exists" });
+    return res.status(409).json({ success: false, message: "Subject already exists" });
   }
 
   const subject = { id, name, chapters: [] };
@@ -108,24 +128,20 @@ router.post("/subjects", express.json(), async (req, res) => {
   res.json({ success: true, subject });
 });
 
-// ---------------- Add chapter (upload PDF to GridFS) ----------------
+// Add chapter (upload PDF → GridFS)
 router.post("/subjects/:sid/chapters", uploadAny, async (req, res) => {
   const db = await readDB();
   const sub = db.subjects.find((s) => s.id === req.params.sid);
-  if (!sub)
-    return res
-      .status(404)
-      .json({ success: false, message: "Subject not found" });
+  if (!sub) return res.status(404).json({ success: false, message: "Subject not found" });
 
   if (!req.file) {
-    return res
-      .status(400)
-      .json({ success: false, message: "PDF file required" });
+    return res.status(400).json({ success: false, message: "PDF file required" });
   }
 
   const title = String(req.body.title || "Untitled").slice(0, 200);
   const locked = req.body.locked === "true";
 
+  // View URL (frontend will call this)
   const url = `/api/gridfs/pdf/${req.file.filename}`;
 
   const ch = {
@@ -141,29 +157,21 @@ router.post("/subjects/:sid/chapters", uploadAny, async (req, res) => {
   res.json({ success: true, chapter: ch });
 });
 
-// ---------------- Delete chapter ----------------
+// Delete chapter (+ delete GridFS file if present)
 router.delete("/subjects/:sid/chapters/:cid", async (req, res) => {
   const db = await readDB();
   const sub = db.subjects.find((s) => s.id === req.params.sid);
-  if (!sub)
-    return res
-      .status(404)
-      .json({ success: false, message: "Subject not found" });
+  if (!sub) return res.status(404).json({ success: false, message: "Subject not found" });
 
   const idx = sub.chapters.findIndex((c) => c.id === req.params.cid);
-  if (idx < 0)
-    return res
-      .status(404)
-      .json({ success: false, message: "Chapter not found" });
+  if (idx < 0) return res.status(404).json({ success: false, message: "Chapter not found" });
 
   const removed = sub.chapters.splice(idx, 1)[0];
 
   if (removed?.url?.includes("/api/gridfs/pdf/")) {
     const filename = removed.url.split("/").pop();
     try {
-      const bucket = new mongoose.mongo.GridFSBucket(mongoose.connection.db, {
-        bucketName: "pdfs",
-      });
+      const bucket = new mongoose.mongo.GridFSBucket(mongoose.connection.db, { bucketName: "pdfs" });
       const files = await mongoose.connection.db
         .collection("pdfs.files")
         .find({ filename })
@@ -180,21 +188,15 @@ router.delete("/subjects/:sid/chapters/:cid", async (req, res) => {
   res.json({ success: true, removed });
 });
 
-// ---------------- Delete subject ----------------
+// Delete subject (and all GridFS PDFs)
 router.delete("/subjects/:sid", async (req, res) => {
   const db = await readDB();
   const idx = db.subjects.findIndex((s) => s.id === req.params.sid);
-  if (idx < 0)
-    return res
-      .status(404)
-      .json({ success: false, message: "Subject not found" });
+  if (idx < 0) return res.status(404).json({ success: false, message: "Subject not found" });
 
   const sub = db.subjects[idx];
-
   try {
-    const bucket = new mongoose.mongo.GridFSBucket(mongoose.connection.db, {
-      bucketName: "pdfs",
-    });
+    const bucket = new mongoose.mongo.GridFSBucket(mongoose.connection.db, { bucketName: "pdfs" });
     for (const ch of sub.chapters || []) {
       if (ch.url?.includes("/api/gridfs/pdf/")) {
         const filename = ch.url.split("/").pop();
@@ -213,24 +215,26 @@ router.delete("/subjects/:sid", async (req, res) => {
 
   db.subjects.splice(idx, 1);
   await writeDB(db);
-
   res.json({ success: true });
 });
 
-// ---------------- Toggle lock ----------------
-router.patch(
-  "/subjects/:sid/chapters/:cid/lock",
-  express.json(),
-  async (req, res) => {
-    const db = await readDB();
-    const sub = db.subjects.find((s) => s.id === req.params.sid);
-    const ch = sub?.chapters.find((c) => c.id === req.params.cid);
-    if (!ch) return res.status(404).json({ success: false });
+// Toggle lock
+router.patch("/subjects/:sid/chapters/:cid/lock", express.json(), async (req, res) => {
+  const db = await readDB();
+  const sub = db.subjects.find((s) => s.id === req.params.sid);
+  const ch = sub?.chapters.find((c) => c.id === req.params.cid);
+  if (!ch) return res.status(404).json({ success: false });
 
-    ch.locked = !!req.body.locked;
-    await writeDB(db);
-    res.json({ success: true, chapter: ch });
-  }
-);
+  ch.locked = !!req.body.locked;
+  await writeDB(db);
+  res.json({ success: true, chapter: ch });
+});
+
+// ---------- Route error handler (keeps CORS headers) ----------
+router.use((err, req, res, _next) => {
+  setCors(res, req.headers.origin);
+  console.error("PDFs route error:", err);
+  res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
+});
 
 module.exports = router;
