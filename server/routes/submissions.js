@@ -7,6 +7,39 @@ const mongoose = require("mongoose");
 
 const router = express.Router();
 
+/* ---------------------------- CORS Setup ---------------------------- */
+const allowedOrigins = [
+  "http://localhost:5173",
+  "https://law-network-client.onrender.com",
+  "https://law-network.onrender.com",
+];
+
+function setCors(res, originHeader) {
+  const origin = allowedOrigins.includes(originHeader)
+    ? originHeader
+    : allowedOrigins[0]; // fallback
+  res.header("Access-Control-Allow-Origin", origin);
+  res.header("Vary", "Origin");
+  res.header("Access-Control-Allow-Credentials", "true");
+  res.header(
+    "Access-Control-Allow-Headers",
+    "Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Owner-Key, x-owner-key"
+  );
+  res.header(
+    "Access-Control-Allow-Methods",
+    "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+  );
+  res.header("Cross-Origin-Resource-Policy", "cross-origin");
+}
+
+// Apply CORS to every request in this router
+router.use((req, res, next) => {
+  setCors(res, req.headers.origin);
+  if (req.method === "OPTIONS") return res.sendStatus(204);
+  next();
+});
+
+/* ---------------------- Folders & Data Setup ------------------------- */
 const DATA_DIR  = path.join(__dirname, "..", "data");
 const UP_DIR    = path.join(__dirname, "..", "uploads", "submissions");
 const DATA_FILE = path.join(DATA_DIR, "submissions.json");
@@ -37,7 +70,6 @@ function isAdmin(req, res, next) {
 }
 
 /* ------------------------- Access model (Mongo) -------------------------- */
-
 const AccessSchema = new mongoose.Schema({
   email:    { type: String, required: true },
   feature:  { type: String, required: true },  // playlist, video, pdf, podcast, article
@@ -49,7 +81,6 @@ const AccessSchema = new mongoose.Schema({
 const Access = mongoose.models.Access || mongoose.model("Access", AccessSchema);
 
 /* ------------------------- SSE: live grant/revoke ------------------------ */
-
 const clientsByEmail = new Map(); // email -> Set<res>
 
 function sseHeaders() {
@@ -96,7 +127,6 @@ router.get("/stream", (req, res) => {
 });
 
 /* ----------------------- Helpers for plan → seconds ---------------------- */
-
 function secondsFromPlanLabel(label = "") {
   const plan = String(label || "").toLowerCase();
   if (plan.includes("year"))  return 60 * 60 * 24 * 365;
@@ -107,7 +137,6 @@ function secondsFromPlanLabel(label = "") {
 }
 
 /* --------------------------------- ROUTES -------------------------------- */
-
 // PUBLIC: submit (honors server-side Auto-Approval)
 router.post("/", upload.single("screenshot"), async (req, res) => {
   const items = readAll();
@@ -156,15 +185,12 @@ router.post("/", upload.single("screenshot"), async (req, res) => {
     const feature   = item.context.type || "playlist";
     const featureId = item.context.id || item.context.playlist || item.context.subject;
 
-    // persist to Access DB so /api/access/status reflects it
     if (item.email && featureId) {
       await Access.findOneAndUpdate(
         { email: item.email, feature, featureId },
         { expiry: new Date(item.expiry), message: item.message },
         { upsert: true, new: true }
       );
-
-      // push to the user's browser immediately
       broadcastToEmail(item.email, "grant", {
         type: "grant",
         feature,
@@ -197,7 +223,7 @@ router.post("/auto-mode", isAdmin, (req, res) => {
   res.json({ success: true, auto: getAutoMode() });
 });
 
-// ADMIN: approve (manual)
+// ADMIN: approve
 router.post("/:id/approve", isAdmin, async (req, res) => {
   const seconds = Number(req.body.seconds || 0);
   const message = req.body.message || "";
@@ -219,14 +245,11 @@ router.post("/:id/approve", isAdmin, async (req, res) => {
   const email     = items[i].email;
 
   if (email && featureId) {
-    // persist to Access DB
     await Access.findOneAndUpdate(
       { email, feature, featureId },
       { expiry: new Date(items[i].expiry), message: items[i].message },
       { upsert: true, new: true }
     );
-
-    // broadcast to user
     broadcastToEmail(email, "grant", {
       type: "grant",
       feature,
@@ -257,16 +280,8 @@ router.post("/:id/revoke", isAdmin, async (req, res) => {
   const email     = items[i].email;
 
   if (email && featureId) {
-    // remove from Access DB
     await Access.deleteOne({ email, feature, featureId });
-
-    // notify user immediately
-    broadcastToEmail(email, "revoke", {
-      type: "revoke",
-      feature,
-      featureId,
-      email,
-    });
+    broadcastToEmail(email, "revoke", { type: "revoke", feature, featureId, email });
   }
 
   res.json({ success: true, item: items[i] });
@@ -283,9 +298,7 @@ router.post("/:id/reject", isAdmin, async (req, res) => {
   if (removed.proofUrl?.startsWith("/uploads/submissions/")) {
     const abs = path.join(__dirname, "..", removed.proofUrl.replace(/^\//,""));
     const safeRoot = path.join(__dirname, "..", "uploads", "submissions");
-    if (abs.startsWith(safeRoot)) {
-      await fs.promises.unlink(abs).catch(() => {});
-    }
+    if (abs.startsWith(safeRoot)) await fs.promises.unlink(abs).catch(() => {});
   }
 
   res.json({ success: true, removed });
@@ -302,15 +315,13 @@ router.delete("/:id", isAdmin, async (req, res) => {
   if (removed.proofUrl?.startsWith("/uploads/submissions/")) {
     const abs = path.join(__dirname, "..", removed.proofUrl.replace(/^\//,""));
     const safeRoot = path.join(__dirname, "..", "uploads", "submissions");
-    if (abs.startsWith(safeRoot)) {
-      await fs.promises.unlink(abs).catch(() => {});
-    }
+    if (abs.startsWith(safeRoot)) await fs.promises.unlink(abs).catch(() => {});
   }
 
   res.json({ success: true, removed });
 });
 
-// PUBLIC: check my submission (polling fallback)
+// PUBLIC: check my submission
 router.get("/my", (req, res) => {
   const { email = "", type = "", id = "" } = req.query;
   if (!email) return res.status(400).json({ success: false, message: "email required" });
@@ -324,6 +335,13 @@ router.get("/my", (req, res) => {
 
   if (!match) return res.json({ success: true, found: false });
   res.json({ success: true, found: true, item: match });
+});
+
+/* ----------------------- Route-level error handler ----------------------- */
+router.use((err, req, res, _next) => {
+  setCors(res, req.headers.origin);
+  console.error("Submissions route error:", err);
+  res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
 });
 
 module.exports = router;

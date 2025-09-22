@@ -1,3 +1,4 @@
+// server/routes/pdfs.js
 const express = require("express");
 const multer = require("multer");
 const { GridFsStorage } = require("multer-gridfs-storage");
@@ -29,7 +30,7 @@ function setCors(res, originHeader) {
   res.header("Cross-Origin-Resource-Policy", "cross-origin");
 }
 
-// Apply to all
+// Apply to all requests
 router.use((req, res, next) => {
   setCors(res, req.headers.origin);
   if (req.method === "OPTIONS") return res.sendStatus(204);
@@ -40,7 +41,7 @@ router.options("*", (req, res) => {
   return res.sendStatus(204);
 });
 
-// ── JSON metadata ─────────────────────────
+// ── JSON metadata (pdfs.json) ─────────────────────────────
 const ROOT = path.join(__dirname, "..");
 const DATA_DIR = path.join(ROOT, "data");
 const DB_FILE = path.join(DATA_DIR, "pdfs.json");
@@ -61,7 +62,7 @@ async function writeDB(db) {
 }
 const uid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
 
-// ── GridFS storage ────────────────────────
+// ── GridFS storage ───────────────────────────────────────
 const storage = new GridFsStorage({
   url: mongoURI,
   file: (_req, file) => {
@@ -91,17 +92,20 @@ function multerSafe(mw) {
     });
   };
 }
-const uploadChapter = multerSafe(upload.fields([{ name: "pdf", maxCount: 1 }, { name: "file", maxCount: 1 }]));
+const uploadChapter = multerSafe(upload.fields([
+  { name: "pdf", maxCount: 1 },
+  { name: "file", maxCount: 1 },
+]));
 
-// ── Routes ────────────────────────────────
+// ── Routes ──────────────────────────────────────────────
 
-// list all subjects
+// List all subjects
 router.get("/", async (_req, res) => {
   const db = await readDB();
   res.json({ success: true, subjects: db.subjects });
 });
 
-// create subject
+// Create subject
 router.post("/subjects", express.json(), async (req, res) => {
   const name = (req.body?.name || "").trim();
   if (!name) return res.status(400).json({ success: false, message: "Name required" });
@@ -117,7 +121,7 @@ router.post("/subjects", express.json(), async (req, res) => {
   res.json({ success: true, subject });
 });
 
-// add chapter (upload pdf)
+// Add chapter (upload PDF)
 router.post("/subjects/:sid/chapters", uploadChapter, async (req, res) => {
   try {
     const db = await readDB();
@@ -142,7 +146,7 @@ router.post("/subjects/:sid/chapters", uploadChapter, async (req, res) => {
   }
 });
 
-// delete chapter
+// Delete chapter
 router.delete("/subjects/:sid/chapters/:cid", async (req, res) => {
   const db = await readDB();
   const sub = db.subjects.find((s) => s.id === req.params.sid);
@@ -170,7 +174,7 @@ router.delete("/subjects/:sid/chapters/:cid", async (req, res) => {
   res.json({ success: true, removed });
 });
 
-// delete subject
+// Delete subject (and its PDFs)
 router.delete("/subjects/:sid", async (req, res) => {
   const db = await readDB();
   const idx = db.subjects.findIndex((s) => s.id === req.params.sid);
@@ -196,18 +200,19 @@ router.delete("/subjects/:sid", async (req, res) => {
   res.json({ success: true });
 });
 
-// toggle lock
-router.patch("/subjects/:sid/chapters/:cid/lock", express.json(), async (req, res) => {
+// Toggle lock/unlock
+router.patch("/subjects/:sid/chapters/:cid/lock", express.json({ limit: "5mb" }), async (req, res) => {
   const db = await readDB();
   const sub = db.subjects.find((s) => s.id === req.params.sid);
   const ch = sub?.chapters.find((c) => c.id === req.params.cid);
-  if (!ch) return res.status(404).json({ success: false });
+  if (!ch) return res.status(404).json({ success: false, message: "Chapter not found" });
+
   ch.locked = !!req.body.locked;
   await writeDB(db);
   res.json({ success: true, chapter: ch });
 });
 
-// error handler
+// Error handler
 router.use((err, req, res, _next) => {
   setCors(res, req.headers.origin);
   console.error("PDFs route error:", err);

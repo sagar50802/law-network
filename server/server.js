@@ -99,11 +99,8 @@ app.use(express.urlencoded({ extended: true }));
 app.use(
   "/uploads",
   (req, res, next) => {
-    res.setHeader("Access-Control-Allow-Origin", "*"); // static files are safe
-    res.setHeader(
-      "Access-Control-Allow-Headers",
-      "Origin, X-Requested-With, Content-Type, Accept"
-    );
+    res.setHeader("Access-Control-Allow-Origin", "*"); // static files safe
+    res.setHeader("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept");
     res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
     res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
     next();
@@ -125,9 +122,10 @@ app.use((req, _res, next) => {
   "uploads/banners",
   "uploads/articles",
   "uploads/videos",
-  "uploads/audio", // singular
+  "uploads/audio",       // ✅ keep singular everywhere
   "uploads/pdfs",
   "uploads/qr",
+  "uploads/submissions",
   "data",
 ].forEach((dir) => {
   const abs = path.join(__dirname, dir);
