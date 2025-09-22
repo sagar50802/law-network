@@ -1,4 +1,3 @@
-// server/routes/gridfs.js
 const express = require("express");
 const mongoose = require("mongoose");
 const multer = require("multer");
@@ -8,13 +7,12 @@ const { ObjectId } = require("mongodb");
 const router = express.Router();
 const mongoURI = process.env.MONGO_URI;
 
-// ── Allowed origins (match server.js) ─────────────────────
+// ── CORS ─────────────────────
 const allowedOrigins = [
   "http://localhost:5173",
   "https://law-network-client.onrender.com",
   "https://law-network.onrender.com",
 ];
-
 function setCors(res, originHeader) {
   const origin = allowedOrigins.includes(originHeader) ? originHeader : allowedOrigins[0];
   res.header("Access-Control-Allow-Origin", origin);
@@ -27,16 +25,10 @@ function setCors(res, originHeader) {
   res.header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
   res.header("Cross-Origin-Resource-Policy", "cross-origin");
 }
-
 router.use((req, res, next) => {
   setCors(res, req.headers.origin);
   if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
-});
-
-router.options("*", (req, res) => {
-  setCors(res, req.headers.origin);
-  return res.sendStatus(204);
 });
 
 // ── GridFS storage (bucket: pdfs) ─────────────────────────
@@ -53,20 +45,14 @@ const storage = new GridFsStorage({
     };
   },
 });
-
 storage.on("connection", () => console.log("✓ GridFS storage ready (pdfs) [gridfs.js]"));
-storage.on("connectionFailed", (e) =>
-  console.error("✗ GridFS storage error [gridfs.js]:", e?.message)
-);
+storage.on("connectionFailed", (e) => console.error("✗ GridFS storage error [gridfs.js]:", e?.message));
 
 const upload = multer({ storage });
 
-// ── Upload (manual/demo). Accept "pdf" OR "file" field ────
+// ── Upload demo (admin tool) ─────────────
 router.post("/pdf/upload", (req, res, next) => {
-  const mw = upload.fields([
-    { name: "pdf", maxCount: 1 },
-    { name: "file", maxCount: 1 },
-  ]);
+  const mw = upload.fields([{ name: "pdf", maxCount: 1 }, { name: "file", maxCount: 1 }]);
   mw(req, res, (err) => {
     if (err) {
       console.error("Upload error (demo):", err);
@@ -83,35 +69,29 @@ router.post("/pdf/upload", (req, res, next) => {
   });
 });
 
-// ── Stream by filename ─────────────────────────────────────
+// ── Stream by filename ───────────────────
 router.get("/pdf/:filename", async (req, res) => {
   try {
-    if (mongoose.connection.readyState !== 1) {
-      return res.status(503).json({ error: "Database not connected" });
-    }
+    if (mongoose.connection.readyState !== 1) return res.status(503).json({ error: "Database not connected" });
     const bucket = new mongoose.mongo.GridFSBucket(mongoose.connection.db, { bucketName: "pdfs" });
     const stream = bucket.openDownloadStreamByName(req.params.filename);
-
     res.set("Content-Type", "application/pdf");
-    res.set("Access-Control-Allow-Origin", "*"); // safe for static streaming
+    res.set("Access-Control-Allow-Origin", "*");
     stream.on("error", () => res.status(404).json({ error: "File not found" }));
     stream.pipe(res);
   } catch (err) {
-    console.error("GridFS stream error (by name):", err);
+    console.error("GridFS stream error:", err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// ── Stream by ID (optional) ───────────────────────────────
+// ── Stream by ID ─────────────────────────
 router.get("/pdf/id/:id", async (req, res) => {
   try {
-    if (mongoose.connection.readyState !== 1) {
-      return res.status(503).json({ error: "Database not connected" });
-    }
+    if (mongoose.connection.readyState !== 1) return res.status(503).json({ error: "Database not connected" });
     const fileId = new mongoose.Types.ObjectId(req.params.id);
     const bucket = new mongoose.mongo.GridFSBucket(mongoose.connection.db, { bucketName: "pdfs" });
     const stream = bucket.openDownloadStream(fileId);
-
     res.set("Content-Type", "application/pdf");
     res.set("Access-Control-Allow-Origin", "*");
     stream.on("error", () => res.status(404).json({ error: "File not found" }));
@@ -122,7 +102,7 @@ router.get("/pdf/id/:id", async (req, res) => {
   }
 });
 
-// Route-level error handler
+// error handler
 router.use((err, req, res, _next) => {
   setCors(res, req.headers.origin);
   console.error("GridFS route error:", err);
