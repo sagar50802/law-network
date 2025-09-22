@@ -5,16 +5,16 @@ node_modules/
 .env
 *.zip
 
-# Ignore all uploaded files (runtime content)
-uploads/*
+# Ignore all uploaded files inside /server/uploads
+server/uploads/*
 
-# But keep folder structure tracked with .gitkeep
-!uploads/.gitkeep
-!uploads/audio/.gitkeep
-!uploads/video/.gitkeep
-!uploads/articles/.gitkeep
-!uploads/banners/.gitkeep
-!uploads/consultancy/.gitkeep
-!uploads/pdfs/.gitkeep
-!uploads/qr/.gitkeep
-!uploads/submissions/.gitkeep
+# But keep folder structure with .gitkeep
+!server/uploads/.gitkeep
+!server/uploads/audio/.gitkeep
+!server/uploads/video/.gitkeep
+!server/uploads/articles/.gitkeep
+!server/uploads/banners/.gitkeep
+!server/uploads/consultancy/.gitkeep
+!server/uploads/pdfs/.gitkeep
+!server/uploads/qr/.gitkeep
+!server/uploads/submissions/.gitkeep
