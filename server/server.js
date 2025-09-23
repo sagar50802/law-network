@@ -1,4 +1,3 @@
-// server/server.js
 import express from "express";
 import mongoose from "mongoose";
 import cors from "cors";
@@ -11,30 +10,58 @@ import fs from "fs";
 dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
-const MONGO_URI = process.env.MONGO_URI || "mongodb://localhost:27017/lawnetwork";
-const CLIENT_URL = process.env.CLIENT_URL || "https://law-network-client.onrender.com";
+const MONGO_URI =
+  process.env.MONGO_URI || "mongodb://localhost:27017/lawnetwork";
+const CLIENT_URL =
+  process.env.CLIENT_URL || "https://law-network-client.onrender.com";
 
 // ── Middlewares ──────────────────────────
 app.use(express.json());
 
-// ✅ CORS fix
-app.use(
-  cors({
-    origin: CLIENT_URL,
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Owner-Key", "x-owner-key"],
-  })
-);
+// ✅ CORS fix with multiple allowed origins
+const ALLOWED_ORIGINS = [
+  CLIENT_URL,
+  "http://localhost:5173",
+  "http://localhost:3000",
+];
 
-// ✅ Force CORS headers for all requests (including OPTIONS preflight)
+const corsOptions = {
+  origin(origin, cb) {
+    if (!origin) return cb(null, true); // allow server-to-server
+    if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
+    return cb(new Error("Not allowed by CORS: " + origin));
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "X-Owner-Key",
+    "x-owner-key",
+  ],
+  optionsSuccessStatus: 204,
+};
+
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions)); // ✅ preflight handler
+
+// Ensure headers always present
 app.use((req, res, next) => {
-  res.header("Access-Control-Allow-Origin", CLIENT_URL);
-  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
-  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Owner-Key, x-owner-key");
-  if (req.method === "OPTIONS") {
-    return res.sendStatus(200);
+  const origin = req.headers.origin;
+  if (origin && ALLOWED_ORIGINS.includes(origin)) {
+    res.header("Access-Control-Allow-Origin", origin);
+    res.header("Vary", "Origin");
+    res.header("Access-Control-Allow-Credentials", "true");
+    res.header(
+      "Access-Control-Allow-Methods",
+      "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+    );
+    res.header(
+      "Access-Control-Allow-Headers",
+      "Content-Type, Authorization, X-Owner-Key, x-owner-key"
+    );
   }
+  if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
 });
 
