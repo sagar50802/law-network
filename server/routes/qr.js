@@ -1,8 +1,10 @@
+// server/routes/qr.js
 const express = require("express");
 const fs = require("fs");
 const fsp = require("fs/promises");
 const path = require("path");
 const multer = require("multer");
+const { isAdmin } = require("./utils");   // ✅ use central util
 
 const router = express.Router();
 
@@ -50,14 +52,6 @@ async function ensureConfig() {
   };
   if (JSON.stringify(cur) !== JSON.stringify(merged)) await writeJSON(merged);
   return merged;
-}
-
-function isAdmin(req, res, next) {
-  const token = (req.headers.authorization || "").replace("Bearer ", "");
-  if (token !== req.ADMIN_KEY) {
-    return res.status(401).json({ success: false, message: "Unauthorized" });
-  }
-  next();
 }
 
 async function unlinkQuiet(relUrl) {
