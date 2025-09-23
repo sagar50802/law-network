@@ -1,7 +1,6 @@
 // server.js
 require("dotenv").config();
 const express = require("express");
-const cors = require("cors");
 const mongoose = require("mongoose");
 const path = require("path");
 const fs = require("fs");
@@ -14,73 +13,39 @@ const MONGO_URI = process.env.MONGO_URI || "mongodb://localhost:27017/lawnetwork
 // trust proxy (Render/NGINX)
 app.set("trust proxy", 1);
 
-// ── CORS Setup ─────────────────────────────────────────────
-const allowedOrigins = [
-  "http://localhost:5173",                    // local dev
-  "https://law-network-client.onrender.com",  // frontend
-  "https://law-network.onrender.com",         // (old backend alias if used)
-  "https://lawnetwork-api.onrender.com",      // ✅ actual backend API domain
+// ── CORS Setup (final, single middleware) ─────────────────────────────
+const allowList = [
+  "http://localhost:5173",                   // local dev
+  "https://law-network-client.onrender.com", // frontend
+];
+const allowRegex = [
+  /^https:\/\/law-network-client-[a-z0-9-]+\.onrender\.com$/ // Render preview deploys
 ];
 
-// Primary CORS middleware
-app.use(
-  cors({
-    origin(origin, cb) {
-      if (!origin || allowedOrigins.includes(origin)) cb(null, origin || true);
-      else cb(null, false);
-    },
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    allowedHeaders: [
-      "Content-Type",
-      "Authorization",
-      "X-Owner-Key",
-      "x-owner-key",
-      "Origin",
-      "Accept",
-    ],
-  })
-);
-
-// Always attach headers (including 404s/errors)
 app.use((req, res, next) => {
-  const origin = allowedOrigins.includes(req.headers.origin)
-    ? req.headers.origin
-    : allowedOrigins[0];
-  res.header("Access-Control-Allow-Origin", origin);
-  res.header("Vary", "Origin");
-  res.header("Access-Control-Allow-Credentials", "true");
-  res.header(
+  const origin = req.headers.origin;
+  const isAllowed =
+    !origin ||
+    allowList.includes(origin) ||
+    allowRegex.some((re) => re.test(origin));
+
+  if (isAllowed && origin) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+  }
+  res.setHeader("Vary", "Origin");
+  res.setHeader(
     "Access-Control-Allow-Headers",
     "Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Owner-Key, x-owner-key"
   );
-  res.header(
+  res.setHeader(
     "Access-Control-Allow-Methods",
     "GET, POST, PUT, PATCH, DELETE, OPTIONS"
   );
-  res.header("Cross-Origin-Resource-Policy", "cross-origin");
+  res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+
   if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
-});
-
-// Explicit OPTIONS (defensive)
-app.options("*", (req, res) => {
-  const origin = allowedOrigins.includes(req.headers.origin)
-    ? req.headers.origin
-    : allowedOrigins[0];
-  res.header("Access-Control-Allow-Origin", origin);
-  res.header("Vary", "Origin");
-  res.header("Access-Control-Allow-Credentials", "true");
-  res.header(
-    "Access-Control-Allow-Headers",
-    "Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Owner-Key, x-owner-key"
-  );
-  res.header(
-    "Access-Control-Allow-Methods",
-    "GET, POST, PUT, PATCH, DELETE, OPTIONS"
-  );
-  res.header("Cross-Origin-Resource-Policy", "cross-origin");
-  return res.sendStatus(204);
 });
 
 // ── Database ───────────────────────────────────────────────
@@ -100,7 +65,7 @@ app.use(express.urlencoded({ extended: true }));
 app.use(
   "/uploads",
   (req, res, next) => {
-    res.setHeader("Access-Control-Allow-Origin", "*"); // static files safe
+    res.setHeader("Access-Control-Allow-Origin", "*"); // safe for static
     res.setHeader("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept");
     res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
     res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
@@ -123,7 +88,7 @@ app.use((req, _res, next) => {
   "uploads/banners",
   "uploads/articles",
   "uploads/videos",
-  "uploads/audio",       // ✅ keep singular everywhere
+  "uploads/audio",
   "uploads/pdfs",
   "uploads/qr",
   "uploads/submissions",
@@ -219,8 +184,6 @@ mount("/api/news", "./routes/news.js");
 mount("/api/scholar", "./routes/scholar.js");
 mount("/api/plagiarism", "./routes/plagiarism.js");
 mount("/api/footer", "./routes/footer.js");
-
-// 🔹 GridFS route for persistent PDFs (streaming)
 mount("/api/gridfs", "./routes/gridfs.js");
 
 // ── Health Check + Root ──────────────────────────────────
@@ -229,12 +192,12 @@ app.get("/", (_req, res) => res.send("🚀 Law Network Backend is Live"));
 
 // ── Error handler (keeps CORS headers) ────────────────────
 app.use((err, req, res, _next) => {
-  const origin = allowedOrigins.includes(req.headers.origin)
-    ? req.headers.origin
-    : allowedOrigins[0];
-  res.header("Access-Control-Allow-Origin", origin);
+  const origin = req.headers.origin;
+  if (origin && (allowList.includes(origin) || allowRegex.some((re) => re.test(origin)))) {
+    res.header("Access-Control-Allow-Origin", origin);
+    res.header("Access-Control-Allow-Credentials", "true");
+  }
   res.header("Vary", "Origin");
-  res.header("Access-Control-Allow-Credentials", "true");
   console.error("API error:", err);
   res.status(err.status || 500).json({ error: err.message || "Server error" });
 });
