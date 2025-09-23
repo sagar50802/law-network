@@ -1,47 +1,105 @@
-// server.js
-require("dotenv").config();
-const express = require("express");
-const mongoose = require("mongoose");
-const path = require("path");
-const fs = require("fs");
+// server/server.js
+import dotenv from "dotenv";
+import express from "express";
+import mongoose from "mongoose";
+import cors from "cors";
+import path from "path";
+import fs from "fs";
+import { fileURLToPath } from "url";
+
+dotenv.config();
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+const MONGO_URI =
+  process.env.MONGO_URI || "mongodb://localhost:27017/lawnetwork";
 const ADMIN_KEY = process.env.ADMIN_KEY || "LAWNOWNER2025";
-const MONGO_URI = process.env.MONGO_URI || "mongodb://localhost:27017/lawnetwork";
 
-app.set("trust proxy", 1);
+// ── Middleware ─────────────────────────────────────────────
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
-// ── CORS Setup ─────────────────────────────
-const allowedOrigins = [
-  "http://localhost:5173",
-  "https://law-network-client.onrender.com",
-  "https://law-network.onrender.com",
-];
+// ── CORS Setup ─────────────────────────────────────────────
+app.use(
+  cors({
+    origin: [
+      "http://localhost:5173",
+      "https://law-network-client.onrender.com",
+    ],
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "X-Owner-Key",
+      "x-owner-key",
+    ],
+  })
+);
 
+// Always attach headers (extra safety)
 app.use((req, res, next) => {
-  const origin = allowedOrigins.includes(req.headers.origin)
-    ? req.headers.origin
-    : allowedOrigins[0]; // fallback to localhost
-
-  res.header("Access-Control-Allow-Origin", origin);
-  res.header("Vary", "Origin");
+  res.header(
+    "Access-Control-Allow-Origin",
+    req.headers.origin || "*"
+  );
   res.header("Access-Control-Allow-Credentials", "true");
   res.header(
-    "Access-Control-Allow-Headers",
-    "Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Owner-Key, x-owner-key"
+    "Access-Control-Allow-Methods",
+    "GET,POST,PUT,PATCH,DELETE,OPTIONS"
   );
   res.header(
-    "Access-Control-Allow-Methods",
-    "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+    "Access-Control-Allow-Headers",
+    "Content-Type, Authorization, X-Owner-Key, x-owner-key"
   );
-  res.header("Cross-Origin-Resource-Policy", "cross-origin");
-
-  if (req.method === "OPTIONS") return res.sendStatus(204);
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(200);
+  }
   next();
 });
 
-// ── DB ─────────────────────────────────────
+// ── Ensure uploads directories exist ───────────────────────
+const uploadDirs = [
+  "uploads",
+  "uploads/pdfs",
+  "uploads/videos",
+  "uploads/audios",
+  "uploads/banners",
+  "uploads/articles",
+  "uploads/qrs",
+];
+uploadDirs.forEach((dir) => {
+  const full = path.join(__dirname, dir);
+  if (!fs.existsSync(full)) {
+    fs.mkdirSync(full, { recursive: true });
+  }
+});
+
+// ── Static serve uploads ───────────────────────────────────
+app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+
+// ── Routes ────────────────────────────────────────────────
+// (Each of these files should export an express.Router)
+import articleRoutes from "./routes/articleRoutes.js";
+import bannerRoutes from "./routes/bannerRoutes.js";
+import pdfRoutes from "./routes/pdfRoutes.js";
+import videoRoutes from "./routes/videoRoutes.js";
+import audioRoutes from "./routes/audioRoutes.js"; // podcasts
+import submissionRoutes from "./routes/submissionRoutes.js";
+import qrRoutes from "./routes/qrRoutes.js";
+
+app.use("/api/articles", articleRoutes);
+app.use("/api/banners", bannerRoutes);
+app.use("/api/pdfs", pdfRoutes);
+app.use("/api/videos", videoRoutes);
+app.use("/api/podcasts", audioRoutes);
+app.use("/api/submissions", submissionRoutes);
+app.use("/api/qr", qrRoutes);
+
+// ── DB Connect ────────────────────────────────────────────
 mongoose
   .connect(MONGO_URI)
   .then(() => console.log("✅ MongoDB connected"))
@@ -50,95 +108,12 @@ mongoose
     process.exit(1);
   });
 
-app.use(express.json({ limit: "20mb" }));
-app.use(express.urlencoded({ extended: true }));
-
-// ── Static uploads ─────────────────────────
-app.use(
-  "/uploads",
-  (req, res, next) => {
-    const origin = allowedOrigins.includes(req.headers.origin)
-      ? req.headers.origin
-      : allowedOrigins[0];
-    res.setHeader("Access-Control-Allow-Origin", origin);
-    res.setHeader("Vary", "Origin");
-    res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
-    res.setHeader(
-      "Access-Control-Allow-Headers",
-      "Origin, X-Requested-With, Content-Type, Accept"
-    );
-    res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
-    if (req.method === "OPTIONS") return res.sendStatus(204);
-    next();
-  },
-  express.static(path.join(__dirname, "uploads"))
-);
-
-// ── Ensure Folders ─────────────────────────
-[
-  "uploads",
-  "uploads/consultancy",
-  "uploads/banners",
-  "uploads/articles",
-  "uploads/videos",
-  "uploads/audio",
-  "uploads/pdfs",
-  "uploads/qr",
-  "uploads/submissions",
-  "data",
-].forEach((dir) => {
-  const abs = path.join(__dirname, dir);
-  if (!fs.existsSync(abs)) fs.mkdirSync(abs, { recursive: true });
+// ── Health Check ──────────────────────────────────────────
+app.get("/", (req, res) => {
+  res.json({ ok: true, service: "LawNetwork API" });
 });
 
-// ── Helper to mount safely ─────────────────
-function mount(url, file) {
-  const abs = path.resolve(__dirname, file);
-  if (!fs.existsSync(abs)) {
-    console.warn(`⚠️ Skipping ${url}, file not found: ${file}`);
-    return;
-  }
-  try {
-    app.use(url, require(abs));
-    console.log(`✓ Mounted ${url} → ${file}`);
-  } catch (err) {
-    console.error(`✗ Failed to mount ${url}:`, err.message);
-  }
-}
-
-// ✅ Mount with /api prefix (to match frontend)
-mount("/api/articles", "./routes/articles.js");
-mount("/api/videos", "./routes/videos.js");
-mount("/api/podcasts", "./routes/podcasts.js");
-mount("/api/pdfs", "./routes/pdfs.js");
-mount("/api/submissions", "./routes/submissions.js");
-mount("/api/qr", "./routes/qr.js");
-mount("/api/consultancy", "./routes/consultancy.js");
-mount("/api/news", "./routes/news.js");
-mount("/api/scholar", "./routes/scholar.js");
-mount("/api/plagiarism", "./routes/plagiarism.js");
-mount("/api/footer", "./routes/footer.js");
-mount("/api/banners", "./routes/banners.js");
-mount("/api/gridfs", "./routes/gridfs.js");
-
-// ── Health Check ───────────────────────────
-app.get("/health", (_req, res) => res.json({ ok: true }));
-app.get("/", (_req, res) => res.send("🚀 Law Network Backend Live"));
-
-// ── Error handler ──────────────────────────
-app.use((err, req, res, _next) => {
-  const origin = allowedOrigins.includes(req.headers.origin)
-    ? req.headers.origin
-    : allowedOrigins[0];
-  res.header("Access-Control-Allow-Origin", origin);
-  res.header("Vary", "Origin");
-  res.header("Access-Control-Allow-Credentials", "true");
-
-  console.error("API error:", err);
-  res.status(err.status || 500).json({ error: err.message || "Server error" });
-});
-
-// ── Start ──────────────────────────────────
+// ── Start ─────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`🚀 API running on http://localhost:${PORT}`);
+  console.log(`🚀 Server running on port ${PORT}`);
 });
