@@ -18,3 +18,5 @@ server/uploads/*
 !server/uploads/pdfs/.gitkeep
 !server/uploads/qr/.gitkeep
 !server/uploads/submissions/.gitkeep
+# 🚀 Ignore the frontend repo folder
+../client
