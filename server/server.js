@@ -106,7 +106,7 @@ function mount(url, file) {
   }
 }
 
-// ✅ IMPORTANT: mount WITH /api prefix
+// ✅ Mount with /api prefix (to match frontend)
 mount("/api/articles", "./routes/articles.js");
 mount("/api/videos", "./routes/videos.js");
 mount("/api/podcasts", "./routes/podcasts.js");
