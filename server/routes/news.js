@@ -89,7 +89,8 @@ router.get("/", async (_req, res) => {
 router.post("/", isAdmin, upload.single("image"), async (req, res) => {
   try {
     const { title, link, order } = req.body;
-    if (!title) return res.status(400).json({ success: false, error: "Title required" });
+    if (!title)
+      return res.status(400).json({ success: false, error: "Title required" });
 
     const relImage = req.file ? "/uploads/news/" + req.file.filename : "";
     const doc = await News.create({
@@ -127,7 +128,8 @@ router.patch("/:id", isAdmin, upload.single("image"), async (req, res) => {
     if (req.file) patch.image = "/uploads/news/" + req.file.filename;
 
     const updated = await News.findByIdAndUpdate(id, patch, { new: true });
-    if (!updated) return res.status(404).json({ success: false, error: "Not found" });
+    if (!updated)
+      return res.status(404).json({ success: false, error: "Not found" });
 
     res.json({
       success: true,
@@ -151,7 +153,8 @@ router.delete("/:id", isAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const doc = await News.findByIdAndDelete(id);
-    if (!doc) return res.status(404).json({ success: false, error: "Not found" });
+    if (!doc)
+      return res.status(404).json({ success: false, error: "Not found" });
 
     if (doc.image && doc.image.startsWith("/uploads/news/")) {
       const abs = path.join(__dirname, "..", doc.image.replace(/^\//, ""));

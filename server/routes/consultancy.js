@@ -9,22 +9,24 @@ const { isAdmin } = require("./utils");
 
 const router = express.Router();
 
-// Model
-const Consultancy = mongoose.model(
-  "Consultancy",
-  new mongoose.Schema(
-    {
-      title: { type: String, required: true },
-      subtitle: { type: String, default: "" },
-      intro: { type: String, default: "" },
-      image: { type: String, required: true }, // /uploads/consultancy/filename.jpg
-      order: { type: Number, default: 0 },
-    },
-    { timestamps: true }
-  )
-);
+/* ---------- Mongoose Model ---------- */
+const Consultancy =
+  mongoose.models.Consultancy ||
+  mongoose.model(
+    "Consultancy",
+    new mongoose.Schema(
+      {
+        title: { type: String, required: true },
+        subtitle: { type: String, default: "" },
+        intro: { type: String, default: "" },
+        image: { type: String, required: true }, // /uploads/consultancy/filename.jpg
+        order: { type: Number, default: 0 },
+      },
+      { timestamps: true }
+    )
+  );
 
-// Uploads
+/* ---------- Upload setup ---------- */
 const UP_DIR = path.join(__dirname, "..", "uploads", "consultancy");
 if (!fs.existsSync(UP_DIR)) fs.mkdirSync(UP_DIR, { recursive: true });
 
@@ -37,14 +39,16 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-// ── Allowed origins (match server.js) ────────────────
+/* ---------- CORS (match server.js) ---------- */
 const allowedOrigins = [
   "http://localhost:5173",
   "https://law-network-client.onrender.com",
   "https://law-network.onrender.com",
 ];
 function setCors(res, originHeader) {
-  const origin = allowedOrigins.includes(originHeader) ? originHeader : allowedOrigins[0];
+  const origin = allowedOrigins.includes(originHeader)
+    ? originHeader
+    : allowedOrigins[0];
   res.header("Access-Control-Allow-Origin", origin);
   res.header("Vary", "Origin");
   res.header("Access-Control-Allow-Credentials", "true");
@@ -52,7 +56,10 @@ function setCors(res, originHeader) {
     "Access-Control-Allow-Headers",
     "Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Owner-Key, x-owner-key"
   );
-  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
+  res.header(
+    "Access-Control-Allow-Methods",
+    "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+  );
   res.header("Cross-Origin-Resource-Policy", "cross-origin");
 }
 router.use((req, res, next) => {
@@ -61,7 +68,7 @@ router.use((req, res, next) => {
   next();
 });
 
-// ── Routes ───────────────────────────────
+/* ---------- Routes ---------- */
 
 // List (public)
 router.get("/", async (_req, res) => {
@@ -139,11 +146,13 @@ router.delete("/:id", isAdmin, async (req, res) => {
   }
 });
 
-// Error handler
+/* ---------- Error handler ---------- */
 router.use((err, req, res, _next) => {
   setCors(res, req.headers.origin);
   console.error("Consultancy route error:", err);
-  res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
+  res
+    .status(err.status || 500)
+    .json({ success: false, message: err.message || "Server error" });
 });
 
 module.exports = router;

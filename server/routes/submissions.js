@@ -4,6 +4,7 @@ const fs = require("fs");
 const path = require("path");
 const multer = require("multer");
 const mongoose = require("mongoose");
+const { isAdmin } = require("./utils");   // ✅ use central util
 
 const router = express.Router();
 
@@ -60,14 +61,6 @@ function readAll() { try { return JSON.parse(fs.readFileSync(DATA_FILE, "utf8"))
 function writeAll(arr) { fs.writeFileSync(DATA_FILE, JSON.stringify(arr, null, 2)); }
 function getAutoMode() { try { return !!(JSON.parse(fs.readFileSync(AUTO_FILE, "utf8")) || {}).auto; } catch { return false; } }
 function setAutoMode(auto) { fs.writeFileSync(AUTO_FILE, JSON.stringify({ auto: !!auto }, null, 2)); }
-
-function isAdmin(req, res, next) {
-  const hdr = (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
-  const x   = req.headers["x-owner-key"] || req.headers["X-Owner-Key"];
-  const token = hdr || x || "";
-  if (token && token === req.ADMIN_KEY) return next();
-  return res.status(401).json({ success:false, message:"Unauthorized" });
-}
 
 /* ------------------------- Access model (Mongo) -------------------------- */
 const AccessSchema = new mongoose.Schema({
