@@ -1,3 +1,4 @@
+// server/server.js
 import express from "express";
 import mongoose from "mongoose";
 import cors from "cors";
@@ -18,7 +19,7 @@ const CLIENT_URL =
 // ── Middlewares ──────────────────────────
 app.use(express.json());
 
-// ✅ CORS fix with multiple allowed origins
+// ── CORS Setup ───────────────────────────
 const ALLOWED_ORIGINS = [
   CLIENT_URL,
   "http://localhost:5173",
@@ -26,10 +27,10 @@ const ALLOWED_ORIGINS = [
 ];
 
 const corsOptions = {
-  origin(origin, cb) {
-    if (!origin) return cb(null, true); // allow server-to-server
-    if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
-    return cb(new Error("Not allowed by CORS: " + origin));
+  origin(origin, callback) {
+    if (!origin) return callback(null, true); // allow server-to-server, curl, Postman
+    if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
+    return callback(new Error("CORS not allowed for " + origin));
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
@@ -39,13 +40,13 @@ const corsOptions = {
     "X-Owner-Key",
     "x-owner-key",
   ],
-  optionsSuccessStatus: 204,
+  optionsSuccessStatus: 200,
 };
 
 app.use(cors(corsOptions));
 app.options("*", cors(corsOptions)); // ✅ preflight handler
 
-// Ensure headers always present
+// Always set CORS headers
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (origin && ALLOWED_ORIGINS.includes(origin)) {
@@ -61,7 +62,7 @@ app.use((req, res, next) => {
       "Content-Type, Authorization, X-Owner-Key, x-owner-key"
     );
   }
-  if (req.method === "OPTIONS") return res.sendStatus(204);
+  if (req.method === "OPTIONS") return res.sendStatus(200);
   next();
 });
 
