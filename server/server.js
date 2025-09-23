@@ -106,20 +106,20 @@ function mount(url, file) {
   }
 }
 
-// ✅ IMPORTANT: mount without extra /api prefix
-mount("/articles", "./routes/articles.js");
-mount("/videos", "./routes/videos.js");
-mount("/podcasts", "./routes/podcasts.js");
-mount("/pdfs", "./routes/pdfs.js");
-mount("/submissions", "./routes/submissions.js");
-mount("/qr", "./routes/qr.js");
-mount("/consultancy", "./routes/consultancy.js");
-mount("/news", "./routes/news.js");
-mount("/scholar", "./routes/scholar.js");
-mount("/plagiarism", "./routes/plagiarism.js");
-mount("/footer", "./routes/footer.js");
-mount("/banners", "./routes/banners.js");
-mount("/gridfs", "./routes/gridfs.js");
+// ✅ IMPORTANT: mount WITH /api prefix
+mount("/api/articles", "./routes/articles.js");
+mount("/api/videos", "./routes/videos.js");
+mount("/api/podcasts", "./routes/podcasts.js");
+mount("/api/pdfs", "./routes/pdfs.js");
+mount("/api/submissions", "./routes/submissions.js");
+mount("/api/qr", "./routes/qr.js");
+mount("/api/consultancy", "./routes/consultancy.js");
+mount("/api/news", "./routes/news.js");
+mount("/api/scholar", "./routes/scholar.js");
+mount("/api/plagiarism", "./routes/plagiarism.js");
+mount("/api/footer", "./routes/footer.js");
+mount("/api/banners", "./routes/banners.js");
+mount("/api/gridfs", "./routes/gridfs.js");
 
 // ── Health Check ───────────────────────────
 app.get("/health", (_req, res) => res.json({ ok: true }));
