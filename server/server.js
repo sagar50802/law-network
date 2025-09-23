@@ -16,9 +16,10 @@ app.set("trust proxy", 1);
 
 // ── CORS Setup ─────────────────────────────────────────────
 const allowedOrigins = [
-  "http://localhost:5173",                   // local dev
-  "https://law-network-client.onrender.com", // frontend
-  "https://law-network.onrender.com",        // backend
+  "http://localhost:5173",                    // local dev
+  "https://law-network-client.onrender.com",  // frontend
+  "https://law-network.onrender.com",         // (old backend alias if used)
+  "https://lawnetwork-api.onrender.com",      // ✅ actual backend API domain
 ];
 
 // Primary CORS middleware
