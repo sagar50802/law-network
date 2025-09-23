@@ -1,101 +1,111 @@
 import express from "express";
-import cors from "cors";
 import mongoose from "mongoose";
+import cors from "cors";
+import dotenv from "dotenv";
+import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import fs from "fs";
 
-// ── Setup ─────────────────────────────
+// ── Resolve __dirname in ES module ───────────────
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// ── Load .env ───────────────────────────────────
+dotenv.config();
+
 const app = express();
 const PORT = process.env.PORT || 5000;
-const MONGO_URI = process.env.MONGO_URI || "mongodb://localhost:27017/lawnetwork";
-const ADMIN_KEY = process.env.ADMIN_KEY || "LAWNOWNER2025";
+const MONGO_URI =
+  process.env.MONGO_URI || "mongodb://localhost:27017/lawnetwork";
 
-// ── Middleware ─────────────────────────────
+// ── Middlewares ─────────────────────────────────
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// CORS setup (allow frontend)
+// CORS allow client domain
 app.use(
   cors({
-    origin: "https://law-network-client.onrender.com",
+    origin: [
+      "http://localhost:5173",
+      "https://law-network-client.onrender.com",
+    ],
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Owner-Key", "x-owner-key"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "X-Owner-Key",
+      "x-owner-key",
+    ],
   })
 );
 
-// Ensure uploads folders exist
+// ── Ensure uploads folder exists ────────────────
 const uploadDirs = [
   "uploads",
   "uploads/pdfs",
-  "uploads/banners",
   "uploads/videos",
+  "uploads/banners",
   "uploads/audio",
   "uploads/images",
 ];
 uploadDirs.forEach((dir) => {
-  const fullPath = path.join(__dirname, dir);
-  if (!fs.existsSync(fullPath)) {
-    fs.mkdirSync(fullPath, { recursive: true });
+  const full = path.join(__dirname, dir);
+  if (!fs.existsSync(full)) {
+    fs.mkdirSync(full, { recursive: true });
   }
 });
-
-// Serve static files
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
-// ── Route Imports (match actual file names) ─────────────────────────────
-import articles from "./routes/articles.js";
-import banners from "./routes/banners.js";
-import consultancy from "./routes/consultancy.js";
-import footer from "./routes/footer.js";
-import gridfs from "./routes/gridfs.js";
-import news from "./routes/news.js";
-import pdfs from "./routes/pdfs.js";
-import plagiarism from "./routes/plagiarism.js";
-import playlists from "./routes/playlists.js";
-import podcasts from "./routes/podcasts.js";
-import qr from "./routes/qr.js";
-import scholar from "./routes/scholar.js";
-import submissions from "./routes/submissions.js";
-import users from "./routes/users.js";
-import videos from "./routes/videos.js";
+// ── Import Routes ──────────────────────────────
+import articlesRoutes from "./routes/articles.js";
+import bannersRoutes from "./routes/banners.js";
+import consultancyRoutes from "./routes/consultancy.js";
+import footerRoutes from "./routes/footer.js";
+import newsRoutes from "./routes/news.js";
+import pdfsRoutes from "./routes/pdfs.js";
+import plagiarismRoutes from "./routes/plagiarism.js";
+import playlistsRoutes from "./routes/playlists.js";
+import podcastsRoutes from "./routes/podcasts.js";
+import qrRoutes from "./routes/qr.js";
+import scholarRoutes from "./routes/scholar.js";
+import submissionsRoutes from "./routes/submissions.js";
+import usersRoutes from "./routes/users.js";
+import videosRoutes from "./routes/videos.js";
+import gridfsRoutes from "./routes/gridfs.js";
 
-// ── Use Routes ─────────────────────────────
-app.use("/api/articles", articles);
-app.use("/api/banners", banners);
-app.use("/api/consultancy", consultancy);
-app.use("/api/footer", footer);
-app.use("/api/gridfs", gridfs);
-app.use("/api/news", news);
-app.use("/api/pdfs", pdfs);
-app.use("/api/plagiarism", plagiarism);
-app.use("/api/playlists", playlists);
-app.use("/api/podcasts", podcasts);
-app.use("/api/qr", qr);
-app.use("/api/scholar", scholar);
-app.use("/api/submissions", submissions);
-app.use("/api/users", users);
-app.use("/api/videos", videos);
+// ── Use Routes ─────────────────────────────────
+app.use("/api/articles", articlesRoutes);
+app.use("/api/banners", bannersRoutes);
+app.use("/api/consultancy", consultancyRoutes);
+app.use("/api/footer", footerRoutes);
+app.use("/api/news", newsRoutes);
+app.use("/api/pdfs", pdfsRoutes);
+app.use("/api/plagiarism", plagiarismRoutes);
+app.use("/api/playlists", playlistsRoutes);
+app.use("/api/podcasts", podcastsRoutes);
+app.use("/api/qr", qrRoutes);
+app.use("/api/scholar", scholarRoutes);
+app.use("/api/submissions", submissionsRoutes);
+app.use("/api/users", usersRoutes);
+app.use("/api/videos", videosRoutes);
+app.use("/api/gridfs", gridfsRoutes);
 
-// ── DB Connect ─────────────────────────────
+// ── Health check ───────────────────────────────
+app.get("/api/health", (req, res) => {
+  res.json({ ok: true, time: new Date().toISOString() });
+});
+
+// ── Connect DB & Start ─────────────────────────
 mongoose
   .connect(MONGO_URI)
-  .then(() => console.log("✅ MongoDB connected"))
+  .then(() => {
+    console.log("✅ MongoDB connected");
+    app.listen(PORT, () => {
+      console.log(`🚀 Server running on port ${PORT}`);
+    });
+  })
   .catch((err) => {
-    console.error("✗ MongoDB connection failed:", err.message);
+    console.error("❌ MongoDB connection failed:", err.message);
     process.exit(1);
   });
-
-// ── Health Check ─────────────────────────────
-app.get("/", (req, res) => {
-  res.json({ ok: true, service: "LawNetwork API" });
-});
-
-// ── Start ─────────────────────────────
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-});
