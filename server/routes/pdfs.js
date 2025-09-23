@@ -6,6 +6,7 @@ const mongoose = require("mongoose");
 const { ObjectId } = require("mongodb");
 const fsp = require("fs/promises");
 const path = require("path");
+const { isAdmin } = require("./utils"); // ✅ add admin guard
 
 const router = express.Router();
 const mongoURI = process.env.MONGO_URI;
@@ -99,14 +100,14 @@ const uploadChapter = multerSafe(upload.fields([
 
 // ── Routes ──────────────────────────────────────────────
 
-// List all subjects
+// List all subjects (public)
 router.get("/", async (_req, res) => {
   const db = await readDB();
   res.json({ success: true, subjects: db.subjects });
 });
 
-// Create subject
-router.post("/subjects", express.json(), async (req, res) => {
+// Create subject (admin)
+router.post("/subjects", isAdmin, express.json(), async (req, res) => {
   const name = (req.body?.name || "").trim();
   if (!name) return res.status(400).json({ success: false, message: "Name required" });
 
@@ -121,8 +122,8 @@ router.post("/subjects", express.json(), async (req, res) => {
   res.json({ success: true, subject });
 });
 
-// Add chapter (upload PDF)
-router.post("/subjects/:sid/chapters", uploadChapter, async (req, res) => {
+// Add chapter (upload PDF) (admin)
+router.post("/subjects/:sid/chapters", isAdmin, uploadChapter, async (req, res) => {
   try {
     const db = await readDB();
     const sub = db.subjects.find((s) => s.id === req.params.sid);
@@ -146,8 +147,8 @@ router.post("/subjects/:sid/chapters", uploadChapter, async (req, res) => {
   }
 });
 
-// Delete chapter
-router.delete("/subjects/:sid/chapters/:cid", async (req, res) => {
+// Delete chapter (admin)
+router.delete("/subjects/:sid/chapters/:cid", isAdmin, async (req, res) => {
   const db = await readDB();
   const sub = db.subjects.find((s) => s.id === req.params.sid);
   if (!sub) return res.status(404).json({ success: false, message: "Subject not found" });
@@ -174,8 +175,8 @@ router.delete("/subjects/:sid/chapters/:cid", async (req, res) => {
   res.json({ success: true, removed });
 });
 
-// Delete subject (and its PDFs)
-router.delete("/subjects/:sid", async (req, res) => {
+// Delete subject (admin)
+router.delete("/subjects/:sid", isAdmin, async (req, res) => {
   const db = await readDB();
   const idx = db.subjects.findIndex((s) => s.id === req.params.sid);
   if (idx < 0) return res.status(404).json({ success: false, message: "Subject not found" });
@@ -200,8 +201,8 @@ router.delete("/subjects/:sid", async (req, res) => {
   res.json({ success: true });
 });
 
-// Toggle lock/unlock
-router.patch("/subjects/:sid/chapters/:cid/lock", express.json({ limit: "5mb" }), async (req, res) => {
+// Toggle lock/unlock (admin)
+router.patch("/subjects/:sid/chapters/:cid/lock", isAdmin, express.json({ limit: "5mb" }), async (req, res) => {
   const db = await readDB();
   const sub = db.subjects.find((s) => s.id === req.params.sid);
   const ch = sub?.chapters.find((c) => c.id === req.params.cid);

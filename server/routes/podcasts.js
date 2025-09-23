@@ -1,8 +1,10 @@
+// server/routes/podcasts.js
 const express = require("express");
 const path = require("path");
 const fs = require("fs");
 const fsp = require("fs/promises");
 const multer = require("multer");
+const { isAdmin } = require("./utils");   // ✅ add
 
 const router = express.Router();
 
@@ -48,14 +50,14 @@ const uploadAny = upload.fields([
 
 /* ---------- routes ---------- */
 
-// list playlists
+// list playlists (public)
 router.get("/", async (_req, res) => {
   const db = await readDB();
   res.json({ success: true, playlists: db.playlists });
 });
 
-// create playlist — JSON ONLY at /playlists
-router.post("/playlists", express.json(), async (req, res, next) => {
+// create playlist (admin only)
+router.post("/playlists", isAdmin, express.json(), async (req, res, next) => {
   try {
     const name = (req.body?.name || "").trim();
     if (!name) return res.status(400).json({ success: false, message: "Name required" });
@@ -69,7 +71,6 @@ router.post("/playlists", express.json(), async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-// pick uploaded file regardless of field name
 function pickUploadedFile(req) {
   if (req.file) return req.file;
   return (
@@ -81,7 +82,7 @@ function pickUploadedFile(req) {
   );
 }
 
-// add item helper
+// add item (admin only)
 async function addItem(req, res) {
   const db = await readDB();
 
@@ -99,7 +100,6 @@ async function addItem(req, res) {
   if (!pl) return res.status(404).json({ success: false, message: "Playlist not found" });
 
   const title = (req.body.title || "Untitled").trim();
-  // accept either "author" (admin) or "artist" (public page)
   const authorOrArtist = (req.body.artist || req.body.author || "").trim();
 
   let url = (req.body.url || req.body.audioUrl || "").trim();
@@ -107,7 +107,6 @@ async function addItem(req, res) {
   if (up) url = publicUrl(up.path);
   if (!url) return res.status(400).json({ success: false, message: "Audio file or url required" });
 
-  // default locked=true unless explicitly set false
   const locked =
     typeof req.body.locked === "string"
       ? req.body.locked.toLowerCase() !== "false"
@@ -131,24 +130,14 @@ async function addItem(req, res) {
   res.json({ success: true, item: it, playlist: pl.id || pl._id || pl.name });
 }
 
-/* ---- add item endpoints (cover Admin + public page) ---- */
+/* ---- add item endpoints ---- */
+router.post("/items", isAdmin, uploadAny, addItem);
+router.post("/:playlist/items", isAdmin, uploadAny, addItem);
+router.post("/playlists/:playlist/items", isAdmin, uploadAny, addItem);
+router.post("/", isAdmin, uploadAny, addItem);
 
-// preferred from Admin UI
-router.post("/items", uploadAny, addItem);
-
-// path-carries-playlist
-router.post("/:playlist/items", uploadAny, addItem);
-
-// compatibility with public page: /playlists/:playlist/items
-router.post("/playlists/:playlist/items", uploadAny, addItem);
-
-// universal fallback (multipart with 'playlist' in body)
-router.post("/", uploadAny, addItem);
-
-/* ---------- delete + lock ---------- */
-
-// delete by item id (admin uses this)
-router.delete("/items/:id", async (req, res) => {
+// delete by item id (admin only)
+router.delete("/items/:id", isAdmin, async (req, res) => {
   const db = await readDB();
   let removed = null;
   for (const pl of db.playlists) {
@@ -171,8 +160,8 @@ router.delete("/items/:id", async (req, res) => {
   res.json({ success: true, removed });
 });
 
-// delete compat: /playlists/:playlist/items/:id (used by public page)
-router.delete("/playlists/:playlist/items/:id", async (req, res) => {
+// delete compat
+router.delete("/playlists/:playlist/items/:id", isAdmin, async (req, res) => {
   const db = await readDB();
   const pl = findPlaylist(db, req.params.playlist);
   let removed = null;
@@ -185,7 +174,6 @@ router.delete("/playlists/:playlist/items/:id", async (req, res) => {
     }
   }
 
-  // if not found under that playlist, fall back to global search
   if (!removed) {
     for (const p of db.playlists) {
       const idx = (p.items || []).findIndex(x => (x.id || x._id) === req.params.id);
@@ -210,8 +198,8 @@ router.delete("/playlists/:playlist/items/:id", async (req, res) => {
   res.json({ success: true, removed: !!removed });
 });
 
-// lock/unlock compat: /playlists/:playlist/items/:id/lock
-router.patch("/playlists/:playlist/items/:id/lock", express.json(), async (req, res) => {
+// lock/unlock (admin only)
+router.patch("/playlists/:playlist/items/:id/lock", isAdmin, express.json(), async (req, res) => {
   const db = await readDB();
   const pl = findPlaylist(db, req.params.playlist);
   if (!pl) return res.status(404).json({ success: false, message: "Playlist not found" });
@@ -220,14 +208,13 @@ router.patch("/playlists/:playlist/items/:id/lock", express.json(), async (req, 
   if (!it) return res.status(404).json({ success: false, message: "Item not found" });
 
   const locked = String(req.body.locked).toLowerCase() === "true";
-
   it.locked = locked;
   await writeDB(db);
   res.json({ success: true, item: it });
 });
 
-// delete playlist
-router.delete("/:playlist", async (req, res) => {
+// delete playlist (admin only)
+router.delete("/:playlist", isAdmin, async (req, res) => {
   const db = await readDB();
   const idx = db.playlists.findIndex(p => (p._id || p.id || p.name) === req.params.playlist);
   if (idx < 0) return res.status(404).json({ success: false, message: "Playlist not found" });

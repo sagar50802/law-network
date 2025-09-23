@@ -1,17 +1,17 @@
-// server/routes/videos.js 
+// server/routes/videos.js
 const express = require("express");
 const path = require("path");
 const fs = require("fs");
 const fsp = require("fs/promises");
 const multer = require("multer");
+const { isAdmin } = require("./utils");   // ✅ add admin check
 
 const router = express.Router();
 
 /* ---------- paths & helpers ---------- */
 const ROOT = path.join(__dirname, "..");
 const DATA_DIR = path.join(ROOT, "data");
-// NOTE: match server/server.js which creates "uploads/video" (singular)
-const UP_DIR = path.join(ROOT, "uploads", "video");
+const UP_DIR = path.join(ROOT, "uploads", "videos");   // ✅ plural (match server.js)
 const DB_FILE = path.join(DATA_DIR, "videos.json");
 
 for (const p of [DATA_DIR, UP_DIR]) fs.mkdirSync(p, { recursive: true });
@@ -57,7 +57,7 @@ router.get("/", async (_req, res) => {
 });
 
 // POST create playlist
-router.post("/playlists", express.json(), async (req, res, next) => {
+router.post("/playlists", isAdmin, express.json(), async (req, res, next) => {
   try {
     const name = (req.body?.name || "").trim();
     if (!name) return res.status(400).json({ success: false, message: "Name required" });
@@ -114,13 +114,13 @@ async function addItem(req, res) {
 }
 
 /* --- add item endpoints (all map to addItem) --- */
-router.post("/items", uploadAny, addItem);
-router.post("/:playlist/items", uploadAny, addItem);
-router.post("/playlists/:playlist/items", uploadAny, addItem);
-router.post("/", uploadAny, addItem); // universal fallback
+router.post("/items", isAdmin, uploadAny, addItem);
+router.post("/:playlist/items", isAdmin, uploadAny, addItem);
+router.post("/playlists/:playlist/items", isAdmin, uploadAny, addItem);
+router.post("/", isAdmin, uploadAny, addItem); // universal fallback
 
 // DELETE one video item
-router.delete("/items/:id", async (req, res) => {
+router.delete("/items/:id", isAdmin, async (req, res) => {
   const db = await readDB();
   let removed = null;
   for (const pl of db.playlists) {
@@ -129,9 +129,9 @@ router.delete("/items/:id", async (req, res) => {
       removed = pl.items[idx];
       pl.items.splice(idx, 1);
       try {
-        if (removed?.url?.startsWith("/uploads/video/")) {
+        if (removed?.url?.startsWith("/uploads/videos/")) {   // ✅ plural
           const abs = path.join(ROOT, removed.url.replace(/^\//, ""));
-          if (abs.startsWith(path.join(ROOT, "uploads", "video"))) {
+          if (abs.startsWith(path.join(ROOT, "uploads", "videos"))) {
             await fsp.unlink(abs).catch(() => {});
           }
         }
@@ -153,9 +153,9 @@ async function deletePlaylist(req, res) {
   const pl = db.playlists[idx];
   for (const it of pl.items || []) {
     try {
-      if (it.url?.startsWith("/uploads/video/")) {
+      if (it.url?.startsWith("/uploads/videos/")) {   // ✅ plural
         const abs = path.join(ROOT, it.url.replace(/^\//, ""));
-        if (abs.startsWith(path.join(ROOT, "uploads", "video"))) {
+        if (abs.startsWith(path.join(ROOT, "uploads", "videos"))) {
           await fsp.unlink(abs).catch(() => {});
         }
       }
@@ -166,8 +166,7 @@ async function deletePlaylist(req, res) {
   res.json({ success: true });
 }
 
-// register both routes separately (instead of array)
-router.delete("/:playlist", deletePlaylist);
-router.delete("/playlists/:playlist", deletePlaylist);
+router.delete("/:playlist", isAdmin, deletePlaylist);
+router.delete("/playlists/:playlist", isAdmin, deletePlaylist);
 
 module.exports = router;

@@ -5,6 +5,7 @@ const fs = require("fs");
 const fsp = require("fs/promises");
 const multer = require("multer");
 const mongoose = require("mongoose");
+const { isAdmin } = require("./utils");
 
 const router = express.Router();
 
@@ -36,15 +37,34 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-/* -------------------- Admin guard --------------------- */
-function assertOwner(req, res, next) {
-  const key =
-    req.headers["x-owner-key"] || req.headers["x-owner-key".toLowerCase()];
-  if (!key || key !== req.ADMIN_KEY) {
-    return res.status(401).json({ error: "Unauthorized" });
-  }
-  next();
+/* ----------------- CORS setup ------------------------- */
+const allowedOrigins = [
+  "http://localhost:5173",
+  "https://law-network-client.onrender.com",
+  "https://law-network.onrender.com",
+];
+function setCors(res, originHeader) {
+  const origin = allowedOrigins.includes(originHeader)
+    ? originHeader
+    : allowedOrigins[0];
+  res.header("Access-Control-Allow-Origin", origin);
+  res.header("Vary", "Origin");
+  res.header("Access-Control-Allow-Credentials", "true");
+  res.header(
+    "Access-Control-Allow-Headers",
+    "Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Owner-Key, x-owner-key"
+  );
+  res.header(
+    "Access-Control-Allow-Methods",
+    "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+  );
+  res.header("Cross-Origin-Resource-Policy", "cross-origin");
 }
+router.use((req, res, next) => {
+  setCors(res, req.headers.origin);
+  if (req.method === "OPTIONS") return res.sendStatus(204);
+  next();
+});
 
 /* ------------------------ GET list -------------------- */
 router.get("/", async (_req, res) => {
@@ -59,17 +79,17 @@ router.get("/", async (_req, res) => {
       createdAt: d.createdAt,
       publishedAt: d.publishedAt,
     }));
-    res.json({ news });
+    res.json({ success: true, news });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ success: false, error: e.message });
   }
 });
 
 /* ------------------------ CREATE ---------------------- */
-router.post("/", assertOwner, upload.single("image"), async (req, res) => {
+router.post("/", isAdmin, upload.single("image"), async (req, res) => {
   try {
     const { title, link, order } = req.body;
-    if (!title) return res.status(400).json({ error: "Title required" });
+    if (!title) return res.status(400).json({ success: false, error: "Title required" });
 
     const relImage = req.file ? "/uploads/news/" + req.file.filename : "";
     const doc = await News.create({
@@ -80,7 +100,7 @@ router.post("/", assertOwner, upload.single("image"), async (req, res) => {
     });
 
     res.json({
-      ok: true,
+      success: true,
       item: {
         id: doc._id.toString(),
         title: doc.title,
@@ -88,15 +108,16 @@ router.post("/", assertOwner, upload.single("image"), async (req, res) => {
         image: doc.image,
         order: doc.order,
         createdAt: doc.createdAt,
+        publishedAt: doc.publishedAt,
       },
     });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ success: false, error: e.message });
   }
 });
 
 /* --------------------- UPDATE (PATCH) ----------------- */
-router.patch("/:id", assertOwner, upload.single("image"), async (req, res) => {
+router.patch("/:id", isAdmin, upload.single("image"), async (req, res) => {
   try {
     const { id } = req.params;
     const patch = {};
@@ -106,10 +127,10 @@ router.patch("/:id", assertOwner, upload.single("image"), async (req, res) => {
     if (req.file) patch.image = "/uploads/news/" + req.file.filename;
 
     const updated = await News.findByIdAndUpdate(id, patch, { new: true });
-    if (!updated) return res.status(404).json({ error: "Not found" });
+    if (!updated) return res.status(404).json({ success: false, error: "Not found" });
 
     res.json({
-      ok: true,
+      success: true,
       item: {
         id: updated._id.toString(),
         title: updated.title,
@@ -117,32 +138,42 @@ router.patch("/:id", assertOwner, upload.single("image"), async (req, res) => {
         image: updated.image,
         order: updated.order,
         createdAt: updated.createdAt,
+        publishedAt: updated.publishedAt,
       },
     });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ success: false, error: e.message });
   }
 });
 
 /* ----------------------- DELETE ----------------------- */
-router.delete("/:id", assertOwner, async (req, res) => {
+router.delete("/:id", isAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const doc = await News.findByIdAndDelete(id);
-    if (!doc) return res.status(404).json({ error: "Not found" });
+    if (!doc) return res.status(404).json({ success: false, error: "Not found" });
 
     if (doc.image && doc.image.startsWith("/uploads/news/")) {
       const abs = path.join(__dirname, "..", doc.image.replace(/^\//, ""));
       const safeRoot = path.join(__dirname, "..", "uploads", "news");
       if (abs.startsWith(safeRoot)) {
-        await fs.promises.unlink(abs).catch(() => {});
+        await fsp.unlink(abs).catch(() => {});
       }
     }
 
-    res.json({ ok: true, removed: doc });
+    res.json({ success: true, removed: doc });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ success: false, error: e.message });
   }
+});
+
+/* ------------------- Error handler -------------------- */
+router.use((err, req, res, _next) => {
+  setCors(res, req.headers.origin);
+  console.error("News route error:", err);
+  res
+    .status(err.status || 500)
+    .json({ success: false, message: err.message || "Server error" });
 });
 
 module.exports = router;

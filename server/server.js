@@ -1,7 +1,6 @@
 // server.js
 require("dotenv").config();
 const express = require("express");
-const cors = require("cors");
 const mongoose = require("mongoose");
 const path = require("path");
 const fs = require("fs");
@@ -20,30 +19,11 @@ const allowedOrigins = [
   "https://law-network.onrender.com",
 ];
 
-app.use(
-  cors({
-    origin(origin, cb) {
-      if (!origin || allowedOrigins.includes(origin)) cb(null, origin || true);
-      else cb(null, false);
-    },
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: [
-      "Content-Type",
-      "Authorization",
-      "X-Owner-Key",
-      "x-owner-key",
-      "Origin",
-      "Accept",
-    ],
-  })
-);
-
-// Always attach headers
 app.use((req, res, next) => {
   const origin = allowedOrigins.includes(req.headers.origin)
     ? req.headers.origin
-    : allowedOrigins[0];
+    : allowedOrigins[0]; // fallback to localhost
+
   res.header("Access-Control-Allow-Origin", origin);
   res.header("Vary", "Origin");
   res.header("Access-Control-Allow-Credentials", "true");
@@ -56,6 +36,7 @@ app.use((req, res, next) => {
     "GET, POST, PUT, PATCH, DELETE, OPTIONS"
   );
   res.header("Cross-Origin-Resource-Policy", "cross-origin");
+
   if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
 });
@@ -76,10 +57,18 @@ app.use(express.urlencoded({ extended: true }));
 app.use(
   "/uploads",
   (req, res, next) => {
-    res.setHeader("Access-Control-Allow-Origin", "*");
+    const origin = allowedOrigins.includes(req.headers.origin)
+      ? req.headers.origin
+      : allowedOrigins[0];
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
     res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept");
+    res.setHeader(
+      "Access-Control-Allow-Headers",
+      "Origin, X-Requested-With, Content-Type, Accept"
+    );
     res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+    if (req.method === "OPTIONS") return res.sendStatus(204);
     next();
   },
   express.static(path.join(__dirname, "uploads"))
@@ -144,6 +133,7 @@ app.use((err, req, res, _next) => {
   res.header("Access-Control-Allow-Origin", origin);
   res.header("Vary", "Origin");
   res.header("Access-Control-Allow-Credentials", "true");
+
   console.error("API error:", err);
   res.status(err.status || 500).json({ error: err.message || "Server error" });
 });
