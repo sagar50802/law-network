@@ -4,41 +4,9 @@ const fs = require("fs");
 const path = require("path");
 const multer = require("multer");
 const mongoose = require("mongoose");
-const { isAdmin } = require("./utils");   // ✅ use central util
+const { isAdmin } = require("./utils");   // ✅ central util
 
 const router = express.Router();
-
-/* ---------------------------- CORS Setup ---------------------------- */
-const allowedOrigins = [
-  "http://localhost:5173",
-  "https://law-network-client.onrender.com",
-  "https://law-network.onrender.com",
-];
-
-function setCors(res, originHeader) {
-  const origin = allowedOrigins.includes(originHeader)
-    ? originHeader
-    : allowedOrigins[0]; // fallback
-  res.header("Access-Control-Allow-Origin", origin);
-  res.header("Vary", "Origin");
-  res.header("Access-Control-Allow-Credentials", "true");
-  res.header(
-    "Access-Control-Allow-Headers",
-    "Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Owner-Key, x-owner-key"
-  );
-  res.header(
-    "Access-Control-Allow-Methods",
-    "GET, POST, PUT, PATCH, DELETE, OPTIONS"
-  );
-  res.header("Cross-Origin-Resource-Policy", "cross-origin");
-}
-
-// Apply CORS to every request in this router
-router.use((req, res, next) => {
-  setCors(res, req.headers.origin);
-  if (req.method === "OPTIONS") return res.sendStatus(204);
-  next();
-});
 
 /* ---------------------- Folders & Data Setup ------------------------- */
 const DATA_DIR  = path.join(__dirname, "..", "data");
@@ -332,7 +300,6 @@ router.get("/my", (req, res) => {
 
 /* ----------------------- Route-level error handler ----------------------- */
 router.use((err, req, res, _next) => {
-  setCors(res, req.headers.origin);
   console.error("Submissions route error:", err);
   res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
 });
