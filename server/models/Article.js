@@ -3,10 +3,10 @@ import mongoose from "mongoose";
 
 const articleSchema = new mongoose.Schema(
   {
-    title:   { type: String, required: true },
-    content: { type: String, required: true },
-    link:    { type: String, default: "" },
-    image:   { type: String, default: "" }, // /uploads/articles/filename.jpg
+    title:     { type: String, required: true },
+    content:   { type: String, required: true },
+    link:      { type: String, default: "" },
+    image:     { type: String, default: "" }, // /uploads/articles/filename.jpg
     allowHtml: { type: Boolean, default: false },
     isFree:    { type: Boolean, default: false },
   },
