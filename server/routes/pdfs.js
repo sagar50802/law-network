@@ -1,23 +1,26 @@
 // server/routes/pdfs.js
-const express = require("express");
-const multer = require("multer");
-const { GridFsStorage } = require("multer-gridfs-storage");
-const mongoose = require("mongoose");
-const { ObjectId } = require("mongodb");
-const fsp = require("fs/promises");
-const path = require("path");
-const { isAdmin } = require("./utils");
+import express from "express";
+import multer from "multer";
+import { GridFsStorage } from "multer-gridfs-storage";
+import mongoose from "mongoose";
+import { ObjectId } from "mongodb";
+import fsp from "fs/promises";
+import path from "path";
+import dotenv from "dotenv";
+import { isAdmin } from "./utils.js";
+
+dotenv.config();
 
 const router = express.Router();
 
 // ── Config ───────────────────────────────
-const mongoURI = process.env.MONGO_URI;
+const mongoURI = process.env.MONGO_URI || "";
 if (!mongoURI) {
   console.warn("⚠️ No MONGO_URI set. GridFS uploads may not work.");
 }
 
 // ── JSON metadata (pdfs.json) ────────────
-const ROOT = path.join(__dirname, "..");
+const ROOT = path.join(process.cwd(), "server");
 const DATA_DIR = path.join(ROOT, "data");
 const DB_FILE = path.join(DATA_DIR, "pdfs.json");
 fsp.mkdir(DATA_DIR, { recursive: true }).catch(() => {});
@@ -265,4 +268,4 @@ router.use((err, _req, res, _next) => {
     .json({ success: false, message: err.message || "Server error" });
 });
 
-module.exports = router;
+export default router;

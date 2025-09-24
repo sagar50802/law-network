@@ -1,13 +1,18 @@
 // server/routes/news.js
-const express = require("express");
-const path = require("path");
-const fs = require("fs");
-const fsp = require("fs/promises");
-const multer = require("multer");
-const mongoose = require("mongoose");
-const { isAdmin } = require("./utils");
+import express from "express";
+import path from "path";
+import fs from "fs";
+import fsp from "fs/promises";
+import multer from "multer";
+import mongoose from "mongoose";
+import { fileURLToPath } from "url";
+import { isAdmin } from "./utils.js";
 
 const router = express.Router();
+
+// Resolve __dirname in ESM
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 /* ----------------------- Model ----------------------- */
 const News =
@@ -155,4 +160,4 @@ router.use((err, _req, res, _next) => {
   });
 });
 
-module.exports = router;
+export default router;
