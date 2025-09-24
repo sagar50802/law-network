@@ -29,7 +29,7 @@ const ALLOWED_ORIGINS = [
 app.use(
   cors({
     origin: function (origin, callback) {
-      if (!origin) return callback(null, true); // allow server-to-server
+      if (!origin) return callback(null, true); // allow server-to-server / curl
       if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
       return callback(new Error("CORS not allowed for " + origin));
     },
