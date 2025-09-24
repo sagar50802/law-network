@@ -1,4 +1,3 @@
-// server/server.js
 import "dotenv/config";
 import express from "express";
 import mongoose from "mongoose";
@@ -71,13 +70,7 @@ app.use((req, _res, next) => {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 [
   "uploads",
-  "uploads/pdfs",
-  "uploads/videos",
-  "uploads/audio",
-  "uploads/banners",
-  "uploads/articles",
-  "uploads/qr",
-  "uploads/news",
+  "uploads/articles", // only keep articles for now
 ].forEach((dir) => {
   const full = path.join(__dirname, dir);
   if (!fs.existsSync(full)) fs.mkdirSync(full, { recursive: true });
@@ -86,36 +79,42 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // -- static --
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
-// -- routes --
+// -- routes (only Articles enabled for now) --
 import articleRoutes from "./routes/articles.js";
-import bannerRoutes from "./routes/banners.js";
-import pdfRoutes from "./routes/pdfs.js";
-import videoRoutes from "./routes/videos.js";
-import podcastRoutes from "./routes/podcasts.js";
-import consultancyRoutes from "./routes/consultancy.js";
-import footerRoutes from "./routes/footer.js";
-import newsRoutes from "./routes/news.js";
-import qrRoutes from "./routes/qr.js";
-import submissionRoutes from "./routes/submissions.js";
-
 app.use("/api/articles", articleRoutes);
-app.use("/api/banners", bannerRoutes);
-app.use("/api/pdfs", pdfRoutes);
-app.use("/api/videos", videoRoutes);
-app.use("/api/podcasts", podcastRoutes);
-app.use("/api/consultancy", consultancyRoutes);
-app.use("/api/footer", footerRoutes);
-app.use("/api/news", newsRoutes);
-app.use("/api/qr", qrRoutes);
-app.use("/api/submissions", submissionRoutes);
+
+// ❌ Temporarily disabled until we migrate them to ESM
+// import bannerRoutes from "./routes/banners.js";
+// import pdfRoutes from "./routes/pdfs.js";
+// import videoRoutes from "./routes/videos.js";
+// import podcastRoutes from "./routes/podcasts.js";
+// import consultancyRoutes from "./routes/consultancy.js";
+// import footerRoutes from "./routes/footer.js";
+// import newsRoutes from "./routes/news.js";
+// import qrRoutes from "./routes/qr.js";
+// import submissionRoutes from "./routes/submissions.js";
+
+// app.use("/api/banners", bannerRoutes);
+// app.use("/api/pdfs", pdfRoutes);
+// app.use("/api/videos", videoRoutes);
+// app.use("/api/podcasts", podcastRoutes);
+// app.use("/api/consultancy", consultancyRoutes);
+// app.use("/api/footer", footerRoutes);
+// app.use("/api/news", newsRoutes);
+// app.use("/api/qr", qrRoutes);
+// app.use("/api/submissions", submissionRoutes);
 
 // -- health / debug --
-app.get("/api/ping", (_req, res) => res.json({ ok: true, service: "LawNetwork API", ts: Date.now() }));
+app.get("/api/ping", (_req, res) =>
+  res.json({ ok: true, service: "LawNetwork API", ts: Date.now() })
+);
 app.get("/", (_req, res) => res.json({ ok: true, root: true }));
 
 // -- 404 (keeps CORS headers) --
 app.use((req, res) => {
-  res.status(404).json({ success: false, message: `Not Found: ${req.method} ${req.originalUrl}` });
+  res
+    .status(404)
+    .json({ success: false, message: `Not Found: ${req.method} ${req.originalUrl}` });
 });
 
 // -- error handler (keeps CORS headers) --
