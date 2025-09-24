@@ -1,11 +1,18 @@
-const express = require("express");
-const path = require("path");
-const fsp = require("fs/promises");
-const multer = require("multer");
-const { isAdmin, ensureDir } = require("./utils");
-const Article = require("../models/Article");
+// server/routes/articles.js
+import express from "express";
+import path from "path";
+import fs from "fs";
+import fsp from "fs/promises";
+import multer from "multer";
+import { fileURLToPath } from "url";
+import { isAdmin, ensureDir } from "./utils.js";
+import Article from "../models/Article.js";
 
 const router = express.Router();
+
+// ── Path fix for __dirname ─────────────────────────────
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 /* ---------- Upload setup ---------- */
 const UP_DIR = path.join(__dirname, "..", "uploads", "articles");
@@ -37,7 +44,9 @@ router.post("/", isAdmin, upload.single("image"), async (req, res) => {
   try {
     const { title, content, link, allowHtml, isFree } = req.body;
     if (!title || !content) {
-      return res.status(400).json({ success: false, error: "Title & content required" });
+      return res
+        .status(400)
+        .json({ success: false, error: "Title & content required" });
     }
 
     const rel = req.file ? "/uploads/articles/" + req.file.filename : "";
@@ -66,7 +75,8 @@ router.patch("/:id", isAdmin, upload.single("image"), async (req, res) => {
     }
 
     const updated = await Article.findByIdAndUpdate(id, patch, { new: true });
-    if (!updated) return res.status(404).json({ success: false, error: "Not found" });
+    if (!updated)
+      return res.status(404).json({ success: false, error: "Not found" });
 
     res.json({ success: true, item: updated });
   } catch (e) {
@@ -101,4 +111,4 @@ router.use((err, _req, res, _next) => {
     .json({ success: false, message: err.message || "Server error" });
 });
 
-module.exports = router;
+export default router;
