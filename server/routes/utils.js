@@ -1,6 +1,5 @@
-// server/routes/utils.js
-const fs = require("fs");
-const path = require("path");
+import fs from "fs";
+import path from "path";
 
 // ensure directory exists
 function ensureDir(dir) {
@@ -33,4 +32,4 @@ function isAdmin(req, res, next) {
   return res.status(401).json({ success: false, message: "Unauthorized" });
 }
 
-module.exports = { ensureDir, readJSON, writeJSON, isAdmin };
+export { ensureDir, readJSON, writeJSON, isAdmin };
