@@ -3,13 +3,19 @@ import express from "express";
 import path from "path";
 import fsp from "fs/promises";
 import multer from "multer";
+import { fileURLToPath } from "url";
 import { isAdmin, ensureDir } from "./utils.js";
 import Article from "../models/Article.js";
 
 const router = express.Router();
 
+// ESM __dirname
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 /* ---------- Upload setup ---------- */
-const UP_DIR = path.join(process.cwd(), "server", "uploads", "articles");
+// Align with server.js static: /uploads -> path.join(__dirname, "..", "uploads")
+const UP_DIR = path.join(__dirname, "..", "uploads", "articles");
 ensureDir(UP_DIR);
 
 const storage = multer.diskStorage({
@@ -40,7 +46,6 @@ router.post("/", isAdmin, upload.single("image"), async (req, res) => {
     if (!title || !content) {
       return res.status(400).json({ success: false, error: "Title & content required" });
     }
-
     const rel = req.file ? "/uploads/articles/" + req.file.filename : "";
     const doc = await Article.create({
       title,
@@ -50,7 +55,6 @@ router.post("/", isAdmin, upload.single("image"), async (req, res) => {
       isFree: isFree === "true",
       image: rel,
     });
-
     res.json({ success: true, item: doc });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
@@ -65,10 +69,8 @@ router.patch("/:id", isAdmin, upload.single("image"), async (req, res) => {
     if (req.file) {
       patch.image = "/uploads/articles/" + req.file.filename;
     }
-
     const updated = await Article.findByIdAndUpdate(id, patch, { new: true });
     if (!updated) return res.status(404).json({ success: false, error: "Not found" });
-
     res.json({ success: true, item: updated });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
@@ -83,11 +85,10 @@ router.delete("/:id", isAdmin, async (req, res) => {
     if (!doc) return res.status(404).json({ success: false, error: "Not found" });
 
     if (doc.image?.startsWith("/uploads/articles/")) {
-      const abs = path.join(process.cwd(), "server", doc.image.replace(/^\//, ""));
-      const safeRoot = path.join(process.cwd(), "server", "uploads", "articles");
+      const abs = path.join(__dirname, "..", doc.image.replace(/^\//, ""));
+      const safeRoot = path.join(__dirname, "..", "uploads", "articles");
       if (abs.startsWith(safeRoot)) await fsp.unlink(abs).catch(() => {});
     }
-
     res.json({ success: true, removed: doc });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
@@ -97,9 +98,7 @@ router.delete("/:id", isAdmin, async (req, res) => {
 /* ---------- Error handler ---------- */
 router.use((err, _req, res, _next) => {
   console.error("Articles route error:", err);
-  res
-    .status(err.status || 500)
-    .json({ success: false, message: err.message || "Server error" });
+  res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
 });
 
 export default router;
