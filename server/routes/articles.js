@@ -1,141 +1,99 @@
-// server/routes/articles.js
 const express = require("express");
-const fs = require("fs");
-const fsp = require("fs/promises");
 const path = require("path");
+const fsp = require("fs/promises");
 const multer = require("multer");
-const sanitizeHtml = require("sanitize-html");
-const { ensureDir, readJSON, writeJSON, isAdmin } = require("./utils");
+const { isAdmin, ensureDir } = require("./utils");
+const Article = require("../models/article");   // ✅ use central model
 
 const router = express.Router();
 
-/* ---------- paths & setup ---------- */
-const DATA_FILE = path.join(__dirname, "..", "data", "articles.json");
+/* ---------- Upload setup ---------- */
 const UP_DIR = path.join(__dirname, "..", "uploads", "articles");
-
 ensureDir(UP_DIR);
-if (!fs.existsSync(DATA_FILE)) writeJSON(DATA_FILE, []);
 
-const uid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
-
-/* ---------- multer ---------- */
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, UP_DIR),
   filename: (_req, file, cb) => {
-    const ext = path.extname(file.originalname || "").toLowerCase() || ".jpg";
-    cb(null, `${Date.now()}-${uid()}${ext}`);
+    const safe = Date.now() + "-" + file.originalname.replace(/\s+/g, "_");
+    cb(null, safe);
   },
 });
 const upload = multer({ storage });
 
-/* ---------- list (public) ---------- */
-router.get("/", (_req, res) => {
-  const items = readJSON(DATA_FILE, []);
-  res.json({
-    success: true,
-    articles: items.sort((a, b) => b.createdAt - a.createdAt),
-  });
-});
+/* ---------- Routes ---------- */
 
-/* ---------- create (admin) ---------- */
-router.post("/", isAdmin, upload.single("image"), (req, res) => {
-  const items = readJSON(DATA_FILE, []);
-
-  const title = (req.body.title || "").trim();
-  const raw = String(req.body.content || "");
-  const allowHtml = String(req.body.allowHtml || "false") === "true";
-
-  const content = allowHtml
-    ? sanitizeHtml(raw, {
-        allowedTags: sanitizeHtml.defaults.allowedTags.concat([
-          "img",
-          "h1",
-          "h2",
-          "u",
-          "iframe",
-        ]),
-        allowedAttributes: {
-          ...sanitizeHtml.defaults.allowedAttributes,
-          iframe: [
-            "src",
-            "width",
-            "height",
-            "allow",
-            "allowfullscreen",
-            "frameborder",
-          ],
-        },
-      })
-    : sanitizeHtml(raw, { allowedTags: [], allowedAttributes: {} });
-
-  const image = req.file ? `/uploads/articles/${req.file.filename}` : "";
-
-  // default locked=true unless explicitly false
-  const locked =
-    typeof req.body.locked === "string"
-      ? req.body.locked.toLowerCase() !== "false"
-      : req.body.locked === undefined
-      ? true
-      : !!req.body.locked;
-
-  const item = {
-    id: uid(),
-    title,
-    content,
-    allowHtml,
-    image,
-    locked,
-    createdAt: Date.now(),
-  };
-
-  items.unshift(item);
-  writeJSON(DATA_FILE, items);
-
-  res.json({ success: true, article: item });
-});
-
-/* ---------- delete (admin) ---------- */
-router.delete("/:id", isAdmin, async (req, res) => {
-  const items = readJSON(DATA_FILE, []);
-  const idx = items.findIndex(
-    (a) => a.id === req.params.id || a._id === req.params.id
-  );
-  if (idx === -1) {
-    return res.status(404).json({ success: false, message: "Not found" });
+// List (public)
+router.get("/", async (_req, res) => {
+  try {
+    const items = await Article.find({}).sort({ createdAt: -1 });
+    res.json({ success: true, items });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
   }
+});
 
-  const [removed] = items.splice(idx, 1);
-  writeJSON(DATA_FILE, items);
-
-  if (removed?.image?.startsWith("/uploads/articles/")) {
-    const abs = path.join(__dirname, "..", removed.image.replace(/^\//, ""));
-    const safeRoot = path.join(__dirname, "..", "uploads", "articles");
-    if (abs.startsWith(safeRoot)) {
-      await fsp.unlink(abs).catch(() => {});
+// Create (admin)
+router.post("/", isAdmin, upload.single("image"), async (req, res) => {
+  try {
+    const { title, content, link, allowHtml, isFree } = req.body;
+    if (!title || !content) {
+      return res.status(400).json({ success: false, error: "Title & content required" });
     }
-  }
 
-  res.json({ success: true, removed });
+    const rel = req.file ? "/uploads/articles/" + req.file.filename : "";
+    const doc = await Article.create({
+      title,
+      content,
+      link: link || "",
+      allowHtml: allowHtml === "true",
+      isFree: isFree === "true",
+      image: rel,
+    });
+
+    res.json({ success: true, item: doc });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
 });
 
-/* ---------- lock/unlock (admin) ---------- */
-router.patch("/:id/lock", isAdmin, express.json(), (req, res) => {
-  const items = readJSON(DATA_FILE, []);
-  const it = items.find((a) => a.id === req.params.id);
-  if (!it) {
-    return res.status(404).json({ success: false, message: "Not found" });
+// Update (admin)
+router.patch("/:id", isAdmin, upload.single("image"), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const patch = { ...req.body };
+    if (req.file) {
+      patch.image = "/uploads/articles/" + req.file.filename;
+    }
+
+    const updated = await Article.findByIdAndUpdate(id, patch, { new: true });
+    if (!updated) return res.status(404).json({ success: false, error: "Not found" });
+
+    res.json({ success: true, item: updated });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
   }
-
-  it.locked =
-    typeof req.body.locked === "string"
-      ? req.body.locked.toLowerCase() === "true"
-      : !!req.body.locked;
-
-  writeJSON(DATA_FILE, items);
-  res.json({ success: true, article: it });
 });
 
-/* ---------- error handler ---------- */
+// Delete (admin)
+router.delete("/:id", isAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const doc = await Article.findByIdAndDelete(id);
+    if (!doc) return res.status(404).json({ success: false, error: "Not found" });
+
+    if (doc.image?.startsWith("/uploads/articles/")) {
+      const abs = path.join(__dirname, "..", doc.image.replace(/^\//, ""));
+      const safeRoot = path.join(__dirname, "..", "uploads", "articles");
+      if (abs.startsWith(safeRoot)) await fsp.unlink(abs).catch(() => {});
+    }
+
+    res.json({ success: true, removed: doc });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+/* ---------- Error handler ---------- */
 router.use((err, _req, res, _next) => {
   console.error("Articles route error:", err);
   res
