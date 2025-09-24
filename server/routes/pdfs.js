@@ -6,14 +6,20 @@ const mongoose = require("mongoose");
 const { ObjectId } = require("mongodb");
 const fsp = require("fs/promises");
 const path = require("path");
-const { isAdmin } = require("./utils"); // ✅ add admin guard
+const { isAdmin } = require("./utils");
 
 const router = express.Router();
+
+// ── Config ───────────────────────────────
 const mongoURI = process.env.MONGO_URI;
+if (!mongoURI) {
+  console.warn("⚠️ No MONGO_URI set. GridFS uploads may not work.");
+}
 
 // ── Allowed origins (match server.js) ─────────────────────
 const allowedOrigins = [
   "http://localhost:5173",
+  "http://localhost:3000",
   "https://law-network-client.onrender.com",
   "https://law-network.onrender.com",
 ];
@@ -36,10 +42,6 @@ router.use((req, res, next) => {
   setCors(res, req.headers.origin);
   if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
-});
-router.options("*", (req, res) => {
-  setCors(res, req.headers.origin);
-  return res.sendStatus(204);
 });
 
 // ── JSON metadata (pdfs.json) ─────────────────────────────
@@ -64,23 +66,28 @@ async function writeDB(db) {
 const uid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
 
 // ── GridFS storage ───────────────────────────────────────
-const storage = new GridFsStorage({
-  url: mongoURI,
-  file: (_req, file) => {
-    if (!file.mimetype || !file.mimetype.includes("pdf")) {
-      return Promise.reject(new Error("Only PDF files allowed"));
-    }
-    return {
-      _id: new ObjectId(),
-      filename: `${Date.now()}-${(file.originalname || "file.pdf").replace(/\s+/g, "_")}`,
-      bucketName: "pdfs",
-    };
-  },
-});
-storage.on("connection", () => console.log("✓ GridFS storage ready (pdfs)"));
-storage.on("connectionFailed", (e) => console.error("✗ GridFS storage error:", e?.message));
+let storage;
+if (mongoURI) {
+  storage = new GridFsStorage({
+    url: mongoURI,
+    file: (_req, file) => {
+      if (!file.mimetype || !file.mimetype.includes("pdf")) {
+        return Promise.reject(new Error("Only PDF files allowed"));
+      }
+      return {
+        _id: new ObjectId(),
+        filename: `${Date.now()}-${(file.originalname || "file.pdf").replace(/\s+/g, "_")}`,
+        bucketName: "pdfs",
+      };
+    },
+  });
 
-const upload = multer({ storage });
+  storage.on("connection", () => console.log("✓ GridFS storage ready (pdfs)"));
+  storage.on("connectionFailed", (e) => console.error("✗ GridFS storage error:", e?.message));
+}
+
+const upload = storage ? multer({ storage }) : multer({ dest: "uploads/pdfs" });
+
 function multerSafe(mw) {
   return (req, res, next) => {
     mw(req, res, (err) => {
@@ -93,10 +100,10 @@ function multerSafe(mw) {
     });
   };
 }
-const uploadChapter = multerSafe(upload.fields([
-  { name: "pdf", maxCount: 1 },
-  { name: "file", maxCount: 1 },
-]));
+
+const uploadChapter = multerSafe(
+  upload.fields([{ name: "pdf", maxCount: 1 }, { name: "file", maxCount: 1 }])
+);
 
 // ── Routes ──────────────────────────────────────────────
 
@@ -135,7 +142,7 @@ router.post("/subjects/:sid/chapters", isAdmin, uploadChapter, async (req, res) 
     const title = String(req.body.title || "Untitled").slice(0, 200);
     const locked = req.body.locked === "true";
 
-    const url = `/api/gridfs/pdf/${file.filename}`;
+    const url = mongoURI ? `/api/gridfs/pdf/${file.filename}` : `/uploads/pdfs/${file.filename}`;
     const ch = { id: uid(), title, url, locked, createdAt: new Date().toISOString() };
 
     sub.chapters.push(ch);
@@ -158,7 +165,7 @@ router.delete("/subjects/:sid/chapters/:cid", isAdmin, async (req, res) => {
 
   const removed = sub.chapters.splice(idx, 1)[0];
 
-  if (removed?.url?.includes("/api/gridfs/pdf/")) {
+  if (mongoURI && removed?.url?.includes("/api/gridfs/pdf/")) {
     const filename = removed.url.split("/").pop();
     try {
       if (mongoose.connection.readyState === 1) {
@@ -183,7 +190,7 @@ router.delete("/subjects/:sid", isAdmin, async (req, res) => {
 
   const sub = db.subjects[idx];
   try {
-    if (mongoose.connection.readyState === 1) {
+    if (mongoURI && mongoose.connection.readyState === 1) {
       const bucket = new mongoose.mongo.GridFSBucket(mongoose.connection.db, { bucketName: "pdfs" });
       for (const ch of sub.chapters || []) {
         if (ch.url?.includes("/api/gridfs/pdf/")) {
