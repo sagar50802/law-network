@@ -18,52 +18,32 @@ const CLIENT_URL =
 // ── Middlewares ──────────────────────────
 app.use(express.json());
 
-// ✅ CORS Setup
+// ✅ Global CORS Setup (single place)
 const ALLOWED_ORIGINS = [
-  CLIENT_URL, // https://law-network-client.onrender.com
-  "https://law-network.onrender.com", // ✅ added
+  CLIENT_URL,
+  "https://law-network.onrender.com",
   "http://localhost:5173",
   "http://localhost:3000",
 ];
 
-const corsOptions = {
-  origin: function (origin, callback) {
-    if (!origin) return callback(null, true); // allow server-to-server
-    if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
-    return callback(new Error("CORS not allowed for " + origin));
-  },
-  credentials: true,
-  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: [
-    "Content-Type",
-    "Authorization",
-    "X-Owner-Key",
-    "x-owner-key",
-  ],
-  optionsSuccessStatus: 200,
-};
-
-app.use(cors(corsOptions));
-app.options("*", cors(corsOptions)); // ✅ handle preflight
-
-// Always attach headers (extra safety)
-app.use((req, res, next) => {
-  const origin = req.headers.origin;
-  if (origin && ALLOWED_ORIGINS.includes(origin)) {
-    res.header("Access-Control-Allow-Origin", origin);
-    res.header("Access-Control-Allow-Credentials", "true");
-    res.header(
-      "Access-Control-Allow-Methods",
-      "GET,POST,PUT,PATCH,DELETE,OPTIONS"
-    );
-    res.header(
-      "Access-Control-Allow-Headers",
-      "Content-Type, Authorization, X-Owner-Key, x-owner-key"
-    );
-  }
-  if (req.method === "OPTIONS") return res.sendStatus(200);
-  next();
-});
+app.use(
+  cors({
+    origin: function (origin, callback) {
+      if (!origin) return callback(null, true); // allow server-to-server
+      if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
+      return callback(new Error("CORS not allowed for " + origin));
+    },
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "X-Owner-Key",
+      "x-owner-key",
+    ],
+  })
+);
+app.options("*", cors()); // handle preflight
 
 // ── Ensure Uploads Folders ───────────────
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -71,7 +51,7 @@ const uploadDirs = [
   "uploads",
   "uploads/pdfs",
   "uploads/videos",
-  "uploads/audio", // ✅ FIXED: singular (match podcasts.js)
+  "uploads/audio", // podcasts
   "uploads/banners",
   "uploads/articles",
   "uploads/qr",
