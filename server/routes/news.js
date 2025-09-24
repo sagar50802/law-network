@@ -33,36 +33,12 @@ fs.mkdirSync(UP_DIR, { recursive: true });
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, UP_DIR),
   filename: (_req, file, cb) => {
-    const safe = Date.now() + "-" + (file.originalname || "file").replace(/\s+/g, "_");
+    const safe =
+      Date.now() + "-" + (file.originalname || "file").replace(/\s+/g, "_");
     cb(null, safe);
   },
 });
 const upload = multer({ storage });
-
-/* ----------------- CORS setup ------------------------- */
-const allowedOrigins = [
-  "http://localhost:5173",
-  "http://localhost:3000",
-  "https://law-network-client.onrender.com",
-  "https://law-network.onrender.com",
-];
-function setCors(res, originHeader) {
-  const origin = allowedOrigins.includes(originHeader) ? originHeader : allowedOrigins[0];
-  res.header("Access-Control-Allow-Origin", origin);
-  res.header("Vary", "Origin");
-  res.header("Access-Control-Allow-Credentials", "true");
-  res.header(
-    "Access-Control-Allow-Headers",
-    "Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Owner-Key, x-owner-key"
-  );
-  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
-  res.header("Cross-Origin-Resource-Policy", "cross-origin");
-}
-router.use((req, res, next) => {
-  setCors(res, req.headers.origin);
-  if (req.method === "OPTIONS") return res.sendStatus(204);
-  next();
-});
 
 /* ------------------------ GET list -------------------- */
 router.get("/", async (_req, res) => {
@@ -88,7 +64,8 @@ router.get("/", async (_req, res) => {
 router.post("/", isAdmin, upload.single("image"), async (req, res) => {
   try {
     const { title, link, order } = req.body;
-    if (!title) return res.status(400).json({ success: false, error: "Title required" });
+    if (!title)
+      return res.status(400).json({ success: false, error: "Title required" });
 
     const relImage = req.file ? "/uploads/news/" + req.file.filename : "";
     const doc = await News.create({
@@ -127,7 +104,8 @@ router.patch("/:id", isAdmin, upload.single("image"), async (req, res) => {
     if (req.file) patch.image = "/uploads/news/" + req.file.filename;
 
     const updated = await News.findByIdAndUpdate(id, patch, { new: true });
-    if (!updated) return res.status(404).json({ success: false, error: "Not found" });
+    if (!updated)
+      return res.status(404).json({ success: false, error: "Not found" });
 
     res.json({
       success: true,
@@ -152,7 +130,8 @@ router.delete("/:id", isAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const doc = await News.findByIdAndDelete(id);
-    if (!doc) return res.status(404).json({ success: false, error: "Not found" });
+    if (!doc)
+      return res.status(404).json({ success: false, error: "Not found" });
 
     if (doc.image && doc.image.startsWith("/uploads/news/")) {
       const abs = path.join(__dirname, "..", doc.image.replace(/^\//, ""));
@@ -168,8 +147,7 @@ router.delete("/:id", isAdmin, async (req, res) => {
 });
 
 /* ------------------- Error handler -------------------- */
-router.use((err, req, res, _next) => {
-  setCors(res, req.headers.origin);
+router.use((err, _req, res, _next) => {
   console.error("News route error:", err);
   res.status(err.status || 500).json({
     success: false,

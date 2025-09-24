@@ -71,36 +71,6 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage, limits: { fileSize: 20 * 1024 * 1024 } });
 
-/* ---------- CORS setup ---------- */
-const allowedOrigins = [
-  "http://localhost:5173",
-  "http://localhost:3000",
-  "https://law-network-client.onrender.com",
-  "https://law-network.onrender.com",
-];
-function setCors(res, originHeader) {
-  const origin = allowedOrigins.includes(originHeader)
-    ? originHeader
-    : allowedOrigins[0];
-  res.header("Access-Control-Allow-Origin", origin);
-  res.header("Vary", "Origin");
-  res.header("Access-Control-Allow-Credentials", "true");
-  res.header(
-    "Access-Control-Allow-Headers",
-    "Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Owner-Key, x-owner-key"
-  );
-  res.header(
-    "Access-Control-Allow-Methods",
-    "GET, POST, PUT, PATCH, DELETE, OPTIONS"
-  );
-  res.header("Cross-Origin-Resource-Policy", "cross-origin");
-}
-router.use((req, res, next) => {
-  setCors(res, req.headers.origin);
-  if (req.method === "OPTIONS") return res.sendStatus(204);
-  next();
-});
-
 /* ---------- Routes ---------- */
 
 // GET full config
@@ -171,8 +141,7 @@ router.delete("/image", isAdmin, async (_req, res) => {
 });
 
 /* ---------- Error handler ---------- */
-router.use((err, req, res, _next) => {
-  setCors(res, req.headers.origin);
+router.use((err, _req, res, _next) => {
   console.error("QR route error:", err);
   res
     .status(err.status || 500)
