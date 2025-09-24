@@ -10,28 +10,30 @@ const { isAdmin } = require("./utils");
 const router = express.Router();
 
 /* ----------------------- Model ----------------------- */
-const News = mongoose.model(
-  "News",
-  new mongoose.Schema(
-    {
-      title: { type: String, required: true },
-      link: { type: String, default: "" },
-      image: { type: String, default: "" }, // "/uploads/news/filename.jpg"
-      order: { type: Number, default: 0 },
-      publishedAt: { type: Date, default: Date.now },
-    },
-    { timestamps: true }
-  )
-);
+const News =
+  mongoose.models.News ||
+  mongoose.model(
+    "News",
+    new mongoose.Schema(
+      {
+        title: { type: String, required: true },
+        link: { type: String, default: "" },
+        image: { type: String, default: "" }, // "/uploads/news/filename.jpg"
+        order: { type: Number, default: 0 },
+        publishedAt: { type: Date, default: Date.now },
+      },
+      { timestamps: true }
+    )
+  );
 
 /* --------------------- Upload setup ------------------- */
 const UP_DIR = path.join(__dirname, "..", "uploads", "news");
-if (!fs.existsSync(UP_DIR)) fs.mkdirSync(UP_DIR, { recursive: true });
+fs.mkdirSync(UP_DIR, { recursive: true });
 
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, UP_DIR),
   filename: (_req, file, cb) => {
-    const safe = Date.now() + "-" + file.originalname.replace(/\s+/g, "_");
+    const safe = Date.now() + "-" + (file.originalname || "file").replace(/\s+/g, "_");
     cb(null, safe);
   },
 });
@@ -40,13 +42,12 @@ const upload = multer({ storage });
 /* ----------------- CORS setup ------------------------- */
 const allowedOrigins = [
   "http://localhost:5173",
+  "http://localhost:3000",
   "https://law-network-client.onrender.com",
   "https://law-network.onrender.com",
 ];
 function setCors(res, originHeader) {
-  const origin = allowedOrigins.includes(originHeader)
-    ? originHeader
-    : allowedOrigins[0];
+  const origin = allowedOrigins.includes(originHeader) ? originHeader : allowedOrigins[0];
   res.header("Access-Control-Allow-Origin", origin);
   res.header("Vary", "Origin");
   res.header("Access-Control-Allow-Credentials", "true");
@@ -54,10 +55,7 @@ function setCors(res, originHeader) {
     "Access-Control-Allow-Headers",
     "Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Owner-Key, x-owner-key"
   );
-  res.header(
-    "Access-Control-Allow-Methods",
-    "GET, POST, PUT, PATCH, DELETE, OPTIONS"
-  );
+  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
   res.header("Cross-Origin-Resource-Policy", "cross-origin");
 }
 router.use((req, res, next) => {
@@ -81,6 +79,7 @@ router.get("/", async (_req, res) => {
     }));
     res.json({ success: true, news });
   } catch (e) {
+    console.error("GET /news error:", e);
     res.status(500).json({ success: false, error: e.message });
   }
 });
@@ -89,8 +88,7 @@ router.get("/", async (_req, res) => {
 router.post("/", isAdmin, upload.single("image"), async (req, res) => {
   try {
     const { title, link, order } = req.body;
-    if (!title)
-      return res.status(400).json({ success: false, error: "Title required" });
+    if (!title) return res.status(400).json({ success: false, error: "Title required" });
 
     const relImage = req.file ? "/uploads/news/" + req.file.filename : "";
     const doc = await News.create({
@@ -113,6 +111,7 @@ router.post("/", isAdmin, upload.single("image"), async (req, res) => {
       },
     });
   } catch (e) {
+    console.error("POST /news error:", e);
     res.status(500).json({ success: false, error: e.message });
   }
 });
@@ -128,8 +127,7 @@ router.patch("/:id", isAdmin, upload.single("image"), async (req, res) => {
     if (req.file) patch.image = "/uploads/news/" + req.file.filename;
 
     const updated = await News.findByIdAndUpdate(id, patch, { new: true });
-    if (!updated)
-      return res.status(404).json({ success: false, error: "Not found" });
+    if (!updated) return res.status(404).json({ success: false, error: "Not found" });
 
     res.json({
       success: true,
@@ -144,6 +142,7 @@ router.patch("/:id", isAdmin, upload.single("image"), async (req, res) => {
       },
     });
   } catch (e) {
+    console.error("PATCH /news error:", e);
     res.status(500).json({ success: false, error: e.message });
   }
 });
@@ -153,19 +152,17 @@ router.delete("/:id", isAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const doc = await News.findByIdAndDelete(id);
-    if (!doc)
-      return res.status(404).json({ success: false, error: "Not found" });
+    if (!doc) return res.status(404).json({ success: false, error: "Not found" });
 
     if (doc.image && doc.image.startsWith("/uploads/news/")) {
       const abs = path.join(__dirname, "..", doc.image.replace(/^\//, ""));
       const safeRoot = path.join(__dirname, "..", "uploads", "news");
-      if (abs.startsWith(safeRoot)) {
-        await fsp.unlink(abs).catch(() => {});
-      }
+      if (abs.startsWith(safeRoot)) await fsp.unlink(abs).catch(() => {});
     }
 
     res.json({ success: true, removed: doc });
   } catch (e) {
+    console.error("DELETE /news error:", e);
     res.status(500).json({ success: false, error: e.message });
   }
 });
@@ -174,9 +171,10 @@ router.delete("/:id", isAdmin, async (req, res) => {
 router.use((err, req, res, _next) => {
   setCors(res, req.headers.origin);
   console.error("News route error:", err);
-  res
-    .status(err.status || 500)
-    .json({ success: false, message: err.message || "Server error" });
+  res.status(err.status || 500).json({
+    success: false,
+    message: err.message || "Server error",
+  });
 });
 
 module.exports = router;

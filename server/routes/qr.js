@@ -13,11 +13,10 @@ const DATA_DIR = path.join(ROOT, "data");
 const DATA_FILE = path.join(DATA_DIR, "qr.json");
 const UP_DIR = path.join(ROOT, "uploads", "qr");
 
-// Ensure dirs
-for (const p of [DATA_DIR, UP_DIR]) {
-  if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true });
-}
+// Ensure dirs exist
+for (const p of [DATA_DIR, UP_DIR]) fs.mkdirSync(p, { recursive: true });
 
+/* ---------- Default config ---------- */
 const defaultConfig = {
   url: "",
   currency: "₹",
@@ -62,17 +61,20 @@ async function unlinkQuiet(relUrl) {
   } catch {}
 }
 
-/* ---------- multer ---------- */
+/* ---------- Multer setup ---------- */
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, UP_DIR),
-  filename: (_req, file, cb) =>
-    cb(null, `${Date.now()}${path.extname(file.originalname || ".png")}`),
+  filename: (_req, file, cb) => {
+    const safe = Date.now() + path.extname(file.originalname || ".png");
+    cb(null, safe);
+  },
 });
 const upload = multer({ storage, limits: { fileSize: 20 * 1024 * 1024 } });
 
-/* ---------- CORS ---------- */
+/* ---------- CORS setup ---------- */
 const allowedOrigins = [
   "http://localhost:5173",
+  "http://localhost:3000",
   "https://law-network-client.onrender.com",
   "https://law-network.onrender.com",
 ];
@@ -99,7 +101,7 @@ router.use((req, res, next) => {
   next();
 });
 
-/* ---------- ROUTES ---------- */
+/* ---------- Routes ---------- */
 
 // GET full config
 router.get("/", async (_req, res) => {

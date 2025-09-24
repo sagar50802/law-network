@@ -6,26 +6,29 @@ const { isAdmin } = require("./utils");
 const router = express.Router();
 
 /* ---------------- Model ---------------- */
-const Footer = mongoose.model(
-  "Footer",
-  new mongoose.Schema(
-    {
-      text: { type: String, default: "" },
-      links: [
-        {
-          label: { type: String, default: "" },
-          url: { type: String, default: "" },
-        },
-      ],
-      updatedAt: { type: Date, default: Date.now },
-    },
-    { timestamps: true }
-  )
-);
+const Footer =
+  mongoose.models.Footer ||
+  mongoose.model(
+    "Footer",
+    new mongoose.Schema(
+      {
+        text: { type: String, default: "" },
+        links: [
+          {
+            label: { type: String, default: "" },
+            url: { type: String, default: "" },
+          },
+        ],
+        updatedAt: { type: Date, default: Date.now },
+      },
+      { timestamps: true }
+    )
+  );
 
 /* ---------------- Allowed origins ---------------- */
 const allowedOrigins = [
   "http://localhost:5173",
+  "http://localhost:3000",
   "https://law-network-client.onrender.com",
   "https://law-network.onrender.com",
 ];
