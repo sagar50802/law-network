@@ -16,35 +16,7 @@ if (!mongoURI) {
   console.warn("⚠️ No MONGO_URI set. GridFS uploads may not work.");
 }
 
-// ── Allowed origins (match server.js) ─────────────────────
-const allowedOrigins = [
-  "http://localhost:5173",
-  "http://localhost:3000",
-  "https://law-network-client.onrender.com",
-  "https://law-network.onrender.com",
-];
-
-function setCors(res, originHeader) {
-  const origin = allowedOrigins.includes(originHeader) ? originHeader : allowedOrigins[0];
-  res.header("Access-Control-Allow-Origin", origin);
-  res.header("Vary", "Origin");
-  res.header("Access-Control-Allow-Credentials", "true");
-  res.header(
-    "Access-Control-Allow-Headers",
-    "Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Owner-Key, x-owner-key"
-  );
-  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
-  res.header("Cross-Origin-Resource-Policy", "cross-origin");
-}
-
-// Apply to all requests
-router.use((req, res, next) => {
-  setCors(res, req.headers.origin);
-  if (req.method === "OPTIONS") return res.sendStatus(204);
-  next();
-});
-
-// ── JSON metadata (pdfs.json) ─────────────────────────────
+// ── JSON metadata (pdfs.json) ────────────
 const ROOT = path.join(__dirname, "..");
 const DATA_DIR = path.join(ROOT, "data");
 const DB_FILE = path.join(DATA_DIR, "pdfs.json");
@@ -63,9 +35,10 @@ async function readDB() {
 async function writeDB(db) {
   await fsp.writeFile(DB_FILE, JSON.stringify(db, null, 2), "utf8");
 }
-const uid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
+const uid = () =>
+  Math.random().toString(36).slice(2) + Date.now().toString(36);
 
-// ── GridFS storage ───────────────────────────────────────
+// ── GridFS storage ───────────────────────
 let storage;
 if (mongoURI) {
   storage = new GridFsStorage({
@@ -76,25 +49,35 @@ if (mongoURI) {
       }
       return {
         _id: new ObjectId(),
-        filename: `${Date.now()}-${(file.originalname || "file.pdf").replace(/\s+/g, "_")}`,
+        filename: `${Date.now()}-${(file.originalname || "file.pdf").replace(
+          /\s+/g,
+          "_"
+        )}`,
         bucketName: "pdfs",
       };
     },
   });
 
-  storage.on("connection", () => console.log("✓ GridFS storage ready (pdfs)"));
-  storage.on("connectionFailed", (e) => console.error("✗ GridFS storage error:", e?.message));
+  storage.on("connection", () =>
+    console.log("✓ GridFS storage ready (pdfs)")
+  );
+  storage.on("connectionFailed", (e) =>
+    console.error("✗ GridFS storage error:", e?.message)
+  );
 }
 
-const upload = storage ? multer({ storage }) : multer({ dest: "uploads/pdfs" });
+const upload = storage
+  ? multer({ storage })
+  : multer({ dest: path.join(ROOT, "uploads", "pdfs") });
 
 function multerSafe(mw) {
   return (req, res, next) => {
     mw(req, res, (err) => {
       if (err) {
-        setCors(res, req.headers.origin);
         console.error("⚠️ Multer upload error:", err);
-        return res.status(400).json({ success: false, message: err.message || "Upload error" });
+        return res
+          .status(400)
+          .json({ success: false, message: err.message || "Upload error" });
       }
       next();
     });
@@ -102,10 +85,13 @@ function multerSafe(mw) {
 }
 
 const uploadChapter = multerSafe(
-  upload.fields([{ name: "pdf", maxCount: 1 }, { name: "file", maxCount: 1 }])
+  upload.fields([
+    { name: "pdf", maxCount: 1 },
+    { name: "file", maxCount: 1 },
+  ])
 );
 
-// ── Routes ──────────────────────────────────────────────
+// ── Routes ───────────────────────────────
 
 // List all subjects (public)
 router.get("/", async (_req, res) => {
@@ -116,12 +102,15 @@ router.get("/", async (_req, res) => {
 // Create subject (admin)
 router.post("/subjects", isAdmin, express.json(), async (req, res) => {
   const name = (req.body?.name || "").trim();
-  if (!name) return res.status(400).json({ success: false, message: "Name required" });
+  if (!name)
+    return res.status(400).json({ success: false, message: "Name required" });
 
   const db = await readDB();
   const id = name.toLowerCase().replace(/\s+/g, "-") || uid();
   if (db.subjects.find((s) => s.id === id)) {
-    return res.status(409).json({ success: false, message: "Subject already exists" });
+    return res
+      .status(409)
+      .json({ success: false, message: "Subject already exists" });
   }
   const subject = { id, name, chapters: [] };
   db.subjects.push(subject);
@@ -130,38 +119,65 @@ router.post("/subjects", isAdmin, express.json(), async (req, res) => {
 });
 
 // Add chapter (upload PDF) (admin)
-router.post("/subjects/:sid/chapters", isAdmin, uploadChapter, async (req, res) => {
-  try {
-    const db = await readDB();
-    const sub = db.subjects.find((s) => s.id === req.params.sid);
-    if (!sub) return res.status(404).json({ success: false, message: "Subject not found" });
+router.post(
+  "/subjects/:sid/chapters",
+  isAdmin,
+  uploadChapter,
+  async (req, res) => {
+    try {
+      const db = await readDB();
+      const sub = db.subjects.find((s) => s.id === req.params.sid);
+      if (!sub)
+        return res
+          .status(404)
+          .json({ success: false, message: "Subject not found" });
 
-    const file = (req.files?.pdf?.[0] || req.files?.file?.[0]) || null;
-    if (!file) return res.status(400).json({ success: false, message: "PDF file required" });
+      const file = req.files?.pdf?.[0] || req.files?.file?.[0] || null;
+      if (!file)
+        return res
+          .status(400)
+          .json({ success: false, message: "PDF file required" });
 
-    const title = String(req.body.title || "Untitled").slice(0, 200);
-    const locked = req.body.locked === "true";
+      const title = String(req.body.title || "Untitled").slice(0, 200);
+      const locked = req.body.locked === "true";
 
-    const url = mongoURI ? `/api/gridfs/pdf/${file.filename}` : `/uploads/pdfs/${file.filename}`;
-    const ch = { id: uid(), title, url, locked, createdAt: new Date().toISOString() };
+      const url = mongoURI
+        ? `/api/gridfs/pdf/${file.filename}`
+        : `/uploads/pdfs/${file.filename}`;
+      const ch = {
+        id: uid(),
+        title,
+        url,
+        locked,
+        createdAt: new Date().toISOString(),
+      };
 
-    sub.chapters.push(ch);
-    await writeDB(db);
-    res.json({ success: true, chapter: ch });
-  } catch (err) {
-    console.error("⚠️ Chapter upload error:", err);
-    res.status(500).json({ success: false, message: err.message || "Server error" });
+      sub.chapters.push(ch);
+      await writeDB(db);
+      res.json({ success: true, chapter: ch });
+    } catch (err) {
+      console.error("⚠️ Chapter upload error:", err);
+      res
+        .status(500)
+        .json({ success: false, message: err.message || "Server error" });
+    }
   }
-});
+);
 
 // Delete chapter (admin)
 router.delete("/subjects/:sid/chapters/:cid", isAdmin, async (req, res) => {
   const db = await readDB();
   const sub = db.subjects.find((s) => s.id === req.params.sid);
-  if (!sub) return res.status(404).json({ success: false, message: "Subject not found" });
+  if (!sub)
+    return res
+      .status(404)
+      .json({ success: false, message: "Subject not found" });
 
   const idx = sub.chapters.findIndex((c) => c.id === req.params.cid);
-  if (idx < 0) return res.status(404).json({ success: false, message: "Chapter not found" });
+  if (idx < 0)
+    return res
+      .status(404)
+      .json({ success: false, message: "Chapter not found" });
 
   const removed = sub.chapters.splice(idx, 1)[0];
 
@@ -169,8 +185,13 @@ router.delete("/subjects/:sid/chapters/:cid", isAdmin, async (req, res) => {
     const filename = removed.url.split("/").pop();
     try {
       if (mongoose.connection.readyState === 1) {
-        const bucket = new mongoose.mongo.GridFSBucket(mongoose.connection.db, { bucketName: "pdfs" });
-        const files = await mongoose.connection.db.collection("pdfs.files").find({ filename }).toArray();
+        const bucket = new mongoose.mongo.GridFSBucket(mongoose.connection.db, {
+          bucketName: "pdfs",
+        });
+        const files = await mongoose.connection.db
+          .collection("pdfs.files")
+          .find({ filename })
+          .toArray();
         if (files.length) await bucket.delete(files[0]._id);
       }
     } catch (err) {
@@ -186,16 +207,24 @@ router.delete("/subjects/:sid/chapters/:cid", isAdmin, async (req, res) => {
 router.delete("/subjects/:sid", isAdmin, async (req, res) => {
   const db = await readDB();
   const idx = db.subjects.findIndex((s) => s.id === req.params.sid);
-  if (idx < 0) return res.status(404).json({ success: false, message: "Subject not found" });
+  if (idx < 0)
+    return res
+      .status(404)
+      .json({ success: false, message: "Subject not found" });
 
   const sub = db.subjects[idx];
   try {
     if (mongoURI && mongoose.connection.readyState === 1) {
-      const bucket = new mongoose.mongo.GridFSBucket(mongoose.connection.db, { bucketName: "pdfs" });
+      const bucket = new mongoose.mongo.GridFSBucket(mongoose.connection.db, {
+        bucketName: "pdfs",
+      });
       for (const ch of sub.chapters || []) {
         if (ch.url?.includes("/api/gridfs/pdf/")) {
           const filename = ch.url.split("/").pop();
-          const files = await mongoose.connection.db.collection("pdfs.files").find({ filename }).toArray();
+          const files = await mongoose.connection.db
+            .collection("pdfs.files")
+            .find({ filename })
+            .toArray();
           if (files.length) await bucket.delete(files[0]._id);
         }
       }
@@ -209,22 +238,31 @@ router.delete("/subjects/:sid", isAdmin, async (req, res) => {
 });
 
 // Toggle lock/unlock (admin)
-router.patch("/subjects/:sid/chapters/:cid/lock", isAdmin, express.json({ limit: "5mb" }), async (req, res) => {
-  const db = await readDB();
-  const sub = db.subjects.find((s) => s.id === req.params.sid);
-  const ch = sub?.chapters.find((c) => c.id === req.params.cid);
-  if (!ch) return res.status(404).json({ success: false, message: "Chapter not found" });
+router.patch(
+  "/subjects/:sid/chapters/:cid/lock",
+  isAdmin,
+  express.json({ limit: "5mb" }),
+  async (req, res) => {
+    const db = await readDB();
+    const sub = db.subjects.find((s) => s.id === req.params.sid);
+    const ch = sub?.chapters.find((c) => c.id === req.params.cid);
+    if (!ch)
+      return res
+        .status(404)
+        .json({ success: false, message: "Chapter not found" });
 
-  ch.locked = !!req.body.locked;
-  await writeDB(db);
-  res.json({ success: true, chapter: ch });
-});
+    ch.locked = !!req.body.locked;
+    await writeDB(db);
+    res.json({ success: true, chapter: ch });
+  }
+);
 
-// Error handler
-router.use((err, req, res, _next) => {
-  setCors(res, req.headers.origin);
+// ── Error handler ───────────────────────
+router.use((err, _req, res, _next) => {
   console.error("PDFs route error:", err);
-  res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
+  res
+    .status(err.status || 500)
+    .json({ success: false, message: err.message || "Server error" });
 });
 
 module.exports = router;
