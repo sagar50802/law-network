@@ -18,5 +18,6 @@ server/uploads/*
 !server/uploads/pdfs/.gitkeep
 !server/uploads/qr/.gitkeep
 !server/uploads/submissions/.gitkeep
-# 🚀 Ignore the frontend repo folder
-../client
+
+# ✅ Remove this: "../client"
+# Each repo should have its own .gitignore, don’t try to exclude sibling folders
