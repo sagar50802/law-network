@@ -3,7 +3,7 @@ const path = require("path");
 const fsp = require("fs/promises");
 const multer = require("multer");
 const { isAdmin, ensureDir } = require("./utils");
-const Article = require("../models/article");   // ✅ use central model
+const Article = require("../models/Article");
 
 const router = express.Router();
 
