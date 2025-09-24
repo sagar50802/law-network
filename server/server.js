@@ -1,4 +1,3 @@
-// server/server.js
 import express from "express";
 import mongoose from "mongoose";
 import cors from "cors";
@@ -19,16 +18,17 @@ const CLIENT_URL =
 // ── Middlewares ──────────────────────────
 app.use(express.json());
 
-// ── CORS Setup ───────────────────────────
+// ✅ CORS Setup
 const ALLOWED_ORIGINS = [
-  CLIENT_URL,
+  CLIENT_URL, // https://law-network-client.onrender.com
+  "https://law-network.onrender.com", // ✅ added
   "http://localhost:5173",
   "http://localhost:3000",
 ];
 
 const corsOptions = {
-  origin(origin, callback) {
-    if (!origin) return callback(null, true); // allow server-to-server, curl, Postman
+  origin: function (origin, callback) {
+    if (!origin) return callback(null, true); // allow server-to-server
     if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
     return callback(new Error("CORS not allowed for " + origin));
   },
@@ -44,14 +44,13 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-app.options("*", cors(corsOptions)); // ✅ preflight handler
+app.options("*", cors(corsOptions)); // ✅ handle preflight
 
-// Always set CORS headers
+// Always attach headers (extra safety)
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (origin && ALLOWED_ORIGINS.includes(origin)) {
     res.header("Access-Control-Allow-Origin", origin);
-    res.header("Vary", "Origin");
     res.header("Access-Control-Allow-Credentials", "true");
     res.header(
       "Access-Control-Allow-Methods",
@@ -72,7 +71,7 @@ const uploadDirs = [
   "uploads",
   "uploads/pdfs",
   "uploads/videos",
-  "uploads/audios",
+  "uploads/audio", // ✅ FIXED: singular (match podcasts.js)
   "uploads/banners",
   "uploads/articles",
   "uploads/qr",
