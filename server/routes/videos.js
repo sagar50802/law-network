@@ -4,14 +4,44 @@ const path = require("path");
 const fs = require("fs");
 const fsp = require("fs/promises");
 const multer = require("multer");
-const { isAdmin } = require("./utils");   // ✅ admin check
+const { isAdmin } = require("./utils");
 
 const router = express.Router();
+
+/* ---------- CORS (same as other routes) ---------- */
+const allowedOrigins = [
+  "http://localhost:5173",
+  "http://localhost:3000",
+  "https://law-network-client.onrender.com",
+  "https://law-network.onrender.com",
+];
+function setCors(res, originHeader) {
+  const origin = allowedOrigins.includes(originHeader)
+    ? originHeader
+    : allowedOrigins[0];
+  res.header("Access-Control-Allow-Origin", origin);
+  res.header("Vary", "Origin");
+  res.header("Access-Control-Allow-Credentials", "true");
+  res.header(
+    "Access-Control-Allow-Headers",
+    "Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Owner-Key, x-owner-key"
+  );
+  res.header(
+    "Access-Control-Allow-Methods",
+    "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+  );
+  res.header("Cross-Origin-Resource-Policy", "cross-origin");
+}
+router.use((req, res, next) => {
+  setCors(res, req.headers.origin);
+  if (req.method === "OPTIONS") return res.sendStatus(204);
+  next();
+});
 
 /* ---------- paths & helpers ---------- */
 const ROOT = path.join(__dirname, "..");
 const DATA_DIR = path.join(ROOT, "data");
-const UP_DIR = path.join(ROOT, "uploads", "videos");   // ✅ plural
+const UP_DIR = path.join(ROOT, "uploads", "videos"); // ✅ plural
 const DB_FILE = path.join(DATA_DIR, "videos.json");
 
 for (const p of [DATA_DIR, UP_DIR]) fs.mkdirSync(p, { recursive: true });
@@ -125,7 +155,6 @@ async function addItem(req, res) {
       .status(400)
       .json({ success: false, message: "Video file or url required" });
 
-  // default locked=true unless explicitly false
   const locked =
     typeof req.body.locked === "string"
       ? req.body.locked.toLowerCase() !== "false"
@@ -210,8 +239,9 @@ async function deletePlaylist(req, res) {
 router.delete("/:playlist", isAdmin, deletePlaylist);
 router.delete("/playlists/:playlist", isAdmin, deletePlaylist);
 
-// Error handler
+/* ---------- Error handler ---------- */
 router.use((err, req, res, _next) => {
+  setCors(res, req.headers.origin);
   console.error("Videos route error:", err);
   res
     .status(err.status || 500)
