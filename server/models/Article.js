@@ -1,12 +1,18 @@
-const mongoose = require("mongoose");
+// server/models/Article.js
+import mongoose from "mongoose";
 
-const articleSchema = new mongoose.Schema({
-  title: { type: String, required: true },
-  content: { type: String, required: true }, // full text
-  link: { type: String, default: "" },
-  image: { type: String, default: "" },      // /uploads/articles/filename.jpg
-  allowHtml: { type: Boolean, default: false },
-  isFree: { type: Boolean, default: false },
-}, { timestamps: true });
+const articleSchema = new mongoose.Schema(
+  {
+    title: { type: String, required: true },
+    content: { type: String, required: true }, // full text
+    link: { type: String, default: "" },
+    image: { type: String, default: "" }, // /uploads/articles/filename.jpg
+    allowHtml: { type: Boolean, default: false },
+    isFree: { type: Boolean, default: false },
+  },
+  { timestamps: true }
+);
 
-module.exports = mongoose.model("Article", articleSchema);
+const Article = mongoose.model("Article", articleSchema);
+
+export default Article;
