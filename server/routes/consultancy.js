@@ -1,4 +1,3 @@
-// server/routes/consultancy.js (ESM)
 import express from "express";
 import Consultancy from "../models/Consultancy.js";
 import { isAdmin } from "./utils.js";
@@ -7,7 +6,6 @@ import { gridUpload, deleteFile, extractIdFromUrl } from "../utils/gfs.js";
 const router = express.Router();
 const uploadImage = gridUpload("consultancy", "image");
 
-// List (public)
 router.get("/", async (_req, res) => {
   try {
     const items = await Consultancy.find({}).sort({ order: 1, createdAt: -1 }).lean();
@@ -17,7 +15,6 @@ router.get("/", async (_req, res) => {
   }
 });
 
-// Create (admin)
 router.post("/", isAdmin, uploadImage, async (req, res) => {
   try {
     const { title, subtitle = "", intro = "", order = 0 } = req.body;
@@ -32,11 +29,9 @@ router.post("/", isAdmin, uploadImage, async (req, res) => {
   }
 });
 
-// Update (admin)
 router.patch("/:id", isAdmin, uploadImage, async (req, res) => {
   try {
-    const { id } = req.params;
-    const prev = await Consultancy.findById(id);
+    const prev = await Consultancy.findById(req.params.id);
     if (!prev) return res.status(404).json({ success: false, error: "Not found" });
 
     const patch = {
@@ -52,29 +47,25 @@ router.patch("/:id", isAdmin, uploadImage, async (req, res) => {
       patch.image = `/api/files/consultancy/${String(req.file.id)}`;
     }
 
-    const updated = await Consultancy.findByIdAndUpdate(id, patch, { new: true });
+    const updated = await Consultancy.findByIdAndUpdate(req.params.id, patch, { new: true });
     res.json({ success: true, item: updated });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
 });
 
-// Delete (admin)
 router.delete("/:id", isAdmin, async (req, res) => {
   try {
     const doc = await Consultancy.findByIdAndDelete(req.params.id);
     if (!doc) return res.status(404).json({ success: false, error: "Not found" });
-
     const fid = extractIdFromUrl(doc.image, "consultancy");
     if (fid) await deleteFile("consultancy", fid);
-
     res.json({ success: true, removed: doc });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
 });
 
-// Error handler
 router.use((err, _req, res, _next) => {
   console.error("Consultancy route error:", err);
   res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
