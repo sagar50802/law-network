@@ -1,10 +1,15 @@
-const mongoose = require("mongoose");
+// server/models/Consultancy.js
+import mongoose from "mongoose";
 
-const consultancySchema = new mongoose.Schema({
-  title: { type: String, required: true },
-  description: String,
-  imageUrl: String,
-  createdAt: { type: Date, default: Date.now },
-});
+const consultancySchema = new mongoose.Schema(
+  {
+    title:    { type: String, required: true },
+    subtitle: { type: String, default: "" },
+    intro:    { type: String, default: "" },
+    image:    { type: String, required: true }, // e.g. /uploads/consultancy/123-file.jpg
+    order:    { type: Number, default: 0 },
+  },
+  { timestamps: true }
+);
 
-module.exports = mongoose.model("Consultancy", consultancySchema);
+export default mongoose.model("Consultancy", consultancySchema);
