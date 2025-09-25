@@ -13,11 +13,10 @@ const router = express.Router();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Upload dir (matches server static /uploads mount)
+// Upload dir (served by /uploads static in server.js)
 const UP_DIR = path.join(__dirname, "..", "uploads", "banners");
 ensureDir(UP_DIR);
 
-// Multer storage
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, UP_DIR),
   filename: (_req, file, cb) =>
@@ -37,20 +36,16 @@ router.get("/", async (_req, res) => {
   }
 });
 
-// Create (admin) — FormData field name: "file"; optional body: title, type
+// Create (admin) – accepts FormData field "file"; optional title, type
 router.post("/", isAdmin, upload.single("file"), async (req, res) => {
   try {
     const { title = "", type = "image" } = req.body;
-
-    // Either uploaded file or direct URL in body.url (fallback)
     const url =
       (req.file && `/uploads/banners/${req.file.filename}`) ||
       (req.body.url || "");
 
     if (!url) {
-      return res
-        .status(400)
-        .json({ success: false, error: "No file uploaded or url provided" });
+      return res.status(400).json({ success: false, error: "No file uploaded or url provided" });
     }
 
     const item = await Banner.create({ title, type, url });
@@ -66,7 +61,7 @@ router.delete("/:id", isAdmin, async (req, res) => {
     const doc = await Banner.findByIdAndDelete(req.params.id);
     if (!doc) return res.status(404).json({ success: false, error: "Not found" });
 
-    // Remove file if it's one of ours
+    // remove file if it's ours
     if (doc.url?.startsWith("/uploads/banners/")) {
       const abs = path.join(__dirname, "..", doc.url.replace(/^\//, ""));
       const safeRoot = path.join(__dirname, "..", "uploads", "banners");
