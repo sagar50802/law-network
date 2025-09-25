@@ -1,55 +1,59 @@
 // server/routes/banners.js
 import express from "express";
-import path from "path";
-import fsp from "fs/promises";
 import multer from "multer";
-import { fileURLToPath } from "url";
-import { isAdmin, ensureDir } from "./utils.js";
+import { GridFsStorage } from "multer-gridfs-storage";
+import mongoose from "mongoose";
 import Banner from "../models/Banner.js";
+import { isAdmin } from "./utils.js";
 
 const router = express.Router();
 
-// ESM __dirname
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// Upload dir (served by /uploads static in server.js)
-const UP_DIR = path.join(__dirname, "..", "uploads", "banners");
-ensureDir(UP_DIR);
-
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, UP_DIR),
-  filename: (_req, file, cb) =>
-    cb(null, `${Date.now()}-${file.originalname.replace(/\s+/g, "_")}`),
+const storage = new GridFsStorage({
+  url: process.env.MONGO_URI,
+  file: (_req, file) => ({
+    filename: Date.now() + "-" + file.originalname.replace(/\s+/g, "_"),
+    bucketName: "uploads",
+    metadata: { folder: "banners", mime: file.mimetype, original: file.originalname },
+  }),
 });
 const upload = multer({ storage });
+
+function fileUrlFromReq(req) {
+  const id = req?.file?.id?.toString?.();
+  return id ? `/api/files/${id}` : "";
+}
+function gridBucket() {
+  const db = mongoose.connection?.db;
+  if (!db) return null;
+  return new mongoose.mongo.GridFSBucket(db, { bucketName: "uploads" });
+}
+function extractIdFromUrl(url = "") {
+  const m = String(url).match(/\/api\/files\/([a-f0-9]{24})/i);
+  return m ? m[1] : null;
+}
 
 /* ---------- Routes ---------- */
 
 // List (public)
 router.get("/", async (_req, res) => {
   try {
-    const items = await Banner.find({}).sort({ createdAt: -1 });
-    res.json({ success: true, items });
+    const banners = await Banner.find({}).sort({ createdAt: -1 });
+    res.json({ success: true, banners });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
 });
 
-// Create (admin) – accepts FormData field "file"; optional title, type
+// Create (admin) – accepts field name "file"
 router.post("/", isAdmin, upload.single("file"), async (req, res) => {
   try {
-    const { title = "", type = "image" } = req.body;
-    const url =
-      (req.file && `/uploads/banners/${req.file.filename}`) ||
-      (req.body.url || "");
+    const url = fileUrlFromReq(req);
+    if (!url) return res.status(400).json({ success: false, error: "File required" });
 
-    if (!url) {
-      return res.status(400).json({ success: false, error: "No file uploaded or url provided" });
-    }
+    const type = (req.file?.mimetype || "").startsWith("video") ? "video" : "image";
+    const doc = await Banner.create({ title: "", type, url });
 
-    const item = await Banner.create({ title, type, url });
-    res.json({ success: true, item });
+    res.json({ success: true, item: doc });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
@@ -61,11 +65,11 @@ router.delete("/:id", isAdmin, async (req, res) => {
     const doc = await Banner.findByIdAndDelete(req.params.id);
     if (!doc) return res.status(404).json({ success: false, error: "Not found" });
 
-    // remove file if it's ours
-    if (doc.url?.startsWith("/uploads/banners/")) {
-      const abs = path.join(__dirname, "..", doc.url.replace(/^\//, ""));
-      const safeRoot = path.join(__dirname, "..", "uploads", "banners");
-      if (abs.startsWith(safeRoot)) await fsp.unlink(abs).catch(() => {});
+    const oldId = extractIdFromUrl(doc?.url);
+    if (oldId) {
+      try {
+        await gridBucket()?.delete(new mongoose.Types.ObjectId(oldId));
+      } catch {}
     }
 
     res.json({ success: true, removed: doc });
@@ -74,12 +78,10 @@ router.delete("/:id", isAdmin, async (req, res) => {
   }
 });
 
-/* ---------- Error handler ---------- */
+// Error handler
 router.use((err, _req, res, _next) => {
   console.error("Banners route error:", err);
-  res
-    .status(err.status || 500)
-    .json({ success: false, message: err.message || "Server error" });
+  res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
 });
 
 export default router;
