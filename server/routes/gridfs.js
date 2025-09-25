@@ -1,10 +1,10 @@
-// server/routes/gridfs.js
-const express = require("express");
-const mongoose = require("mongoose");
-const multer = require("multer");
-const { GridFsStorage } = require("multer-gridfs-storage");
-const { ObjectId } = require("mongodb");
-const { isAdmin } = require("./utils");
+// server/routes/gridfs.js  (ESM)
+import express from "express";
+import mongoose from "mongoose";
+import multer from "multer";
+import { GridFsStorage } from "multer-gridfs-storage";
+import { ObjectId } from "mongodb";
+import { isAdmin } from "./utils.js";
 
 const router = express.Router();
 const mongoURI = process.env.MONGO_URI;
@@ -16,9 +16,7 @@ const allowedOrigins = [
   "https://law-network.onrender.com",
 ];
 function setCors(res, originHeader) {
-  const origin = allowedOrigins.includes(originHeader)
-    ? originHeader
-    : allowedOrigins[0];
+  const origin = allowedOrigins.includes(originHeader) ? originHeader : allowedOrigins[0];
   res.header("Access-Control-Allow-Origin", origin);
   res.header("Vary", "Origin");
   res.header("Access-Control-Allow-Credentials", "true");
@@ -26,10 +24,7 @@ function setCors(res, originHeader) {
     "Access-Control-Allow-Headers",
     "Origin, X-Requested-With, Content-Type, Accept, Authorization, X-Owner-Key, x-owner-key"
   );
-  res.header(
-    "Access-Control-Allow-Methods",
-    "GET, POST, PUT, PATCH, DELETE, OPTIONS"
-  );
+  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
   res.header("Cross-Origin-Resource-Policy", "cross-origin");
 }
 router.use((req, res, next) => {
@@ -42,56 +37,46 @@ router.use((req, res, next) => {
 const storage = new GridFsStorage({
   url: mongoURI,
   file: (_req, file) => {
+    // this route is only for PDFs
     if (!file.mimetype || !file.mimetype.includes("pdf")) {
       return Promise.reject(new Error("Only PDF files allowed"));
     }
+    const safe = (file.originalname || "file.pdf").replace(/\s+/g, "_");
     return {
       _id: new ObjectId(),
-      filename: `${Date.now()}-${(file.originalname || "file.pdf").replace(
-        /\s+/g,
-        "_"
-      )}`,
+      filename: `${Date.now()}-${safe}`,
       bucketName: "pdfs",
+      metadata: { mime: file.mimetype || "application/pdf" },
     };
   },
 });
-storage.on("connection", () =>
-  console.log("✓ GridFS storage ready (pdfs) [gridfs.js]")
-);
+storage.on("connection", () => console.log("✓ GridFS storage ready (pdfs) [gridfs.js]"));
 storage.on("connectionFailed", (e) =>
   console.error("✗ GridFS storage error [gridfs.js]:", e?.message)
 );
 
 const upload = multer({ storage });
-const uploadSafe = (mw) => (req, res, next) => {
-  mw(req, res, (err) => {
-    if (err) {
-      setCors(res, req.headers.origin);
-      console.error("⚠️ Multer upload error:", err);
-      return res
-        .status(400)
-        .json({ success: false, error: err.message || "Upload failed" });
-    }
-    next();
-  });
-};
+const uploadSafe =
+  (mw) =>
+  (req, res, next) =>
+    mw(req, res, (err) => {
+      if (err) {
+        setCors(res, req.headers.origin);
+        console.error("⚠️ Multer upload error:", err);
+        return res.status(400).json({ success: false, error: err.message || "Upload failed" });
+      }
+      next();
+    });
 
 /* ------------------ Upload PDF (admin only) ------------------ */
 router.post(
   "/pdf/upload",
   isAdmin,
-  uploadSafe(
-    upload.fields([
-      { name: "pdf", maxCount: 1 },
-      { name: "file", maxCount: 1 },
-    ])
-  ),
+  uploadSafe(upload.fields([{ name: "pdf", maxCount: 1 }, { name: "file", maxCount: 1 }])),
   (req, res) => {
     const file = req.files?.pdf?.[0] || req.files?.file?.[0] || null;
     if (!file) {
-      return res
-        .status(400)
-        .json({ success: false, error: "No PDF uploaded" });
+      return res.status(400).json({ success: false, error: "No PDF uploaded" });
     }
     res.json({
       success: true,
@@ -103,12 +88,10 @@ router.post(
 );
 
 /* ------------------ List PDFs (admin only) ------------------ */
-router.get("/list", isAdmin, async (req, res) => {
+router.get("/list", isAdmin, async (_req, res) => {
   try {
     if (mongoose.connection.readyState !== 1) {
-      return res
-        .status(503)
-        .json({ success: false, error: "Database not connected" });
+      return res.status(503).json({ success: false, error: "Database not connected" });
     }
     const files = await mongoose.connection.db
       .collection("pdfs.files")
@@ -137,9 +120,7 @@ router.get("/list", isAdmin, async (req, res) => {
 router.get("/pdf/:filename", async (req, res) => {
   try {
     if (mongoose.connection.readyState !== 1) {
-      return res
-        .status(503)
-        .json({ success: false, error: "Database not connected" });
+      return res.status(503).json({ success: false, error: "Database not connected" });
     }
     const bucket = new mongoose.mongo.GridFSBucket(mongoose.connection.db, {
       bucketName: "pdfs",
@@ -163,9 +144,7 @@ router.get("/pdf/:filename", async (req, res) => {
 router.get("/pdf/id/:id", async (req, res) => {
   try {
     if (mongoose.connection.readyState !== 1) {
-      return res
-        .status(503)
-        .json({ success: false, error: "Database not connected" });
+      return res.status(503).json({ success: false, error: "Database not connected" });
     }
     const fileId = new mongoose.Types.ObjectId(req.params.id);
     const bucket = new mongoose.mongo.GridFSBucket(mongoose.connection.db, {
@@ -191,9 +170,7 @@ router.get("/pdf/id/:id", async (req, res) => {
 router.delete("/pdf/:filename", isAdmin, async (req, res) => {
   try {
     if (mongoose.connection.readyState !== 1) {
-      return res
-        .status(503)
-        .json({ success: false, error: "Database not connected" });
+      return res.status(503).json({ success: false, error: "Database not connected" });
     }
     const bucket = new mongoose.mongo.GridFSBucket(mongoose.connection.db, {
       bucketName: "pdfs",
@@ -204,9 +181,7 @@ router.delete("/pdf/:filename", isAdmin, async (req, res) => {
       .find({ filename: req.params.filename })
       .toArray();
     if (!files.length) {
-      return res
-        .status(404)
-        .json({ success: false, error: "File not found" });
+      return res.status(404).json({ success: false, error: "File not found" });
     }
 
     await bucket.delete(files[0]._id);
@@ -221,9 +196,7 @@ router.delete("/pdf/:filename", isAdmin, async (req, res) => {
 router.delete("/pdf/id/:id", isAdmin, async (req, res) => {
   try {
     if (mongoose.connection.readyState !== 1) {
-      return res
-        .status(503)
-        .json({ success: false, error: "Database not connected" });
+      return res.status(503).json({ success: false, error: "Database not connected" });
     }
     const bucket = new mongoose.mongo.GridFSBucket(mongoose.connection.db, {
       bucketName: "pdfs",
@@ -246,4 +219,4 @@ router.use((err, req, res, _next) => {
     .json({ success: false, message: err.message || "Server error" });
 });
 
-module.exports = router;
+export default router;
