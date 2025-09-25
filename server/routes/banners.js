@@ -1,11 +1,11 @@
 // server/routes/banners.js (ESM)
 import express from "express";
 import { isAdmin } from "./utils.js";
-import Banner from "../models/Banner.js";
+import Banner from "../models/Banner.js"; // uses your existing model
 import { gridUpload, deleteFile, extractIdFromUrl } from "../utils/gfs.js";
 
 const router = express.Router();
-const uploadFile = gridUpload("banners", "file");
+const upload = gridUpload("banners", "file");
 
 // List (public)
 router.get("/", async (_req, res) => {
@@ -17,19 +17,20 @@ router.get("/", async (_req, res) => {
   }
 });
 
-// Create (admin) – file upload only
-router.post("/", isAdmin, uploadFile, async (req, res) => {
+// Create (admin)
+router.post("/", isAdmin, upload, async (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ success: false, error: "No file uploaded" });
-    const type = req.file?.metadata?.mime || req.file?.mimetype || "application/octet-stream";
+    if (!req.file) return res.status(400).json({ success: false, error: "File required" });
+    const mime = req.file.mimetype || "";
+    const type = mime.startsWith("video/") ? "video" : "image";
     const url = `/api/files/banners/${String(req.file.id)}`;
 
-    const item = await Banner.create({
+    const doc = await Banner.create({
       title: req.body.title || "",
-      type: type.startsWith("video") ? "video" : "image",
+      type,
       url,
     });
-    res.json({ success: true, item });
+    res.json({ success: true, item: doc });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
@@ -41,8 +42,8 @@ router.delete("/:id", isAdmin, async (req, res) => {
     const doc = await Banner.findByIdAndDelete(req.params.id);
     if (!doc) return res.status(404).json({ success: false, error: "Not found" });
 
-    const fileId = extractIdFromUrl(doc.url, "banners");
-    if (fileId) await deleteFile("banners", fileId);
+    const fid = extractIdFromUrl(doc.url, "banners");
+    if (fid) await deleteFile("banners", fid);
 
     res.json({ success: true, removed: doc });
   } catch (e) {
