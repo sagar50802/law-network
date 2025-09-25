@@ -1,4 +1,3 @@
-// server/server.js
 import "dotenv/config";
 import express from "express";
 import mongoose from "mongoose";
@@ -9,8 +8,7 @@ import { fileURLToPath } from "url";
 
 const app = express();
 const PORT = process.env.PORT || 5000;
-const CLIENT_URL =
-  process.env.CLIENT_URL || "https://law-network-client.onrender.com";
+const CLIENT_URL = process.env.CLIENT_URL || "https://law-network-client.onrender.com";
 
 // ---- ESM __dirname ----
 const __filename = fileURLToPath(import.meta.url);
@@ -32,36 +30,25 @@ const corsOptions = {
   origin(origin, cb) {
     if (!origin) return cb(null, true);
     if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
-    return cb(new Error("CORS not allowed: " + origin));
+    cb(new Error("CORS not allowed: " + origin));
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: [
-    "Content-Type",
-    "Authorization",
-    "X-Owner-Key",
-    "x-owner-key",
-  ],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Owner-Key", "x-owner-key"],
   optionsSuccessStatus: 204,
 };
 app.use(cors(corsOptions));
 app.options("*", cors(corsOptions));
 
-// Always attach CORS headers even on errors/404
+// Always attach CORS headers (even on errors/404)
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (origin && ALLOWED_ORIGINS.includes(origin)) {
     res.header("Access-Control-Allow-Origin", origin);
     res.header("Vary", "Origin");
     res.header("Access-Control-Allow-Credentials", "true");
-    res.header(
-      "Access-Control-Allow-Headers",
-      "Content-Type, Authorization, X-Owner-Key, x-owner-key"
-    );
-    res.header(
-      "Access-Control-Allow-Methods",
-      "GET,POST,PUT,PATCH,DELETE,OPTIONS"
-    );
+    res.header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Owner-Key, x-owner-key");
+    res.header("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
     res.header("Cross-Origin-Resource-Policy", "cross-origin");
   }
   if (req.method === "OPTIONS") return res.sendStatus(204);
@@ -74,15 +61,13 @@ app.use((req, _res, next) => {
   next();
 });
 
-// ---- Ensure legacy /uploads folders (safe even if unused) ----
-["uploads", "uploads/articles", "uploads/banners", "uploads/consultancy"].forEach(
-  (dir) => {
-    const full = path.join(__dirname, dir);
-    if (!fs.existsSync(full)) fs.mkdirSync(full, { recursive: true });
-  }
-);
+// ---- Ensure legacy /uploads folders (harmless if unused) ----
+["uploads", "uploads/articles", "uploads/banners", "uploads/consultancy"].forEach((dir) => {
+  const full = path.join(__dirname, dir);
+  if (!fs.existsSync(full)) fs.mkdirSync(full, { recursive: true });
+});
 
-// ---- Static /uploads (legacy) ----
+// ---- Serve legacy static files (if any) ----
 app.use(
   "/uploads",
   express.static(path.join(__dirname, "uploads"), {
@@ -90,13 +75,12 @@ app.use(
   })
 );
 
-// ---- Routes ----
-import filesRoutes from "./routes/files.js";          // generic GridFS streamer
+// ---- Routes (GridFS + features) ----
+import filesRoutes from "./routes/files.js";
 import articleRoutes from "./routes/articles.js";
 import bannerRoutes from "./routes/banners.js";
 import consultancyRoutes from "./routes/consultancy.js";
 import newsRoutes from "./routes/news.js";
-import pdfGridfsRoutes from "./routes/gridfs.js";     // your existing PDF APIs
 
 app.use("/api/files", filesRoutes);
 console.log("✅ Mounted: /api/files");
@@ -113,38 +97,36 @@ console.log("✅ Mounted: /api/consultancy");
 app.use("/api/news", newsRoutes);
 console.log("✅ Mounted: /api/news");
 
-app.use("/api/gridfs", pdfGridfsRoutes);
-console.log("✅ Mounted: /api/gridfs (PDFs)");
+// Optional: mount your legacy PDF GridFS router if present (CommonJS or ESM)
+try {
+  const mod = await import("./routes/gridfs.js");
+  app.use("/api/gridfs", mod.default || mod);
+  console.log("✅ Mounted: /api/gridfs (PDFs)");
+} catch (e) {
+  console.warn("ℹ️ Skipping /api/gridfs (PDFs):", e.message);
+}
+
+// Small access probe to stop 404 spam from the client helper
+app.get("/api/access/status", (_req, res) => res.json({ access: false, expiry: 0 }));
 
 // Debug probes
 app.get("/api/ping", (_req, res) => res.json({ ok: true, ts: Date.now() }));
 app.get("/api/_routes_check", (_req, res) =>
-  res.json({
-    ok: true,
-    hasFiles: true,
-    hasArticles: true,
-    hasBanners: true,
-    hasConsultancy: true,
-    hasNews: true,
-  })
+  res.json({ ok: true, hasFiles: true, hasArticles: true, hasBanners: true, hasConsultancy: true, hasNews: true })
 );
 
 // Root
 app.get("/", (_req, res) => res.json({ ok: true, root: true }));
 
-// ---- 404 ----
+// 404
 app.use((req, res) => {
-  res
-    .status(404)
-    .json({ success: false, message: `Not Found: ${req.method} ${req.originalUrl}` });
+  res.status(404).json({ success: false, message: `Not Found: ${req.method} ${req.originalUrl}` });
 });
 
-// ---- Error handler ----
+// Error handler
 app.use((err, _req, res, _next) => {
   console.error("Server error:", err);
-  res
-    .status(err.status || 500)
-    .json({ success: false, message: err.message || "Server error" });
+  res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
 });
 
 // ---- Start server FIRST ----
