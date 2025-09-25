@@ -1,14 +1,24 @@
-// server/routes/articles.js
 import express from "express";
-import multer from "multer";
 import mongoose from "mongoose";
-import { GridFsStorage } from "multer-gridfs-storage";
-import Article from "../models/Article.js";
 import { isAdmin } from "./utils.js";
+import Article from "../models/Article.js";
+import multer from "multer";
+import { GridFsStorage } from "multer-gridfs-storage";
 
-const router = express.Router();
-
-/* helpers */
+// ---- tiny helpers (see section above) ----
+function makeStorage(bucket) {
+  return new GridFsStorage({
+    url: process.env.MONGO_URI,
+    file: (_req, file) => ({
+      filename: `${Date.now()}-${(file.originalname || "file").replace(/\s+/g, "_").replace(/[^\w.\-]/g, "")}`,
+      bucketName: bucket,
+      metadata: { mime: file.mimetype || "application/octet-stream", bucket },
+    }),
+  });
+}
+const uploadSafe = (mw) => (req, res, next) => mw(req, res, (err) =>
+  err ? res.status(400).json({ success: false, error: err.message || "Upload failed" }) : next()
+);
 function extractIdFromUrl(url = "", expectedBucket) {
   const m = String(url).match(/^\/api\/files\/([^/]+)\/([a-f0-9]{24})$/i);
   if (!m) return null;
@@ -23,48 +33,28 @@ async function deleteFromGrid(bucket, id) {
   const b = new mongoose.mongo.GridFSBucket(db, { bucketName: bucket });
   await b.delete(new mongoose.Types.ObjectId(id)).catch(() => {});
 }
-const uploadSafe = (mw) => (req, res, next) =>
-  mw(req, res, (err) =>
-    err
-      ? res.status(400).json({ success: false, error: err.message || "Upload failed" })
-      : next()
-  );
+// ------------------------------------------
 
-/* GridFS storage for images -> bucket: "articles" */
-const storage = new GridFsStorage({
-  url: process.env.MONGO_URI,
-  file: (_req, file) => {
-    const safe = (file.originalname || "file").replace(/\s+/g, "_").replace(/[^\w.\-]/g, "");
-    return {
-      filename: `${Date.now()}-${safe}`,
-      bucketName: "articles",
-      metadata: { mime: file.mimetype || "application/octet-stream", bucket: "articles" },
-    };
-  },
-});
-const upload = multer({ storage });
-const uploadImage = uploadSafe(upload.single("image"));
-
-/* Routes */
+const router = express.Router();
+const upload = multer({ storage: makeStorage("articles") });
 
 // List (public)
 router.get("/", async (_req, res) => {
   try {
     const items = await Article.find({}).sort({ createdAt: -1 }).lean();
-    res.json({ success: true, items, articles: items });
+    res.json({ success: true, items });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
 });
 
 // Create (admin)
-router.post("/", isAdmin, uploadImage, async (req, res) => {
+router.post("/", isAdmin, uploadSafe(upload.single("image")), async (req, res) => {
   try {
     const { title, content = "", link = "", allowHtml = "false", isFree = "false" } = req.body;
     if (!title) return res.status(400).json({ success: false, error: "Title required" });
 
-    let image = "";
-    if (req.file?.id) image = `/api/files/articles/${String(req.file.id)}`;
+    const image = req.file ? `/api/files/articles/${String(req.file.id)}` : "";
 
     const doc = await Article.create({
       title,
@@ -82,7 +72,7 @@ router.post("/", isAdmin, uploadImage, async (req, res) => {
 });
 
 // Update (admin)
-router.patch("/:id", isAdmin, uploadImage, async (req, res) => {
+router.patch("/:id", isAdmin, uploadSafe(upload.single("image")), async (req, res) => {
   try {
     const { id } = req.params;
     const prev = await Article.findById(id);
@@ -92,13 +82,11 @@ router.patch("/:id", isAdmin, uploadImage, async (req, res) => {
       ...(req.body.title != null ? { title: req.body.title } : {}),
       ...(req.body.content != null ? { content: req.body.content } : {}),
       ...(req.body.link != null ? { link: req.body.link } : {}),
-      ...(req.body.allowHtml != null
-        ? { allowHtml: String(req.body.allowHtml) === "true" }
-        : {}),
+      ...(req.body.allowHtml != null ? { allowHtml: String(req.body.allowHtml) === "true" } : {}),
       ...(req.body.isFree != null ? { isFree: String(req.body.isFree) === "true" } : {}),
     };
 
-    if (req.file?.id) {
+    if (req.file) {
       const oldId = extractIdFromUrl(prev.image, "articles");
       if (oldId) await deleteFromGrid("articles", oldId);
       patch.image = `/api/files/articles/${String(req.file.id)}`;
