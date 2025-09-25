@@ -29,7 +29,7 @@ const ALLOWED_ORIGINS = [
 
 const corsOptions = {
   origin(origin, cb) {
-    if (!origin) return cb(null, true); // curl / server-to-server
+    if (!origin) return cb(null, true);
     if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
     return cb(new Error("CORS not allowed: " + origin));
   },
@@ -41,7 +41,7 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.options("*", cors(corsOptions));
 
-// Always attach CORS headers even on errors/404
+// Always attach CORS headers
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (origin && ALLOWED_ORIGINS.includes(origin)) {
@@ -62,7 +62,7 @@ app.use((req, _res, next) => {
 });
 
 // ---- Ensure uploads folders ----
-["uploads", "uploads/articles", "uploads/banners"].forEach((dir) => {
+["uploads", "uploads/articles", "uploads/banners", "uploads/consultancy"].forEach((dir) => {
   const full = path.join(__dirname, dir);
   if (!fs.existsSync(full)) fs.mkdirSync(full, { recursive: true });
 });
@@ -84,9 +84,15 @@ import bannerRoutes from "./routes/banners.js";
 app.use("/api/banners", bannerRoutes);
 console.log("✅ Mounted: /api/banners");
 
+import consultancyRoutes from "./routes/consultancy.js";
+app.use("/api/consultancy", consultancyRoutes);
+console.log("✅ Mounted: /api/consultancy");
+
 // Debug probes
 app.get("/api/ping", (_req, res) => res.json({ ok: true, ts: Date.now() }));
-app.get("/api/_routes_check", (_req, res) => res.json({ ok: true, hasArticles: true, hasBanners: true }));
+app.get("/api/_routes_check", (_req, res) =>
+  res.json({ ok: true, hasArticles: true, hasBanners: true, hasConsultancy: true })
+);
 
 // Root
 app.get("/", (_req, res) => res.json({ ok: true, root: true }));
