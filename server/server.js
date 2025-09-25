@@ -1,26 +1,23 @@
-// server/server.js (ESM)
+// server/server.js
 import "dotenv/config";
 import express from "express";
 import mongoose from "mongoose";
 import cors from "cors";
-import path from "path";
-import fs from "fs";
-import { fileURLToPath } from "url";
+
+import articleRoutes from "./routes/articles.js";
+import bannerRoutes from "./routes/banners.js";
+import consultancyRoutes from "./routes/consultancy.js";
 import { streamFile } from "./utils/gfs.js";
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 const CLIENT_URL = process.env.CLIENT_URL || "https://law-network-client.onrender.com";
 
-// ---- ESM __dirname ----
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// ---- Body / proxy ----
+// Body / proxy
 app.set("trust proxy", 1);
 app.use(express.json({ limit: "10mb" }));
 
-// ---- CORS ----
+// CORS
 const ALLOWED_ORIGINS = [
   CLIENT_URL,
   "https://law-network.onrender.com",
@@ -41,7 +38,7 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.options("*", cors(corsOptions));
 
-// Always attach CORS headers
+// Always attach CORS (even on errors/404)
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (origin && ALLOWED_ORIGINS.includes(origin)) {
@@ -61,39 +58,15 @@ app.use((req, _res, next) => {
   next();
 });
 
-// ---- Ensure uploads folders (legacy) ----
-["uploads", "uploads/articles", "uploads/banners", "uploads/consultancy"].forEach((dir) => {
-  const full = path.join(__dirname, dir);
-  if (!fs.existsSync(full)) fs.mkdirSync(full, { recursive: true });
-});
-
-// ---- Static /uploads (legacy support) ----
-app.use(
-  "/uploads",
-  express.static(path.join(__dirname, "uploads"), {
-    setHeaders: (res) => res.setHeader("Access-Control-Allow-Origin", CLIENT_URL),
-  })
-);
-
-// ---- GridFS streaming endpoints ----
-app.get("/api/files/:bucket/:id", streamFile());        // new style
-app.get("/api/files/:id", streamFile("uploads"));        // legacy compatibility
-
-// ---- Routes ----
-import articleRoutes from "./routes/articles.js";
-import bannerRoutes from "./routes/banners.js";
-import consultancyRoutes from "./routes/consultancy.js";
-
+// Routes
 app.use("/api/articles", articleRoutes);
-console.log("✅ Mounted: /api/articles");
-
 app.use("/api/banners", bannerRoutes);
-console.log("✅ Mounted: /api/banners");
-
 app.use("/api/consultancy", consultancyRoutes);
-console.log("✅ Mounted: /api/consultancy");
 
-// Debug probes
+// GridFS stream endpoint
+app.get("/api/files/:bucket/:id", streamFile);
+
+// Probes
 app.get("/api/ping", (_req, res) => res.json({ ok: true, ts: Date.now() }));
 app.get("/api/_routes_check", (_req, res) =>
   res.json({ ok: true, hasArticles: true, hasBanners: true, hasConsultancy: true })
@@ -102,21 +75,19 @@ app.get("/api/_routes_check", (_req, res) =>
 // Root
 app.get("/", (_req, res) => res.json({ ok: true, root: true }));
 
-// 404
+// 404 / errors
 app.use((req, res) => {
   res.status(404).json({ success: false, message: `Not Found: ${req.method} ${req.originalUrl}` });
 });
-
-// Error handler
 app.use((err, _req, res, _next) => {
   console.error("Server error:", err);
   res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
 });
 
-// ---- Start server ----
+// Start
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
 
-// ---- Connect Mongo (non-fatal on failure) ----
+// Mongo connect (non-fatal if fails)
 const MONGO_URI = process.env.MONGO_URI;
 if (!MONGO_URI) {
   console.error("✗ Missing MONGO_URI env var (service will run but DB calls will fail)");
