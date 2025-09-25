@@ -1,53 +1,73 @@
-// server/utils/gfs.js
-import mongoose from "mongoose";
+// server/utils/gfs.js (ESM)
 import multer from "multer";
 import { GridFsStorage } from "multer-gridfs-storage";
-import { ObjectId } from "mongodb";
+import mongoose from "mongoose";
 
-function makeStorage(bucketName) {
-  return new GridFsStorage({
-    db: mongoose.connection.asPromise().then((c) => c.db),
+/** Create a multer middleware that stores a single file into GridFS under a bucket. */
+export function gridUpload(bucketName, fieldName = "file") {
+  const storage = new GridFsStorage({
+    url: process.env.MONGO_URI,
     file: (_req, file) => ({
-      bucketName,
       filename: `${Date.now()}-${(file.originalname || "file").replace(/\s+/g, "_")}`,
-      metadata: { mimetype: file.mimetype || "" },
+      bucketName,
+      metadata: {
+        bucket: bucketName,
+        mime: file.mimetype,
+        original: file.originalname,
+      },
     }),
   });
+  return multer({ storage }).single(fieldName);
 }
 
-export const gridUpload = (bucketName, field = "file") =>
-  multer({ storage: makeStorage(bucketName) }).single(field);
+/** Stream a GridFS file. If defaultBucket is given, use it; else read :bucket from the route. */
+export function streamFile(defaultBucket) {
+  return async function handler(req, res) {
+    try {
+      if (mongoose.connection.readyState !== 1) {
+        return res.status(503).json({ success: false, error: "Database not connected" });
+      }
 
-export const gridUploadAny = (bucketName) =>
-  multer({ storage: makeStorage(bucketName) }).any();
+      const id = req.params.id;
+      const bucketName = defaultBucket || req.params.bucket || "uploads";
+      const _id = new mongoose.Types.ObjectId(id);
 
-export function streamFile(bucketName) {
-  return (req, res) => {
-    let id;
-    try { id = new ObjectId(req.params.id); }
-    catch { return res.status(400).json({ success: false, error: "Bad file id" }); }
+      // Look up file to set content-type nicely
+      const filesCol = mongoose.connection.db.collection(`${bucketName}.files`);
+      const fileDoc = await filesCol.findOne({ _id });
+      const ctype = fileDoc?.contentType || fileDoc?.metadata?.mime || "application/octet-stream";
+      res.setHeader("Content-Type", ctype);
 
-    const bucket = new mongoose.mongo.GridFSBucket(mongoose.connection.db, { bucketName });
-    const dl = bucket.openDownloadStream(id);
-
-    dl.on("file", (f) => {
-      const ct = f?.metadata?.mimetype || "application/octet-stream";
-      res.setHeader("Content-Type", ct);
-      res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
-    });
-    dl.on("error", () => res.status(404).json({ success: false, error: "Not found" }));
-    dl.pipe(res);
+      const bucket = new mongoose.mongo.GridFSBucket(mongoose.connection.db, { bucketName });
+      const stream = bucket.openDownloadStream(_id);
+      stream.on("error", () => res.status(404).json({ success: false, error: "File not found" }));
+      stream.pipe(res);
+    } catch (err) {
+      console.error("GridFS stream error:", err);
+      res.status(500).json({ success: false, error: err.message });
+    }
   };
 }
 
-export function deleteFile(bucketName, id) {
+/** Delete a GridFS file by id from a bucket. */
+export async function deleteFile(bucketName, id) {
+  if (!id) return;
+  if (mongoose.connection.readyState !== 1) return;
+  const _id = new mongoose.Types.ObjectId(id);
   const bucket = new mongoose.mongo.GridFSBucket(mongoose.connection.db, { bucketName });
-  return bucket.delete(new ObjectId(id)).catch(() => {});
+  await bucket.delete(_id).catch(() => {});
 }
 
+/** Extract 24-char id from either /api/files/<bucket>/<id> or legacy /api/files/<id> */
 export function extractIdFromUrl(url, bucketName) {
   if (!url) return null;
-  const re = new RegExp(`/api/files/${bucketName}/([a-f0-9]{24})$`, "i");
-  const m = String(url).match(re);
-  return m ? m[1] : null;
+  const s = String(url);
+
+  // New style: /api/files/<bucket>/<id>
+  const m1 = s.match(new RegExp(`/api/files/${bucketName}/([a-f0-9]{24})$`, "i"));
+  if (m1) return m1[1];
+
+  // Legacy: /api/files/<id>
+  const m2 = s.match(/\/api\/files\/([a-f0-9]{24})$/i);
+  return m2 ? m2[1] : null;
 }
