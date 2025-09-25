@@ -1,51 +1,51 @@
-// server/routes/articles.js (ESM)
 import express from "express";
 import multer from "multer";
+import { GridFsStorage } from "multer-gridfs-storage";
 import mongoose from "mongoose";
 import { isAdmin } from "./utils.js";
-import * as ArticleModel from "../models/Article.js";
+import Article from "../models/Article.js";
 
-const Article = ArticleModel.default || ArticleModel;
 const router = express.Router();
 
-/* ---------- helpers ---------- */
-async function makeStorage(bucket) {
-  const { GridFsStorage } = await import("multer-gridfs-storage");
-  return new GridFsStorage({
-    url: process.env.MONGO_URI,
-    file: (_req, file) => {
-      const safe = (file.originalname || "file")
-        .replace(/\s+/g, "_")
-        .replace(/[^\w.\-]/g, "");
-      return {
-        filename: `${Date.now()}-${safe}`,
-        bucketName: bucket,
-        metadata: { mime: file.mimetype || "application/octet-stream" },
-      };
-    },
-  });
-}
-function grid(bucket) {
-  const db = mongoose.connection?.db;
-  if (!db) return null;
-  return new mongoose.mongo.GridFSBucket(db, { bucketName: bucket });
-}
+/* ---------------- helpers ---------------- */
 function idUrl(bucket, id) {
   return id ? `/api/files/${bucket}/${String(id)}` : "";
 }
 function extractIdFromUrl(url = "", expectedBucket) {
+  // works with /api/files/... and absolute https://.../api/files/...
   const m = String(url).match(/\/api\/files\/([^/]+)\/([a-f0-9]{24})/i);
   if (!m) return null;
-  const [, b, id] = m;
-  if (expectedBucket && b !== expectedBucket) return null;
+  const [, bucket, id] = m;
+  if (expectedBucket && bucket !== expectedBucket) return null;
   return id;
 }
+async function deleteFromGrid(bucket, id) {
+  if (!id || !mongoose.isValidObjectId(id)) return;
+  const db = mongoose.connection?.db;
+  if (!db) return;
+  const b = new mongoose.mongo.GridFSBucket(db, { bucketName: bucket });
+  await b.delete(new mongoose.Types.ObjectId(id)).catch(() => {});
+}
 
-/* ---------- multer storage ---------- */
-const storage = await makeStorage("articles");
+/* ---------------- multer-gridfs ---------------- */
+const storage = new GridFsStorage({
+  url: process.env.MONGO_URI,
+  file: (_req, file) => {
+    const safe = (file.originalname || "file").replace(/\s+/g, "_").replace(/[^\w.\-]/g, "");
+    return {
+      filename: `${Date.now()}-${safe}`,
+      bucketName: "articles",
+      metadata: { mime: file.mimetype || "application/octet-stream" },
+    };
+  },
+});
 const upload = multer({ storage });
 
-/* ---------- routes ---------- */
+/** Only run multer for multipart/form-data; otherwise continue. */
+const maybeUpload = (req, res, next) =>
+  req.is("multipart/form-data") ? upload.single("image")(req, res, next) : next();
+
+/* ---------------- routes ---------------- */
 
 // List (public)
 router.get("/", async (_req, res) => {
@@ -58,14 +58,14 @@ router.get("/", async (_req, res) => {
   }
 });
 
-// Create (admin)
-router.post("/", isAdmin, upload.single("image"), async (req, res) => {
+// Create (admin) — works for JSON or multipart
+router.post("/", isAdmin, maybeUpload, async (req, res) => {
   try {
     const { title, content = "", link = "", allowHtml = "false", isFree = "false" } = req.body;
     if (!title) return res.status(400).json({ success: false, error: "Title required" });
 
     const fileId = req.file?.id || req.file?._id;
-    const image = fileId ? idUrl("articles", fileId) : "";
+    const image = idUrl("articles", fileId);
 
     const doc = await Article.create({
       title,
@@ -83,8 +83,8 @@ router.post("/", isAdmin, upload.single("image"), async (req, res) => {
   }
 });
 
-// Update (admin)
-router.patch("/:id", isAdmin, upload.single("image"), async (req, res) => {
+// Update (admin) — supports JSON or multipart (image replace)
+router.patch("/:id", isAdmin, maybeUpload, async (req, res) => {
   try {
     const { id } = req.params;
     const prev = await Article.findById(id);
@@ -100,10 +100,8 @@ router.patch("/:id", isAdmin, upload.single("image"), async (req, res) => {
 
     if (req.file) {
       const oldId = extractIdFromUrl(prev.image, "articles");
-      if (oldId && mongoose.isValidObjectId(oldId)) {
-        const b = grid("articles");
-        await b.delete(new mongoose.Types.ObjectId(oldId)).catch(() => {});
-      }
+      await deleteFromGrid("articles", oldId);
+
       const fileId = req.file?.id || req.file?._id;
       patch.image = idUrl("articles", fileId);
     }
@@ -123,10 +121,7 @@ router.delete("/:id", isAdmin, async (req, res) => {
     if (!doc) return res.status(404).json({ success: false, error: "Not found" });
 
     const oldId = extractIdFromUrl(doc.image, "articles");
-    if (oldId && mongoose.isValidObjectId(oldId)) {
-      const b = grid("articles");
-      await b.delete(new mongoose.Types.ObjectId(oldId)).catch(() => {});
-    }
+    await deleteFromGrid("articles", oldId);
 
     res.json({ success: true, removed: doc });
   } catch (e) {
