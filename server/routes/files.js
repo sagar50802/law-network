@@ -1,42 +1,30 @@
-// server/routes/files.js
 import express from "express";
 import mongoose from "mongoose";
 
 const router = express.Router();
 
-// GET /api/files/:bucket/:id  -> streams the file
 router.get("/:bucket/:id", async (req, res) => {
   try {
     if (mongoose.connection.readyState !== 1) {
-      return res.status(503).json({ success: false, error: "DB not connected" });
+      return res.status(503).json({ success: false, error: "Database not connected" });
     }
     const { bucket, id } = req.params;
-    const _id = new mongoose.Types.ObjectId(id);
+    let oid;
+    try { oid = new mongoose.Types.ObjectId(id); }
+    catch { return res.status(400).json({ success: false, error: "Bad id" }); }
 
-    // Optional: look up metadata to set content-type
-    const meta = await mongoose.connection.db
-      .collection(`${bucket}.files`)
-      .findOne({ _id });
+    const b = new mongoose.mongo.GridFSBucket(mongoose.connection.db, { bucketName: bucket });
+    const stream = b.openDownloadStream(oid);
 
-    const ctype =
-      meta?.contentType ||
-      meta?.metadata?.mime ||
-      "application/octet-stream";
-
-    res.setHeader("Content-Type", ctype);
-    res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
-
-    const gfs = new mongoose.mongo.GridFSBucket(mongoose.connection.db, {
-      bucketName: bucket,
+    stream.on("file", (f) => {
+      res.set("Content-Type", f.contentType || f.metadata?.mime || "application/octet-stream");
+      res.set("Cache-Control", "public, max-age=31536000, immutable");
     });
-    const stream = gfs.openDownloadStream(_id);
-    stream.on("error", () =>
-      res.status(404).json({ success: false, error: "File not found" })
-    );
+    stream.on("error", () => res.status(404).end());
     stream.pipe(res);
-  } catch (err) {
-    console.error("files.js stream error:", err);
-    res.status(500).json({ success: false, error: err.message });
+  } catch (e) {
+    console.error("files stream error:", e);
+    res.status(500).json({ success: false, error: e.message });
   }
 });
 
