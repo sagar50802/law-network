@@ -1,42 +1,37 @@
+// server/routes/articles.js
 import express from "express";
-import mongoose from "mongoose";
-import { isAdmin } from "./utils.js";
-import Article from "../models/Article.js";
 import multer from "multer";
 import { GridFsStorage } from "multer-gridfs-storage";
+import mongoose from "mongoose";
+import Article from "../models/Article.js";
+import { createRequire } from "module";
 
-// ---- tiny helpers (see section above) ----
-function makeStorage(bucket) {
-  return new GridFsStorage({
-    url: process.env.MONGO_URI,
-    file: (_req, file) => ({
-      filename: `${Date.now()}-${(file.originalname || "file").replace(/\s+/g, "_").replace(/[^\w.\-]/g, "")}`,
-      bucketName: bucket,
-      metadata: { mime: file.mimetype || "application/octet-stream", bucket },
-    }),
-  });
-}
-const uploadSafe = (mw) => (req, res, next) => mw(req, res, (err) =>
-  err ? res.status(400).json({ success: false, error: err.message || "Upload failed" }) : next()
-);
-function extractIdFromUrl(url = "", expectedBucket) {
-  const m = String(url).match(/^\/api\/files\/([^/]+)\/([a-f0-9]{24})$/i);
-  if (!m) return null;
-  const [, b, id] = m;
-  if (expectedBucket && b !== expectedBucket) return null;
-  return id;
-}
-async function deleteFromGrid(bucket, id) {
-  if (!id) return;
-  const db = mongoose.connection?.db;
-  if (!db) return;
-  const b = new mongoose.mongo.GridFSBucket(db, { bucketName: bucket });
-  await b.delete(new mongoose.Types.ObjectId(id)).catch(() => {});
-}
-// ------------------------------------------
-
+const { isAdmin } = createRequire(import.meta.url)("./utils.js");
 const router = express.Router();
-const upload = multer({ storage: makeStorage("articles") });
+
+/* ---------- GridFS storage (bucket: articles) ---------- */
+const storage = new GridFsStorage({
+  url: process.env.MONGO_URI,
+  file: (_req, file) => {
+    const safe = (file.originalname || "file").replace(/\s+/g, "_").replace(/[^\w.\-]/g, "");
+    return {
+      filename: `${Date.now()}-${safe}`,
+      bucketName: "articles",
+      metadata: { mime: file.mimetype || "application/octet-stream", bucket: "articles" },
+    };
+  },
+});
+const upload = multer({ storage });
+
+const imgUrl = (id) => (id ? `/api/files/articles/${String(id)}` : "");
+const idFromUrl = (url = "") => (String(url).match(/^\/api\/files\/articles\/([a-f0-9]{24})$/i)?.[1] || null);
+const deleteFile = async (id) => {
+  if (!id || !mongoose.connection?.db) return;
+  const b = new mongoose.mongo.GridFSBucket(mongoose.connection.db, { bucketName: "articles" });
+  await b.delete(new mongoose.Types.ObjectId(id)).catch(() => {});
+};
+
+/* ---------- Routes ---------- */
 
 // List (public)
 router.get("/", async (_req, res) => {
@@ -49,12 +44,10 @@ router.get("/", async (_req, res) => {
 });
 
 // Create (admin)
-router.post("/", isAdmin, uploadSafe(upload.single("image")), async (req, res) => {
+router.post("/", isAdmin, upload.single("image"), async (req, res) => {
   try {
     const { title, content = "", link = "", allowHtml = "false", isFree = "false" } = req.body;
     if (!title) return res.status(400).json({ success: false, error: "Title required" });
-
-    const image = req.file ? `/api/files/articles/${String(req.file.id)}` : "";
 
     const doc = await Article.create({
       title,
@@ -62,7 +55,7 @@ router.post("/", isAdmin, uploadSafe(upload.single("image")), async (req, res) =
       link,
       allowHtml: String(allowHtml) === "true",
       isFree: String(isFree) === "true",
-      image,
+      image: imgUrl(req.file?.id),
     });
 
     res.json({ success: true, item: doc });
@@ -72,10 +65,9 @@ router.post("/", isAdmin, uploadSafe(upload.single("image")), async (req, res) =
 });
 
 // Update (admin)
-router.patch("/:id", isAdmin, uploadSafe(upload.single("image")), async (req, res) => {
+router.patch("/:id", isAdmin, upload.single("image"), async (req, res) => {
   try {
-    const { id } = req.params;
-    const prev = await Article.findById(id);
+    const prev = await Article.findById(req.params.id);
     if (!prev) return res.status(404).json({ success: false, error: "Not found" });
 
     const patch = {
@@ -87,12 +79,12 @@ router.patch("/:id", isAdmin, uploadSafe(upload.single("image")), async (req, re
     };
 
     if (req.file) {
-      const oldId = extractIdFromUrl(prev.image, "articles");
-      if (oldId) await deleteFromGrid("articles", oldId);
-      patch.image = `/api/files/articles/${String(req.file.id)}`;
+      const oldId = idFromUrl(prev.image);
+      if (oldId) await deleteFile(oldId);
+      patch.image = imgUrl(req.file.id);
     }
 
-    const updated = await Article.findByIdAndUpdate(id, patch, { new: true });
+    const updated = await Article.findByIdAndUpdate(req.params.id, patch, { new: true });
     res.json({ success: true, item: updated });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
@@ -104,10 +96,8 @@ router.delete("/:id", isAdmin, async (req, res) => {
   try {
     const doc = await Article.findByIdAndDelete(req.params.id);
     if (!doc) return res.status(404).json({ success: false, error: "Not found" });
-
-    const fileId = extractIdFromUrl(doc.image, "articles");
-    if (fileId) await deleteFromGrid("articles", fileId);
-
+    const oldId = idFromUrl(doc.image);
+    if (oldId) await deleteFile(oldId);
     res.json({ success: true, removed: doc });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
