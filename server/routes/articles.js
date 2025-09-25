@@ -24,7 +24,8 @@ router.post("/", isAdmin, uploadImage, async (req, res) => {
     if (!title) return res.status(400).json({ success: false, error: "Title required" });
 
     const image = req.file ? `/api/files/articles/${String(req.file.id)}` : "";
-    const item = await Article.create({
+
+    const doc = await Article.create({
       title,
       content,
       link,
@@ -32,7 +33,8 @@ router.post("/", isAdmin, uploadImage, async (req, res) => {
       isFree: String(isFree) === "true",
       image,
     });
-    res.json({ success: true, item });
+
+    res.json({ success: true, item: doc });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
@@ -72,8 +74,8 @@ router.delete("/:id", isAdmin, async (req, res) => {
     const doc = await Article.findByIdAndDelete(req.params.id);
     if (!doc) return res.status(404).json({ success: false, error: "Not found" });
 
-    const fileId = extractIdFromUrl(doc.image, "articles");
-    if (fileId) await deleteFile("articles", fileId);
+    const fid = extractIdFromUrl(doc.image, "articles");
+    if (fid) await deleteFile("articles", fid);
 
     res.json({ success: true, removed: doc });
   } catch (e) {
