@@ -1,4 +1,3 @@
-// server/routes/articles.js (ESM)
 import express from "express";
 import { isAdmin } from "./utils.js";
 import Article from "../models/Article.js";
@@ -7,7 +6,6 @@ import { gridUpload, deleteFile, extractIdFromUrl } from "../utils/gfs.js";
 const router = express.Router();
 const uploadImage = gridUpload("articles", "image");
 
-// List (public)
 router.get("/", async (_req, res) => {
   try {
     const items = await Article.find({}).sort({ createdAt: -1 }).lean();
@@ -17,30 +15,23 @@ router.get("/", async (_req, res) => {
   }
 });
 
-// Create (admin)
 router.post("/", isAdmin, uploadImage, async (req, res) => {
   try {
     const { title, content = "", link = "", allowHtml = "false", isFree = "false" } = req.body;
     if (!title) return res.status(400).json({ success: false, error: "Title required" });
-
     const image = req.file ? `/api/files/articles/${String(req.file.id)}` : "";
-
     const doc = await Article.create({
-      title,
-      content,
-      link,
+      title, content, link,
       allowHtml: String(allowHtml) === "true",
       isFree: String(isFree) === "true",
       image,
     });
-
     res.json({ success: true, item: doc });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
 });
 
-// Update (admin)
 router.patch("/:id", isAdmin, uploadImage, async (req, res) => {
   try {
     const { id } = req.params;
@@ -68,22 +59,18 @@ router.patch("/:id", isAdmin, uploadImage, async (req, res) => {
   }
 });
 
-// Delete (admin)
 router.delete("/:id", isAdmin, async (req, res) => {
   try {
     const doc = await Article.findByIdAndDelete(req.params.id);
     if (!doc) return res.status(404).json({ success: false, error: "Not found" });
-
     const fid = extractIdFromUrl(doc.image, "articles");
     if (fid) await deleteFile("articles", fid);
-
     res.json({ success: true, removed: doc });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
 });
 
-// Error handler
 router.use((err, _req, res, _next) => {
   console.error("Articles route error:", err);
   res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
