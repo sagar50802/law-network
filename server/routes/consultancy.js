@@ -25,13 +25,7 @@ router.post("/", isAdmin, uploadImage, async (req, res) => {
     if (!req.file) return res.status(400).json({ success: false, error: "Image required" });
 
     const image = `/api/files/consultancy/${String(req.file.id)}`;
-    const item = await Consultancy.create({
-      title,
-      subtitle,
-      intro,
-      order: Number(order || 0),
-      image,
-    });
+    const item = await Consultancy.create({ title, subtitle, intro, order: Number(order || 0), image });
     res.json({ success: true, item });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
@@ -71,8 +65,8 @@ router.delete("/:id", isAdmin, async (req, res) => {
     const doc = await Consultancy.findByIdAndDelete(req.params.id);
     if (!doc) return res.status(404).json({ success: false, error: "Not found" });
 
-    const fileId = extractIdFromUrl(doc.image, "consultancy");
-    if (fileId) await deleteFile("consultancy", fileId);
+    const fid = extractIdFromUrl(doc.image, "consultancy");
+    if (fid) await deleteFile("consultancy", fid);
 
     res.json({ success: true, removed: doc });
   } catch (e) {
