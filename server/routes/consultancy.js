@@ -1,36 +1,32 @@
 // server/routes/consultancy.js
 import express from "express";
 import multer from "multer";
-import mongoose from "mongoose";
 import { GridFsStorage } from "multer-gridfs-storage";
-import { isAdmin } from "./utils.js";
-import Consultancy from "../models/Consultancy.js";
+import mongoose from "mongoose";
+import { createRequire } from "module";
+const requireCjs = createRequire(import.meta.url);
+const { isAdmin } = requireCjs("./utils.js");
 
 const router = express.Router();
 
-/* helpers */
-function extractIdFromUrl(url = "", expectedBucket) {
-  const m = String(url).match(/^\/api\/files\/([^/]+)\/([a-f0-9]{24})$/i);
-  if (!m) return null;
-  const [, b, id] = m;
-  if (expectedBucket && b !== expectedBucket) return null;
-  return id;
-}
-async function deleteFromGrid(bucket, id) {
-  if (!id) return;
-  const db = mongoose.connection?.db;
-  if (!db) return;
-  const b = new mongoose.mongo.GridFSBucket(db, { bucketName: bucket });
-  await b.delete(new mongoose.Types.ObjectId(id)).catch(() => {});
-}
-const uploadSafe = (mw) => (req, res, next) =>
-  mw(req, res, (err) =>
-    err
-      ? res.status(400).json({ success: false, error: err.message || "Upload failed" })
-      : next()
+/* ---------- Model ---------- */
+const Consultancy =
+  mongoose.models.Consultancy ||
+  mongoose.model(
+    "Consultancy",
+    new mongoose.Schema(
+      {
+        title: { type: String, required: true },
+        subtitle: { type: String, default: "" },
+        intro: { type: String, default: "" },
+        image: { type: String, required: true }, // /api/files/consultancy/<id>
+        order: { type: Number, default: 0 },
+      },
+      { timestamps: true }
+    )
   );
 
-/* GridFS storage -> bucket: "consultancy" */
+/* ---------- GridFS storage (bucket: consultancy) ---------- */
 const storage = new GridFsStorage({
   url: process.env.MONGO_URI,
   file: (_req, file) => {
@@ -43,9 +39,16 @@ const storage = new GridFsStorage({
   },
 });
 const upload = multer({ storage });
-const uploadImage = uploadSafe(upload.single("image"));
 
-/* Routes */
+const fileUrl = (id) => (id ? `/api/files/consultancy/${String(id)}` : "");
+const idFromUrl = (url = "") => (String(url).match(/^\/api\/files\/consultancy\/([a-f0-9]{24})$/i)?.[1] || null);
+const deleteFile = async (id) => {
+  if (!id || !mongoose.connection?.db) return;
+  const b = new mongoose.mongo.GridFSBucket(mongoose.connection.db, { bucketName: "consultancy" });
+  await b.delete(new mongoose.Types.ObjectId(id)).catch(() => {});
+};
+
+/* ---------- Routes ---------- */
 
 // List (public)
 router.get("/", async (_req, res) => {
@@ -58,20 +61,20 @@ router.get("/", async (_req, res) => {
 });
 
 // Create (admin)
-router.post("/", isAdmin, uploadImage, async (req, res) => {
+router.post("/", isAdmin, upload.single("image"), async (req, res) => {
   try {
     const { title, subtitle = "", intro = "", order = 0 } = req.body;
     if (!title) return res.status(400).json({ success: false, error: "Title required" });
-    if (!req.file?.id) return res.status(400).json({ success: false, error: "Image required" });
+    if (!req.file) return res.status(400).json({ success: false, error: "Image required" });
 
-    const image = `/api/files/consultancy/${String(req.file.id)}`;
     const item = await Consultancy.create({
       title,
       subtitle,
       intro,
       order: Number(order || 0),
-      image,
+      image: fileUrl(req.file.id),
     });
+
     res.json({ success: true, item });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
@@ -79,10 +82,9 @@ router.post("/", isAdmin, uploadImage, async (req, res) => {
 });
 
 // Update (admin)
-router.patch("/:id", isAdmin, uploadImage, async (req, res) => {
+router.patch("/:id", isAdmin, upload.single("image"), async (req, res) => {
   try {
-    const { id } = req.params;
-    const prev = await Consultancy.findById(id);
+    const prev = await Consultancy.findById(req.params.id);
     if (!prev) return res.status(404).json({ success: false, error: "Not found" });
 
     const patch = {
@@ -92,13 +94,13 @@ router.patch("/:id", isAdmin, uploadImage, async (req, res) => {
       ...(req.body.order != null ? { order: Number(req.body.order) } : {}),
     };
 
-    if (req.file?.id) {
-      const oldId = extractIdFromUrl(prev.image, "consultancy");
-      if (oldId) await deleteFromGrid("consultancy", oldId);
-      patch.image = `/api/files/consultancy/${String(req.file.id)}`;
+    if (req.file) {
+      const oldId = idFromUrl(prev.image);
+      if (oldId) await deleteFile(oldId);
+      patch.image = fileUrl(req.file.id);
     }
 
-    const updated = await Consultancy.findByIdAndUpdate(id, patch, { new: true });
+    const updated = await Consultancy.findByIdAndUpdate(req.params.id, patch, { new: true });
     res.json({ success: true, item: updated });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
@@ -111,8 +113,8 @@ router.delete("/:id", isAdmin, async (req, res) => {
     const doc = await Consultancy.findByIdAndDelete(req.params.id);
     if (!doc) return res.status(404).json({ success: false, error: "Not found" });
 
-    const fileId = extractIdFromUrl(doc.image, "consultancy");
-    if (fileId) await deleteFromGrid("consultancy", fileId);
+    const fid = idFromUrl(doc.image);
+    if (fid) await deleteFile(fid);
 
     res.json({ success: true, removed: doc });
   } catch (e) {
