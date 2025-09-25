@@ -4,8 +4,10 @@ import mongoose from "mongoose";
 const bannerSchema = new mongoose.Schema(
   {
     title: { type: String, default: "" },
-    type: { type: String, enum: ["image", "video"], default: "image", required: true },
-    url:  { type: String, required: true }, // e.g. "/uploads/banners/1695900-banner.png"
+    link: { type: String, default: "" },
+    // stored in GridFS; URL like /api/files/banners/:id
+    url: { type: String, required: true },
+    type: { type: String, enum: ["image", "video"], default: "image" },
   },
   { timestamps: true }
 );
