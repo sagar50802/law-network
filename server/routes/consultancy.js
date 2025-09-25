@@ -1,34 +1,21 @@
 // server/routes/consultancy.js
-const express = require("express");
-const path = require("path");
-const fs = require("fs");
-const fsp = require("fs/promises");
-const multer = require("multer");
-const mongoose = require("mongoose");
-const { isAdmin } = require("./utils");
+import express from "express";
+import path from "path";
+import fsp from "fs/promises";
+import multer from "multer";
+import { fileURLToPath } from "url";
+import { isAdmin, ensureDir } from "./utils.js";
+import Consultancy from "../models/Consultancy.js";
 
 const router = express.Router();
 
-/* ---------- Mongoose Model ---------- */
-const Consultancy =
-  mongoose.models.Consultancy ||
-  mongoose.model(
-    "Consultancy",
-    new mongoose.Schema(
-      {
-        title: { type: String, required: true },
-        subtitle: { type: String, default: "" },
-        intro: { type: String, default: "" },
-        image: { type: String, required: true }, // /uploads/consultancy/filename.jpg
-        order: { type: Number, default: 0 },
-      },
-      { timestamps: true }
-    )
-  );
+// ESM __dirname
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 /* ---------- Upload setup ---------- */
 const UP_DIR = path.join(__dirname, "..", "uploads", "consultancy");
-if (!fs.existsSync(UP_DIR)) fs.mkdirSync(UP_DIR, { recursive: true });
+ensureDir(UP_DIR);
 
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, UP_DIR),
@@ -55,10 +42,8 @@ router.get("/", async (_req, res) => {
 router.post("/", isAdmin, upload.single("image"), async (req, res) => {
   try {
     const { title, subtitle, intro, order } = req.body;
-    if (!title)
-      return res.status(400).json({ success: false, error: "Title required" });
-    if (!req.file)
-      return res.status(400).json({ success: false, error: "Image required" });
+    if (!title) return res.status(400).json({ success: false, error: "Title required" });
+    if (!req.file) return res.status(400).json({ success: false, error: "Image required" });
 
     const rel = "/uploads/consultancy/" + req.file.filename;
     const doc = await Consultancy.create({
@@ -68,6 +53,7 @@ router.post("/", isAdmin, upload.single("image"), async (req, res) => {
       order: Number(order || 0),
       image: rel,
     });
+
     res.json({ success: true, item: doc });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
@@ -84,12 +70,11 @@ router.patch("/:id", isAdmin, upload.single("image"), async (req, res) => {
       ...(req.body.intro != null ? { intro: req.body.intro } : {}),
       ...(req.body.order != null ? { order: Number(req.body.order) } : {}),
     };
-    if (req.file) {
-      patch.image = "/uploads/consultancy/" + req.file.filename;
-    }
+    if (req.file) patch.image = "/uploads/consultancy/" + req.file.filename;
+
     const updated = await Consultancy.findByIdAndUpdate(id, patch, { new: true });
-    if (!updated)
-      return res.status(404).json({ success: false, error: "Not found" });
+    if (!updated) return res.status(404).json({ success: false, error: "Not found" });
+
     res.json({ success: true, item: updated });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
@@ -103,12 +88,10 @@ router.delete("/:id", isAdmin, async (req, res) => {
     const doc = await Consultancy.findByIdAndDelete(id);
     if (!doc) return res.status(404).json({ success: false, error: "Not found" });
 
-    if (doc.image && doc.image.startsWith("/uploads/consultancy/")) {
+    if (doc.image?.startsWith("/uploads/consultancy/")) {
       const abs = path.join(__dirname, "..", doc.image.replace(/^\//, ""));
       const safeRoot = path.join(__dirname, "..", "uploads", "consultancy");
-      if (abs.startsWith(safeRoot)) {
-        await fsp.unlink(abs).catch(() => {});
-      }
+      if (abs.startsWith(safeRoot)) await fsp.unlink(abs).catch(() => {});
     }
 
     res.json({ success: true, removed: doc });
@@ -125,4 +108,4 @@ router.use((err, _req, res, _next) => {
     .json({ success: false, message: err.message || "Server error" });
 });
 
-module.exports = router;
+export default router;
