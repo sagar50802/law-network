@@ -1,36 +1,33 @@
 // server/routes/banners.js
 import express from "express";
 import multer from "multer";
-import mongoose from "mongoose";
 import { GridFsStorage } from "multer-gridfs-storage";
-import { isAdmin } from "./utils.js";
-import Banner from "../models/Banner.js"; // your existing model
+import mongoose from "mongoose";
+import { createRequire } from "module";
+
+const requireCjs = createRequire(import.meta.url);
+const { isAdmin } = requireCjs("./utils.js");
+
+// Model (use your existing schema if present, else create once)
+import mongoosePkg from "mongoose";
+const Banner =
+  mongoosePkg.models.Banner ||
+  mongoosePkg.model(
+    "Banner",
+    new mongoosePkg.Schema(
+      {
+        title: { type: String, default: "" },
+        type: { type: String, enum: ["image", "video"], required: true },
+        url:  { type: String, required: true }, // '/api/files/banners/<id>' or external
+        link: { type: String, default: "" },
+      },
+      { timestamps: true }
+    )
+  );
 
 const router = express.Router();
 
-/* helpers */
-function extractIdFromUrl(url = "", expectedBucket) {
-  const m = String(url).match(/^\/api\/files\/([^/]+)\/([a-f0-9]{24})$/i);
-  if (!m) return null;
-  const [, b, id] = m;
-  if (expectedBucket && b !== expectedBucket) return null;
-  return id;
-}
-async function deleteFromGrid(bucket, id) {
-  if (!id) return;
-  const db = mongoose.connection?.db;
-  if (!db) return;
-  const b = new mongoose.mongo.GridFSBucket(db, { bucketName: bucket });
-  await b.delete(new mongoose.Types.ObjectId(id)).catch(() => {});
-}
-const uploadSafe = (mw) => (req, res, next) =>
-  mw(req, res, (err) =>
-    err
-      ? res.status(400).json({ success: false, error: err.message || "Upload failed" })
-      : next()
-  );
-
-/* GridFS storage -> bucket: "banners" */
+/* ---------- GridFS storage (bucket: banners) ---------- */
 const storage = new GridFsStorage({
   url: process.env.MONGO_URI,
   file: (_req, file) => {
@@ -43,30 +40,42 @@ const storage = new GridFsStorage({
   },
 });
 const upload = multer({ storage });
-const uploadFile = uploadSafe(upload.single("file")); // admin dashboard uses "file"
 
-/* Routes */
+const fileUrl = (id) => (id ? `/api/files/banners/${String(id)}` : "");
+const idFromUrl = (url = "") => (String(url).match(/^\/api\/files\/banners\/([a-f0-9]{24})$/i)?.[1] || null);
+const deleteFile = async (id) => {
+  if (!id || !mongoose.connection?.db) return;
+  const b = new mongoose.mongo.GridFSBucket(mongoose.connection.db, { bucketName: "banners" });
+  await b.delete(new mongoose.Types.ObjectId(id)).catch(() => {});
+};
+
+/* ---------- Routes ---------- */
 
 // List (public)
 router.get("/", async (_req, res) => {
   try {
-    const items = await Banner.find({}).sort({ createdAt: -1 }).lean();
-    res.json({ success: true, items, banners: items });
+    const banners = await Banner.find({}).sort({ createdAt: -1 }).lean();
+    res.json({ success: true, banners });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
 });
 
-// Create (admin)
-router.post("/", isAdmin, uploadFile, async (req, res) => {
+// Create (admin) – supports file or just an external URL
+router.post("/", isAdmin, upload.single("file"), async (req, res) => {
   try {
-    if (!req.file?.id) {
-      return res.status(400).json({ success: false, error: "File required" });
+    const { title = "", link = "", url = "" } = req.body;
+    let storedUrl = url;
+    let type = "image";
+
+    if (req.file) {
+      storedUrl = fileUrl(req.file.id);
+      type = (req.file.mimetype || "").startsWith("video") ? "video" : "image";
+    } else if (!storedUrl) {
+      return res.status(400).json({ success: false, error: "No file or url" });
     }
-    const url = `/api/files/banners/${String(req.file.id)}`;
-    const type = (req.file.mimetype || "").startsWith("video") ? "video" : "image";
-    const title = req.body.title || "";
-    const item = await Banner.create({ title, type, url });
+
+    const item = await Banner.create({ title, link, url: storedUrl, type });
     res.json({ success: true, item });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
@@ -79,8 +88,8 @@ router.delete("/:id", isAdmin, async (req, res) => {
     const doc = await Banner.findByIdAndDelete(req.params.id);
     if (!doc) return res.status(404).json({ success: false, error: "Not found" });
 
-    const fileId = extractIdFromUrl(doc.url, "banners");
-    if (fileId) await deleteFromGrid("banners", fileId);
+    const fid = idFromUrl(doc.url);
+    if (fid) await deleteFile(fid);
 
     res.json({ success: true, removed: doc });
   } catch (e) {
