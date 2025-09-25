@@ -4,28 +4,28 @@ import mongoose from "mongoose";
 
 const router = express.Router();
 
-// GET /api/files/:bucket/:id   -> streams the file
+// GET /api/files/:bucket/:id  -> streams GridFS file by ObjectId
 router.get("/:bucket/:id", async (req, res) => {
   try {
     const { bucket, id } = req.params;
-    if (!bucket || !id) return res.status(400).json({ success: false, error: "Bad path" });
-
-    if (mongoose.connection.readyState !== 1) {
-      return res.status(503).json({ success: false, error: "Database not connected" });
+    if (!mongoose.isValidObjectId(id)) {
+      return res.status(400).json({ success: false, error: "Bad file id" });
     }
+    const db = mongoose.connection?.db;
+    if (!db) return res.status(503).json({ success: false, error: "DB not connected" });
 
-    const b = new mongoose.mongo.GridFSBucket(mongoose.connection.db, { bucketName: bucket });
-    const _id = new mongoose.Types.ObjectId(id);
-    const stream = b.openDownloadStream(_id);
+    const b = new mongoose.mongo.GridFSBucket(db, { bucketName: bucket });
+    const stream = b.openDownloadStream(new mongoose.Types.ObjectId(id));
 
-    // Let browser cache and display
-    res.setHeader("Access-Control-Expose-Headers", "Content-Type");
-    stream.on("error", () =>
-      res.status(404).json({ success: false, error: "File not found" })
-    );
+    stream.on("file", (f) => {
+      if (f?.contentType) res.type(f.contentType);
+      // allow embedding across origins
+      res.set("Cross-Origin-Resource-Policy", "cross-origin");
+    });
+    stream.on("error", () => res.status(404).json({ success: false, error: "File not found" }));
     stream.pipe(res);
   } catch (e) {
-    console.error("File stream error:", e);
+    console.error("files stream error:", e);
     res.status(500).json({ success: false, error: e.message });
   }
 });
