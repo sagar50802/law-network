@@ -1,87 +1,125 @@
-// server/routes/banners.js
+// server/routes/banners.js (ESM)
 import express from "express";
+import path from "path";
+import fs from "fs";
+import fsp from "fs/promises";
 import multer from "multer";
-import { GridFsStorage } from "multer-gridfs-storage";
-import mongoose from "mongoose";
-import Banner from "../models/Banner.js";
-import { isAdmin } from "./utils.js";
+import { fileURLToPath } from "url";
+import { ensureDir, readJSON, writeJSON, isAdmin } from "./utils.js";
 
 const router = express.Router();
 
-const storage = new GridFsStorage({
-  url: process.env.MONGO_URI,
-  file: (_req, file) => ({
-    filename: Date.now() + "-" + file.originalname.replace(/\s+/g, "_"),
-    bucketName: "uploads",
-    metadata: { folder: "banners", mime: file.mimetype, original: file.originalname },
-  }),
+// ESM __dirname
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+/* ---------- Storage & data file ---------- */
+const DATA_FILE = path.join(__dirname, "..", "data", "banners.json");
+ensureDir(path.dirname(DATA_FILE));
+if (!fs.existsSync(DATA_FILE)) writeJSON(DATA_FILE, []);
+
+const UP_DIR = path.join(__dirname, "..", "uploads", "banners");
+ensureDir(UP_DIR);
+
+const storage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, UP_DIR),
+  filename: (_req, file, cb) => {
+    const safe = Date.now() + "-" + file.originalname.replace(/\s+/g, "_");
+    cb(null, safe);
+  },
 });
 const upload = multer({ storage });
 
-function fileUrlFromReq(req) {
-  const id = req?.file?.id?.toString?.();
-  return id ? `/api/files/${id}` : "";
-}
-function gridBucket() {
-  const db = mongoose.connection?.db;
-  if (!db) return null;
-  return new mongoose.mongo.GridFSBucket(db, { bucketName: "uploads" });
-}
-function extractIdFromUrl(url = "") {
-  const m = String(url).match(/\/api\/files\/([a-f0-9]{24})/i);
-  return m ? m[1] : null;
+const normalizeList = (v) => (Array.isArray(v) ? v : []);
+
+/* ---------- helpers ---------- */
+function detectType(input = "") {
+  if (/^video\//i.test(input)) return "video";
+  if (/\.(mp4|webm|mov|m4v)(\?|$)/i.test(input)) return "video";
+  return "image";
 }
 
 /* ---------- Routes ---------- */
 
 // List (public)
-router.get("/", async (_req, res) => {
+router.get("/", (_req, res) => {
   try {
-    const banners = await Banner.find({}).sort({ createdAt: -1 });
-    res.json({ success: true, banners });
-  } catch (e) {
-    res.status(500).json({ success: false, error: e.message });
+    const list = normalizeList(readJSON(DATA_FILE, []));
+    res.json({ success: true, banners: list });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// Create (admin) – accepts field name "file"
+// Create (admin) — supports file OR url
 router.post("/", isAdmin, upload.single("file"), async (req, res) => {
   try {
-    const url = fileUrlFromReq(req);
-    if (!url) return res.status(400).json({ success: false, error: "File required" });
+    const urlFromBody = (req.body?.url || "").trim();
+    if (!req.file && !urlFromBody) {
+      return res
+        .status(400)
+        .json({ success: false, error: "Provide a file or a URL" });
+    }
 
-    const type = (req.file?.mimetype || "").startsWith("video") ? "video" : "image";
-    const doc = await Banner.create({ title: "", type, url });
+    const item = {
+      id: Date.now().toString(),
+      title: req.body?.title || "",
+      link: req.body?.link || "",
+      url: "",
+      type: "image",
+    };
 
-    res.json({ success: true, item: doc });
-  } catch (e) {
-    res.status(500).json({ success: false, error: e.message });
+    if (req.file) {
+      item.url = "/uploads/banners/" + req.file.filename;
+      item.type = detectType(req.file.mimetype);
+    } else {
+      item.url = urlFromBody;
+      item.type = detectType(urlFromBody);
+    }
+
+    const list = normalizeList(readJSON(DATA_FILE, []));
+    list.push(item);
+    writeJSON(DATA_FILE, list);
+
+    res.json({ success: true, item });
+  } catch (err) {
+    console.error("banner upload error:", err);
+    res.status(500).json({ success: false, error: err.message || "Upload failed" });
   }
 });
 
 // Delete (admin)
 router.delete("/:id", isAdmin, async (req, res) => {
   try {
-    const doc = await Banner.findByIdAndDelete(req.params.id);
-    if (!doc) return res.status(404).json({ success: false, error: "Not found" });
+    const id = req.params.id;
+    const list = normalizeList(readJSON(DATA_FILE, []));
+    const idx = list.findIndex((b) => (b.id || b._id) === id);
+    if (idx < 0) return res.status(404).json({ success: false, error: "Not found" });
 
-    const oldId = extractIdFromUrl(doc?.url);
-    if (oldId) {
-      try {
-        await gridBucket()?.delete(new mongoose.Types.ObjectId(oldId));
-      } catch {}
+    const [removed] = list.splice(idx, 1);
+    writeJSON(DATA_FILE, list);
+
+    // Delete local file if owned by us
+    if (removed?.url?.startsWith("/uploads/banners/")) {
+      const abs = path.join(__dirname, "..", removed.url.replace(/^\//, ""));
+      const safeRoot = path.join(__dirname, "..", "uploads", "banners");
+      if (abs.startsWith(safeRoot)) {
+        await fsp.unlink(abs).catch(() => {});
+      }
     }
 
-    res.json({ success: true, removed: doc });
-  } catch (e) {
-    res.status(500).json({ success: false, error: e.message });
+    res.json({ success: true, removed });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// Error handler
+/* ---------- Error handler ---------- */
 router.use((err, _req, res, _next) => {
   console.error("Banners route error:", err);
-  res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
+  res
+    .status(err.status || 500)
+    .json({ success: false, message: err.message || "Server error" });
 });
 
 export default router;
