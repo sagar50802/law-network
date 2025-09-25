@@ -1,12 +1,13 @@
-const mongoose = require("mongoose");
+// server/models/Banner.js
+import mongoose from "mongoose";
 
 const bannerSchema = new mongoose.Schema(
   {
     title: { type: String, default: "" },
-    type: { type: String, enum: ["image", "video"], required: true },
-    url: { type: String, required: true },
+    type: { type: String, enum: ["image", "video"], default: "image", required: true },
+    url:  { type: String, required: true }, // e.g. "/uploads/banners/1695900-banner.png"
   },
   { timestamps: true }
 );
 
-module.exports = mongoose.model("Banner", bannerSchema);
+export default mongoose.model("Banner", bannerSchema);
