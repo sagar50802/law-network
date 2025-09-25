@@ -2,12 +2,13 @@
 import express from "express";
 import multer from "multer";
 import mongoose from "mongoose";
+import { GridFsStorage } from "multer-gridfs-storage";
 import Article from "../models/Article.js";
 import { isAdmin } from "./utils.js";
 
 const router = express.Router();
 
-/* helpers (inline) */
+/* helpers */
 function extractIdFromUrl(url = "", expectedBucket) {
   const m = String(url).match(/^\/api\/files\/([^/]+)\/([a-f0-9]{24})$/i);
   if (!m) return null;
@@ -29,8 +30,7 @@ const uploadSafe = (mw) => (req, res, next) =>
       : next()
   );
 
-/* GridFS storage */
-import { GridFsStorage } from "multer-gridfs-storage";
+/* GridFS storage for images -> bucket: "articles" */
 const storage = new GridFsStorage({
   url: process.env.MONGO_URI,
   file: (_req, file) => {
@@ -45,23 +45,28 @@ const storage = new GridFsStorage({
 const upload = multer({ storage });
 const uploadImage = uploadSafe(upload.single("image"));
 
-/* list */
+/* Routes */
+
+// List (public)
 router.get("/", async (_req, res) => {
   try {
     const items = await Article.find({}).sort({ createdAt: -1 }).lean();
-    res.json({ success: true, items });
+    res.json({ success: true, items, articles: items });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
 });
 
-/* create */
+// Create (admin)
 router.post("/", isAdmin, uploadImage, async (req, res) => {
   try {
     const { title, content = "", link = "", allowHtml = "false", isFree = "false" } = req.body;
     if (!title) return res.status(400).json({ success: false, error: "Title required" });
-    const image = req.file ? `/api/files/articles/${String(req.file.id)}` : "";
-    const item = await Article.create({
+
+    let image = "";
+    if (req.file?.id) image = `/api/files/articles/${String(req.file.id)}`;
+
+    const doc = await Article.create({
       title,
       content,
       link,
@@ -69,50 +74,62 @@ router.post("/", isAdmin, uploadImage, async (req, res) => {
       isFree: String(isFree) === "true",
       image,
     });
-    res.json({ success: true, item });
+
+    res.json({ success: true, item: doc });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
 });
 
-/* update */
+// Update (admin)
 router.patch("/:id", isAdmin, uploadImage, async (req, res) => {
   try {
-    const prev = await Article.findById(req.params.id);
+    const { id } = req.params;
+    const prev = await Article.findById(id);
     if (!prev) return res.status(404).json({ success: false, error: "Not found" });
 
     const patch = {
       ...(req.body.title != null ? { title: req.body.title } : {}),
       ...(req.body.content != null ? { content: req.body.content } : {}),
       ...(req.body.link != null ? { link: req.body.link } : {}),
-      ...(req.body.allowHtml != null ? { allowHtml: String(req.body.allowHtml) === "true" } : {}),
+      ...(req.body.allowHtml != null
+        ? { allowHtml: String(req.body.allowHtml) === "true" }
+        : {}),
       ...(req.body.isFree != null ? { isFree: String(req.body.isFree) === "true" } : {}),
     };
 
-    if (req.file) {
+    if (req.file?.id) {
       const oldId = extractIdFromUrl(prev.image, "articles");
       if (oldId) await deleteFromGrid("articles", oldId);
       patch.image = `/api/files/articles/${String(req.file.id)}`;
     }
 
-    const updated = await Article.findByIdAndUpdate(req.params.id, patch, { new: true });
+    const updated = await Article.findByIdAndUpdate(id, patch, { new: true });
     res.json({ success: true, item: updated });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
 });
 
-/* delete */
+// Delete (admin)
 router.delete("/:id", isAdmin, async (req, res) => {
   try {
     const doc = await Article.findByIdAndDelete(req.params.id);
     if (!doc) return res.status(404).json({ success: false, error: "Not found" });
-    const oldId = extractIdFromUrl(doc.image, "articles");
-    if (oldId) await deleteFromGrid("articles", oldId);
+
+    const fileId = extractIdFromUrl(doc.image, "articles");
+    if (fileId) await deleteFromGrid("articles", fileId);
+
     res.json({ success: true, removed: doc });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
+});
+
+// Error handler
+router.use((err, _req, res, _next) => {
+  console.error("Articles route error:", err);
+  res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
 });
 
 export default router;
