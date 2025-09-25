@@ -29,7 +29,7 @@ const ALLOWED_ORIGINS = [
 
 const corsOptions = {
   origin(origin, cb) {
-    if (!origin) return cb(null, true);
+    if (!origin) return cb(null, true); // curl / server-to-server
     if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
     return cb(new Error("CORS not allowed: " + origin));
   },
@@ -41,7 +41,7 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.options("*", cors(corsOptions));
 
-// Always attach CORS headers
+// Always attach CORS headers (also for 404/errors)
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (origin && ALLOWED_ORIGINS.includes(origin)) {
@@ -68,10 +68,21 @@ app.use((req, _res, next) => {
 });
 
 // ---- Static /uploads ----
+// Add per-request CORS on static too (so <img> from client origin always works)
 app.use(
   "/uploads",
   express.static(path.join(__dirname, "uploads"), {
-    setHeaders: (res) => res.setHeader("Access-Control-Allow-Origin", CLIENT_URL),
+    setHeaders: (res) => {
+      const origin = res.req?.headers?.origin;
+      if (origin && ALLOWED_ORIGINS.includes(origin)) {
+        res.setHeader("Access-Control-Allow-Origin", origin);
+        res.setHeader("Vary", "Origin");
+      } else {
+        res.setHeader("Access-Control-Allow-Origin", CLIENT_URL);
+      }
+      // Make sure browsers don’t block images/videos
+      res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+    },
   })
 );
 
