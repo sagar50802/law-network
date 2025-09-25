@@ -1,28 +1,33 @@
+// server/server.js
 import "dotenv/config";
 import express from "express";
 import mongoose from "mongoose";
 import cors from "cors";
-
-import articleRoutes from "./routes/articles.js";
-import bannerRoutes from "./routes/banners.js";
-import consultancyRoutes from "./routes/consultancy.js";
-import { streamFile } from "./utils/gfs.js";
+import path from "path";
+import fs from "fs";
+import { fileURLToPath } from "url";
 
 const app = express();
 const PORT = process.env.PORT || 5000;
-const CLIENT_URL = process.env.CLIENT_URL || "https://law-network-client.onrender.com";
+const CLIENT_URL =
+  process.env.CLIENT_URL || "https://law-network-client.onrender.com";
 
-// body / proxy
+// ---- ESM __dirname ----
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// ---- Body / proxy ----
 app.set("trust proxy", 1);
 app.use(express.json({ limit: "10mb" }));
 
-// CORS
+// ---- CORS (global) ----
 const ALLOWED_ORIGINS = [
   CLIENT_URL,
   "https://law-network.onrender.com",
   "http://localhost:5173",
   "http://localhost:3000",
 ];
+
 const corsOptions = {
   origin(origin, cb) {
     if (!origin) return cb(null, true);
@@ -31,63 +36,124 @@ const corsOptions = {
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Owner-Key", "x-owner-key"],
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "X-Owner-Key",
+    "x-owner-key",
+  ],
   optionsSuccessStatus: 204,
 };
 app.use(cors(corsOptions));
 app.options("*", cors(corsOptions));
 
-// always attach CORS headers
+// Always attach CORS headers even on errors/404
 app.use((req, res, next) => {
-  const o = req.headers.origin;
-  if (o && ALLOWED_ORIGINS.includes(o)) {
-    res.header("Access-Control-Allow-Origin", o);
+  const origin = req.headers.origin;
+  if (origin && ALLOWED_ORIGINS.includes(origin)) {
+    res.header("Access-Control-Allow-Origin", origin);
     res.header("Vary", "Origin");
     res.header("Access-Control-Allow-Credentials", "true");
-    res.header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Owner-Key, x-owner-key");
-    res.header("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
+    res.header(
+      "Access-Control-Allow-Headers",
+      "Content-Type, Authorization, X-Owner-Key, x-owner-key"
+    );
+    res.header(
+      "Access-Control-Allow-Methods",
+      "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+    );
+    res.header("Cross-Origin-Resource-Policy", "cross-origin");
   }
   if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
 });
 
-// tiny log
+// Tiny log
 app.use((req, _res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
   next();
 });
 
-// routes
-app.use("/api/articles", articleRoutes);
-app.use("/api/banners", bannerRoutes);
-app.use("/api/consultancy", consultancyRoutes);
-
-// GridFS stream
-app.get("/api/files/:bucket/:id", streamFile);
-
-// probes
-app.get("/api/ping", (_req, res) => res.json({ ok: true, ts: Date.now() }));
-app.get("/api/_routes_check", (_req, res) =>
-  res.json({ ok: true, hasArticles: true, hasBanners: true, hasConsultancy: true })
+// ---- Ensure legacy /uploads folders (safe even if unused) ----
+["uploads", "uploads/articles", "uploads/banners", "uploads/consultancy"].forEach(
+  (dir) => {
+    const full = path.join(__dirname, dir);
+    if (!fs.existsSync(full)) fs.mkdirSync(full, { recursive: true });
+  }
 );
 
-// root
+// ---- Static /uploads (legacy) ----
+app.use(
+  "/uploads",
+  express.static(path.join(__dirname, "uploads"), {
+    setHeaders: (res) => res.setHeader("Access-Control-Allow-Origin", CLIENT_URL),
+  })
+);
+
+// ---- Routes ----
+import filesRoutes from "./routes/files.js";          // generic GridFS streamer
+import articleRoutes from "./routes/articles.js";
+import bannerRoutes from "./routes/banners.js";
+import consultancyRoutes from "./routes/consultancy.js";
+import newsRoutes from "./routes/news.js";
+import pdfGridfsRoutes from "./routes/gridfs.js";     // your existing PDF APIs
+
+app.use("/api/files", filesRoutes);
+console.log("✅ Mounted: /api/files");
+
+app.use("/api/articles", articleRoutes);
+console.log("✅ Mounted: /api/articles");
+
+app.use("/api/banners", bannerRoutes);
+console.log("✅ Mounted: /api/banners");
+
+app.use("/api/consultancy", consultancyRoutes);
+console.log("✅ Mounted: /api/consultancy");
+
+app.use("/api/news", newsRoutes);
+console.log("✅ Mounted: /api/news");
+
+app.use("/api/gridfs", pdfGridfsRoutes);
+console.log("✅ Mounted: /api/gridfs (PDFs)");
+
+// Debug probes
+app.get("/api/ping", (_req, res) => res.json({ ok: true, ts: Date.now() }));
+app.get("/api/_routes_check", (_req, res) =>
+  res.json({
+    ok: true,
+    hasFiles: true,
+    hasArticles: true,
+    hasBanners: true,
+    hasConsultancy: true,
+    hasNews: true,
+  })
+);
+
+// Root
 app.get("/", (_req, res) => res.json({ ok: true, root: true }));
 
-// 404 + errors
-app.use((req, res) => res.status(404).json({ success: false, message: `Not Found: ${req.method} ${req.originalUrl}` }));
-app.use((err, _req, res, _next) => {
-  console.error("Server error:", err);
-  res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
+// ---- 404 ----
+app.use((req, res) => {
+  res
+    .status(404)
+    .json({ success: false, message: `Not Found: ${req.method} ${req.originalUrl}` });
 });
 
-// start
+// ---- Error handler ----
+app.use((err, _req, res, _next) => {
+  console.error("Server error:", err);
+  res
+    .status(err.status || 500)
+    .json({ success: false, message: err.message || "Server error" });
+});
+
+// ---- Start server FIRST ----
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
 
-// connect Mongo (non-fatal)
+// ---- Connect Mongo (do not exit on failure) ----
 const MONGO_URI = process.env.MONGO_URI;
 if (!MONGO_URI) {
-  console.error("✗ Missing MONGO_URI env var");
+  console.error("✗ Missing MONGO_URI env var (service will run but DB calls will fail)");
 } else {
   mongoose
     .connect(MONGO_URI)
