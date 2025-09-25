@@ -1,9 +1,9 @@
-// server/utils/gfs.js
+// server/routes/gfs.js
 import multer from "multer";
 import { GridFsStorage } from "multer-gridfs-storage";
 import mongoose from "mongoose";
 
-/** Create a Multer middleware that stores into GridFS (per bucket). */
+/** Create a Multer middleware that stores a single field into GridFS bucket */
 export function gridUpload(bucket, fieldName = "file") {
   const storage = new GridFsStorage({
     url: process.env.MONGO_URI,
@@ -18,11 +18,10 @@ export function gridUpload(bucket, fieldName = "file") {
       };
     },
   });
-  const uploader = multer({ storage }).single(fieldName);
-  return uploader;
+  return multer({ storage }).single(fieldName);
 }
 
-/** Wrap upload to return JSON errors instead of crashing the process. */
+/** Wrap upload to return JSON errors (no 502s) */
 export const uploadSafe = (mw) => (req, res, next) => {
   mw(req, res, (err) => {
     if (err) {
@@ -35,21 +34,20 @@ export const uploadSafe = (mw) => (req, res, next) => {
   });
 };
 
-/** Delete a GridFS file by ObjectId string. */
+/** Delete a GridFS file by id string */
 export async function deleteFile(bucket, id) {
   if (!id) return;
   const db = mongoose.connection?.db;
   if (!db) return;
-  const bucketApi = new mongoose.mongo.GridFSBucket(db, { bucketName: bucket });
-  await bucketApi.delete(new mongoose.Types.ObjectId(id)).catch(() => {});
+  const gfs = new mongoose.mongo.GridFSBucket(db, { bucketName: bucket });
+  await gfs.delete(new mongoose.Types.ObjectId(id)).catch(() => {});
 }
 
-/** Extract ObjectId from `/api/files/:bucket/:id` */
+/** Extract ObjectId from `/api/files/:bucket/:id` (optionally validate bucket) */
 export function extractIdFromUrl(url = "", expectedBucket) {
-  const re = /^\/api\/files\/([^/]+)\/([a-f0-9]{24})$/i;
-  const m = String(url).match(re);
+  const m = String(url).match(/^\/api\/files\/([^/]+)\/([a-f0-9]{24})$/i);
   if (!m) return null;
-  const [, bucket, id] = m;
-  if (expectedBucket && bucket !== expectedBucket) return null;
+  const [, b, id] = m;
+  if (expectedBucket && b !== expectedBucket) return null;
   return id;
 }
