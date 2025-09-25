@@ -1,4 +1,3 @@
-// server/server.js
 import "dotenv/config";
 import express from "express";
 import mongoose from "mongoose";
@@ -48,7 +47,10 @@ app.use((req, res, next) => {
     res.header("Access-Control-Allow-Origin", origin);
     res.header("Vary", "Origin");
     res.header("Access-Control-Allow-Credentials", "true");
-    res.header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Owner-Key, x-owner-key");
+    res.header(
+      "Access-Control-Allow-Headers",
+      "Content-Type, Authorization, X-Owner-Key, x-owner-key"
+    );
     res.header("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
   }
   if (req.method === "OPTIONS") return res.sendStatus(204);
@@ -62,7 +64,7 @@ app.use((req, _res, next) => {
 });
 
 // ---- Ensure uploads folders ----
-["uploads", "uploads/articles"].forEach((dir) => {
+["uploads", "uploads/articles", "uploads/banners"].forEach((dir) => {
   const full = path.join(__dirname, dir);
   if (!fs.existsSync(full)) fs.mkdirSync(full, { recursive: true });
 });
@@ -75,21 +77,29 @@ app.use(
   })
 );
 
-// ---- Routes (ONLY articles enabled now) ----
+// ---- Routes ----
 import articleRoutes from "./routes/articles.js";
 app.use("/api/articles", articleRoutes);
 console.log("✅ Mounted: /api/articles");
 
+import bannerRoutes from "./routes/banners.js";
+app.use("/api/banners", bannerRoutes);
+console.log("✅ Mounted: /api/banners");
+
 // Debug probes
 app.get("/api/ping", (_req, res) => res.json({ ok: true, ts: Date.now() }));
-app.get("/api/_routes_check", (_req, res) => res.json({ ok: true, hasArticles: true }));
+app.get("/api/_routes_check", (_req, res) =>
+  res.json({ ok: true, hasArticles: true, hasBanners: true })
+);
 
 // Root
 app.get("/", (_req, res) => res.json({ ok: true, root: true }));
 
 // ---- 404 ----
 app.use((req, res) => {
-  res.status(404).json({ success: false, message: `Not Found: ${req.method} ${req.originalUrl}` });
+  res
+    .status(404)
+    .json({ success: false, message: `Not Found: ${req.method} ${req.originalUrl}` });
 });
 
 // ---- Error handler ----
