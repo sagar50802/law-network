@@ -29,7 +29,7 @@ const ALLOWED_ORIGINS = [
 
 const corsOptions = {
   origin(origin, cb) {
-    if (!origin) return cb(null, true); // curl / server-to-server
+    if (!origin) return cb(null, true);
     if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
     return cb(new Error("CORS not allowed: " + origin));
   },
@@ -41,7 +41,7 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.options("*", cors(corsOptions));
 
-// Always attach CORS headers (also for 404/errors)
+// Always attach CORS headers
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (origin && ALLOWED_ORIGINS.includes(origin)) {
@@ -61,32 +61,76 @@ app.use((req, _res, next) => {
   next();
 });
 
-// ---- Ensure uploads folders ----
+// ---- (optional) keep local uploads dir for legacy; harmless with GridFS ----
 ["uploads", "uploads/articles", "uploads/banners", "uploads/consultancy"].forEach((dir) => {
   const full = path.join(__dirname, dir);
   if (!fs.existsSync(full)) fs.mkdirSync(full, { recursive: true });
 });
 
-// ---- Static /uploads ----
-// Add per-request CORS on static too (so <img> from client origin always works)
+// ---- Static for legacy URLs (won't be used after GridFS, but safe to keep) ----
 app.use(
   "/uploads",
   express.static(path.join(__dirname, "uploads"), {
-    setHeaders: (res) => {
-      const origin = res.req?.headers?.origin;
-      if (origin && ALLOWED_ORIGINS.includes(origin)) {
-        res.setHeader("Access-Control-Allow-Origin", origin);
-        res.setHeader("Vary", "Origin");
-      } else {
-        res.setHeader("Access-Control-Allow-Origin", CLIENT_URL);
-      }
-      // Make sure browsers don’t block images/videos
-      res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
-    },
+    setHeaders: (res) => res.setHeader("Access-Control-Allow-Origin", CLIENT_URL),
   })
 );
 
-// ---- Routes ----
+/* ---------------- Files streaming from GridFS ---------------- */
+function gridBucket() {
+  const db = mongoose.connection?.db;
+  if (!db) return null;
+  return new mongoose.mongo.GridFSBucket(db, { bucketName: "uploads" });
+}
+
+// Stream any GridFS file by id; supports Range for audio/video
+app.get("/api/files/:id", async (req, res) => {
+  try {
+    const id = new mongoose.Types.ObjectId(req.params.id);
+    const db = mongoose.connection?.db;
+    if (!db) return res.status(503).json({ success: false, message: "DB not ready" });
+
+    const filesCol = db.collection("uploads.files");
+    const file = await filesCol.findOne({ _id: id });
+    if (!file) return res.status(404).json({ success: false, message: "File not found" });
+
+    const mime = file?.metadata?.mime || "application/octet-stream";
+    const size = file.length;
+    const range = req.headers.range;
+
+    const bucket = gridBucket();
+    if (!range) {
+      res.set({
+        "Content-Type": mime,
+        "Content-Length": size,
+        "Content-Disposition": "inline",
+        "Accept-Ranges": "bytes",
+      });
+      bucket.openDownloadStream(id).pipe(res);
+      return;
+    }
+
+    // Range: bytes=start-end
+    const [startStr, endStr] = range.replace(/bytes=/, "").split("-");
+    const start = Number(startStr) || 0;
+    const end = endStr ? Number(endStr) : size - 1;
+    const chunkSize = end - start + 1;
+
+    res.status(206).set({
+      "Content-Range": `bytes ${start}-${end}/${size}`,
+      "Accept-Ranges": "bytes",
+      "Content-Length": chunkSize,
+      "Content-Type": mime,
+      "Content-Disposition": "inline",
+    });
+
+    bucket.openDownloadStream(id, { start, end: end + 1 }).pipe(res);
+  } catch (e) {
+    console.error("files route error:", e);
+    res.status(400).json({ success: false, message: "Bad file id" });
+  }
+});
+
+/* ---------------- Feature routes ---------------- */
 import articleRoutes from "./routes/articles.js";
 app.use("/api/articles", articleRoutes);
 console.log("✅ Mounted: /api/articles");
