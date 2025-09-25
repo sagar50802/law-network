@@ -1,82 +1,80 @@
-// server/routes/consultancy.js (ESM)
+// server/routes/consultancy.js  (ESM, manual GridFS)
 import express from "express";
 import multer from "multer";
 import mongoose from "mongoose";
-import Consultancy from "../models/Consultancy.js";
 import { isAdmin } from "./utils.js";
+import * as ConsultancyModel from "../models/Consultancy.js";
 
+const Consultancy = ConsultancyModel.default || ConsultancyModel;
 const router = express.Router();
 
-/* -------- helpers -------- */
-async function makeStorage(bucket) {
-  const { GridFsStorage } = await import("multer-gridfs-storage");
-  return new GridFsStorage({
-    url: process.env.MONGO_URI,
-    file: (_req, file) => {
-      const safe = (file.originalname || "file").replace(/\s+/g, "_").replace(/[^\w.\-]/g, "");
-      return { filename: `${Date.now()}-${safe}`, bucketName: bucket, metadata: { mime: file.mimetype || "application/octet-stream" } };
-    },
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
+
+const bucket = (name) => {
+  const db = mongoose.connection?.db;
+  return db ? new mongoose.mongo.GridFSBucket(db, { bucketName: name }) : null;
+};
+const safeName = (orig = "file") =>
+  String(orig).replace(/\s+/g, "_").replace(/[^\w.\-]/g, "");
+const fileUrl = (bkt, id) => (id ? `/api/files/${bkt}/${String(id)}` : "");
+const idFromUrl = (url = "", expected) => {
+  const m = String(url).match(/^\/api\/files\/([^/]+)\/([a-f0-9]{24})$/i);
+  if (!m) return null;
+  return expected && m[1] !== expected ? null : m[2];
+};
+async function putToGrid(bkt, file) {
+  const g = bucket(bkt);
+  if (!g) throw Object.assign(new Error("DB not connected"), { status: 503 });
+  return await new Promise((resolve, reject) => {
+    const ws = g.openUploadStream(safeName(file.originalname), {
+      contentType: file.mimetype || "application/octet-stream",
+      metadata: { bucket: bkt },
+    });
+    ws.on("error", reject);
+    ws.on("finish", () => resolve(ws.id));
+    ws.end(file.buffer);
   });
 }
-function grid(bucket) {
-  const db = mongoose.connection?.db;
-  if (!db) return null;
-  return new mongoose.mongo.GridFSBucket(db, { bucketName: bucket });
-}
-function idUrl(bucket, id) { return id ? `/api/files/${bucket}/${String(id)}` : ""; }
-function extractIdFromUrl(url = "", expectedBucket) {
-  const m = String(url).match(/\/api\/files\/([^/]+)\/([a-f0-9]{24})/i);
-  if (!m) return null;
-  const [, b, id] = m;
-  if (expectedBucket && b !== expectedBucket) return null;
-  return id;
+async function delFromGrid(bkt, id) {
+  const g = bucket(bkt);
+  if (!g || !id) return;
+  try { await g.delete(new mongoose.Types.ObjectId(id)); } catch {}
 }
 
-/* -------- multer -------- */
-const storage = await makeStorage("consultancy");
-const upload = multer({ storage });
-const uploadSafe = (mw) => (req, res, next) =>
-  mw(req, res, (err) => (err ? res.status(400).json({ success: false, error: err.message }) : next()));
-
-/* -------- routes -------- */
-
-// List
+// List (public)
 router.get("/", async (_req, res) => {
   try {
     const items = await Consultancy.find({}).sort({ order: 1, createdAt: -1 }).lean();
     res.json({ success: true, items });
   } catch (e) {
-    console.error("Consultancy list error:", e);
     res.status(500).json({ success: false, error: e.message });
   }
 });
 
-// Create
-router.post("/", isAdmin, uploadSafe(upload.single("image")), async (req, res) => {
+// Create (admin) – image required
+router.post("/", isAdmin, upload.single("image"), async (req, res) => {
   try {
     const { title, subtitle = "", intro = "", order = 0 } = req.body;
     if (!title) return res.status(400).json({ success: false, error: "Title required" });
-    if (!req.file) return res.status(400).json({ success: false, error: "Image required" });
+    if (!req.file?.buffer?.length) return res.status(400).json({ success: false, error: "Image required" });
 
-    const fileId = req.file?.id || req.file?._id;
-    const image = idUrl("consultancy", fileId);
-
+    const id = await putToGrid("consultancy", req.file);
     const item = await Consultancy.create({
       title,
       subtitle,
       intro,
       order: Number(order || 0),
-      image,
+      image: fileUrl("consultancy", id),
     });
+
     res.json({ success: true, item });
   } catch (e) {
-    console.error("Consultancy create error:", e);
-    res.status(500).json({ success: false, error: e.message });
+    res.status(e.status || 500).json({ success: false, error: e.message });
   }
 });
 
-// Update / replace image
-router.patch("/:id", isAdmin, uploadSafe(upload.single("image")), async (req, res) => {
+// Update (admin) – image optional/replace
+router.patch("/:id", isAdmin, upload.single("image"), async (req, res) => {
   try {
     const prev = await Consultancy.findById(req.params.id);
     if (!prev) return res.status(404).json({ success: false, error: "Not found" });
@@ -88,44 +86,31 @@ router.patch("/:id", isAdmin, uploadSafe(upload.single("image")), async (req, re
       ...(req.body.order != null ? { order: Number(req.body.order) } : {}),
     };
 
-    if (req.file) {
-      const oldId = extractIdFromUrl(prev.image, "consultancy");
-      if (oldId && mongoose.isValidObjectId(oldId)) {
-        try { await grid("consultancy")?.delete(new mongoose.Types.ObjectId(oldId)); } catch {}
-      }
-      const newId = req.file?.id || req.file?._id;
-      patch.image = idUrl("consultancy", newId);
+    if (req.file?.buffer?.length) {
+      const oldId = idFromUrl(prev.image, "consultancy");
+      if (oldId) await delFromGrid("consultancy", oldId);
+      const newId = await putToGrid("consultancy", req.file);
+      patch.image = fileUrl("consultancy", newId);
     }
 
     const updated = await Consultancy.findByIdAndUpdate(req.params.id, patch, { new: true });
     res.json({ success: true, item: updated });
   } catch (e) {
-    console.error("Consultancy update error:", e);
-    res.status(500).json({ success: false, error: e.message });
+    res.status(e.status || 500).json({ success: false, error: e.message });
   }
 });
 
-// Delete
+// Delete (admin)
 router.delete("/:id", isAdmin, async (req, res) => {
   try {
     const doc = await Consultancy.findByIdAndDelete(req.params.id);
     if (!doc) return res.status(404).json({ success: false, error: "Not found" });
-
-    const oldId = extractIdFromUrl(doc.image, "consultancy");
-    if (oldId && mongoose.isValidObjectId(oldId)) {
-      try { await grid("consultancy")?.delete(new mongoose.Types.ObjectId(oldId)); } catch {}
-    }
+    const fid = idFromUrl(doc.image, "consultancy");
+    if (fid) await delFromGrid("consultancy", fid);
     res.json({ success: true, removed: doc });
   } catch (e) {
-    console.error("Consultancy delete error:", e);
     res.status(500).json({ success: false, error: e.message });
   }
-});
-
-// Errors
-router.use((err, _req, res, _next) => {
-  console.error("Consultancy route error:", err);
-  res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
 });
 
 export default router;
