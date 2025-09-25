@@ -3,8 +3,8 @@ import express from "express";
 import multer from "multer";
 import mongoose from "mongoose";
 import { GridFsStorage } from "multer-gridfs-storage";
-import Banner from "../models/Banner.js";
 import { isAdmin } from "./utils.js";
+import Banner from "../models/Banner.js"; // your existing model
 
 const router = express.Router();
 
@@ -30,7 +30,7 @@ const uploadSafe = (mw) => (req, res, next) =>
       : next()
   );
 
-/* storage */
+/* GridFS storage -> bucket: "banners" */
 const storage = new GridFsStorage({
   url: process.env.MONGO_URI,
   file: (_req, file) => {
@@ -43,46 +43,55 @@ const storage = new GridFsStorage({
   },
 });
 const upload = multer({ storage });
-const uploadFile = uploadSafe(upload.single("file"));
+const uploadFile = uploadSafe(upload.single("file")); // admin dashboard uses "file"
 
-/* list */
+/* Routes */
+
+// List (public)
 router.get("/", async (_req, res) => {
   try {
     const items = await Banner.find({}).sort({ createdAt: -1 }).lean();
-    res.json({ success: true, banners: items });
+    res.json({ success: true, items, banners: items });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
 });
 
-/* create */
+// Create (admin)
 router.post("/", isAdmin, uploadFile, async (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ success: false, error: "File required" });
-    const mime = req.file?.metadata?.mime || "application/octet-stream";
+    if (!req.file?.id) {
+      return res.status(400).json({ success: false, error: "File required" });
+    }
     const url = `/api/files/banners/${String(req.file.id)}`;
-    const item = await Banner.create({
-      title: (req.body.title || "").trim(),
-      type: mime.startsWith("video") ? "video" : "image",
-      url,
-    });
+    const type = (req.file.mimetype || "").startsWith("video") ? "video" : "image";
+    const title = req.body.title || "";
+    const item = await Banner.create({ title, type, url });
     res.json({ success: true, item });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
 });
 
-/* delete */
+// Delete (admin)
 router.delete("/:id", isAdmin, async (req, res) => {
   try {
     const doc = await Banner.findByIdAndDelete(req.params.id);
     if (!doc) return res.status(404).json({ success: false, error: "Not found" });
-    const oldId = extractIdFromUrl(doc.url, "banners");
-    if (oldId) await deleteFromGrid("banners", oldId);
+
+    const fileId = extractIdFromUrl(doc.url, "banners");
+    if (fileId) await deleteFromGrid("banners", fileId);
+
     res.json({ success: true, removed: doc });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
+});
+
+// Error handler
+router.use((err, _req, res, _next) => {
+  console.error("Banners route error:", err);
+  res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
 });
 
 export default router;
