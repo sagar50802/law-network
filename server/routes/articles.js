@@ -1,33 +1,42 @@
 // server/routes/articles.js
 import express from "express";
+import multer from "multer";
+import { GridFsStorage } from "multer-gridfs-storage";
+import mongoose from "mongoose";
+import { fileURLToPath } from "url";
 import path from "path";
 import fsp from "fs/promises";
-import multer from "multer";
-import { fileURLToPath } from "url";
-import { isAdmin, ensureDir } from "./utils.js";
+import { isAdmin } from "./utils.js";
 import Article from "../models/Article.js";
-
-console.log("📦 articles.js loaded");
 
 const router = express.Router();
 
-// ESM __dirname
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-/* ---------- Upload setup ---------- */
-// MUST align with server.js: app.use("/uploads", express.static(path.join(__dirname, "..", "uploads")))
-const UP_DIR = path.join(__dirname, "..", "uploads", "articles");
-ensureDir(UP_DIR);
-
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, UP_DIR),
-  filename: (_req, file, cb) => {
-    const safe = Date.now() + "-" + file.originalname.replace(/\s+/g, "_");
-    cb(null, safe);
-  },
+// GridFS storage (single bucket "uploads")
+const storage = new GridFsStorage({
+  url: process.env.MONGO_URI,
+  file: (_req, file) => ({
+    filename: Date.now() + "-" + file.originalname.replace(/\s+/g, "_"),
+    bucketName: "uploads",
+    metadata: { folder: "articles", mime: file.mimetype, original: file.originalname },
+  }),
 });
 const upload = multer({ storage });
+
+/* ---------- helpers ---------- */
+function fileUrlFromReq(req) {
+  // multer-gridfs-storage puts GridFS file info on req.file
+  const id = req?.file?.id?.toString?.();
+  return id ? `/api/files/${id}` : "";
+}
+function gridBucket() {
+  const db = mongoose.connection?.db;
+  if (!db) return null;
+  return new mongoose.mongo.GridFSBucket(db, { bucketName: "uploads" });
+}
+function extractIdFromUrl(url = "") {
+  const m = String(url).match(/\/api\/files\/([a-f0-9]{24})/i);
+  return m ? m[1] : null;
+}
 
 /* ---------- Routes ---------- */
 
@@ -49,14 +58,13 @@ router.post("/", isAdmin, upload.single("image"), async (req, res) => {
       return res.status(400).json({ success: false, error: "Title & content required" });
     }
 
-    const rel = req.file ? "/uploads/articles/" + req.file.filename : "";
     const doc = await Article.create({
       title,
       content,
       link: link || "",
-      allowHtml: allowHtml === "true",
-      isFree: isFree === "true",
-      image: rel,
+      allowHtml: String(allowHtml) === "true",
+      isFree: String(isFree) === "true",
+      image: fileUrlFromReq(req), // ✅ GridFS-backed URL
     });
 
     res.json({ success: true, item: doc });
@@ -70,8 +78,17 @@ router.patch("/:id", isAdmin, upload.single("image"), async (req, res) => {
   try {
     const { id } = req.params;
     const patch = { ...req.body };
+
     if (req.file) {
-      patch.image = "/uploads/articles/" + req.file.filename;
+      // delete old grid file if there was one
+      const prev = await Article.findById(id).lean();
+      const oldId = extractIdFromUrl(prev?.image);
+      if (oldId) {
+        try {
+          await gridBucket()?.delete(new mongoose.Types.ObjectId(oldId));
+        } catch {}
+      }
+      patch.image = fileUrlFromReq(req);
     }
 
     const updated = await Article.findByIdAndUpdate(id, patch, { new: true });
@@ -90,10 +107,11 @@ router.delete("/:id", isAdmin, async (req, res) => {
     const doc = await Article.findByIdAndDelete(id);
     if (!doc) return res.status(404).json({ success: false, error: "Not found" });
 
-    if (doc.image?.startsWith("/uploads/articles/")) {
-      const abs = path.join(__dirname, "..", doc.image.replace(/^\//, ""));
-      const safeRoot = path.join(__dirname, "..", "uploads", "articles");
-      if (abs.startsWith(safeRoot)) await fsp.unlink(abs).catch(() => {});
+    const oldId = extractIdFromUrl(doc?.image);
+    if (oldId) {
+      try {
+        await gridBucket()?.delete(new mongoose.Types.ObjectId(oldId));
+      } catch {}
     }
 
     res.json({ success: true, removed: doc });
