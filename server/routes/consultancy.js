@@ -1,3 +1,4 @@
+// server/routes/consultancy.js
 import express from "express";
 import mongoose from "mongoose";
 import multer from "multer";
@@ -7,42 +8,53 @@ import Consultancy from "../models/Consultancy.js";
 
 const router = express.Router();
 
-/* ---------- helpers ---------- */
-const idUrl = (bucket, id) => (id ? `/api/files/${bucket}/${String(id)}` : "");
-const parseFileUrl = (url = "") => {
-  const m = String(url).match(/\/api\/files\/([^/]+)\/([a-f0-9]{24})/i);
-  return m ? { bucket: m[1], id: m[2] } : null;
-};
-const delGrid = async (bucket, id) => {
-  if (!id || !mongoose.isValidObjectId(id)) return;
-  const db = mongoose.connection?.db;
-  if (!db) return;
-  const b = new mongoose.mongo.GridFSBucket(db, { bucketName: bucket });
-  await b.delete(new mongoose.Types.ObjectId(id)).catch(() => {});
-};
-
-/* ---------- GridFS (bucket: consultancy) ---------- */
+/* ---------------- GridFS storage (bucket: consultancy) ---------------- */
 const storage = new GridFsStorage({
   url: process.env.MONGO_URI,
   file: (_req, file) => {
-    const safe = (file.originalname || "file")
+    const safe = String(file?.originalname || "image")
       .replace(/\s+/g, "_")
       .replace(/[^\w.\-]/g, "");
     return {
       filename: `${Date.now()}-${safe}`,
       bucketName: "consultancy",
-      metadata: { mime: file.mimetype || "application/octet-stream", bucket: "consultancy" },
+      metadata: { mime: file?.mimetype || "application/octet-stream" },
     };
   },
 });
 const upload = multer({ storage });
-const maybeUpload = (field) => (req, res, next) => {
-  const ct = req.headers["content-type"] || "";
-  if (ct.startsWith("multipart/form-data")) return upload.single(field)(req, res, next);
-  return next();
-};
+const uploadFields = upload.fields([
+  { name: "image", maxCount: 1 },
+  { name: "file", maxCount: 1 },
+]);
 
-/* ---------- Routes ---------- */
+/* ---------------- helpers ---------------- */
+function bucket() {
+  const db = mongoose.connection?.db;
+  if (!db) return null;
+  return new mongoose.mongo.GridFSBucket(db, { bucketName: "consultancy" });
+}
+function pickUploaded(req) {
+  const f = req.files?.image?.[0] || req.files?.file?.[0] || null;
+  if (!f) return { fileId: null, url: "" };
+  const fileId = f.id || f._id;
+  return {
+    fileId,
+    url: fileId ? `/api/files/consultancy/${String(fileId)}` : "",
+  };
+}
+function extractIdFromUrl(url = "") {
+  const m = String(url).match(/\/api\/files\/([^/]+)\/([a-f0-9]{24})/i);
+  return m ? { bucket: m[1], id: m[2] } : null;
+}
+async function deleteGrid(id) {
+  if (!id || !mongoose.isValidObjectId(id)) return;
+  const b = bucket();
+  if (!b) return;
+  await b.delete(new mongoose.Types.ObjectId(id)).catch(() => {});
+}
+
+/* ---------------- routes ---------------- */
 
 // List (public)
 router.get("/", async (_req, res) => {
@@ -50,36 +62,36 @@ router.get("/", async (_req, res) => {
     const items = await Consultancy.find({}).sort({ order: 1, createdAt: -1 }).lean();
     res.json({ success: true, items });
   } catch (e) {
-    console.error("Consultancy list:", e);
+    console.error("Consultancy list error:", e);
     res.status(500).json({ success: false, error: e.message });
   }
 });
 
 // Create (admin)
-router.post("/", isAdmin, maybeUpload("image"), async (req, res) => {
+router.post("/", isAdmin, uploadFields, async (req, res) => {
   try {
     const { title, subtitle = "", intro = "", order = 0 } = req.body;
     if (!title) return res.status(400).json({ success: false, error: "Title required" });
-    const fid = req.file?.id || req.file?._id;
-    if (!fid) return res.status(400).json({ success: false, error: "Image required" });
 
-    const image = idUrl("consultancy", fid);
+    const { url } = pickUploaded(req);
+    if (!url) return res.status(400).json({ success: false, error: "Image required" });
+
     const item = await Consultancy.create({
       title,
       subtitle,
       intro,
       order: Number(order || 0),
-      image,
+      image: url,
     });
     res.json({ success: true, item });
   } catch (e) {
-    console.error("Consultancy create:", e);
+    console.error("Consultancy create error:", e);
     res.status(500).json({ success: false, error: e.message });
   }
 });
 
 // Update (admin)
-router.patch("/:id", isAdmin, maybeUpload("image"), async (req, res) => {
+router.patch("/:id", isAdmin, uploadFields, async (req, res) => {
   try {
     const { id } = req.params;
     const prev = await Consultancy.findById(id);
@@ -92,16 +104,17 @@ router.patch("/:id", isAdmin, maybeUpload("image"), async (req, res) => {
       ...(req.body.order != null ? { order: Number(req.body.order) } : {}),
     };
 
-    if (req.file) {
-      const p = parseFileUrl(prev.image);
-      if (p?.id) await delGrid(p.bucket || "consultancy", p.id);
-      patch.image = idUrl("consultancy", req.file.id || req.file._id);
+    const uploaded = pickUploaded(req);
+    if (uploaded.fileId) {
+      const old = extractIdFromUrl(prev.image);
+      if (old?.bucket === "consultancy") await deleteGrid(old.id);
+      patch.image = uploaded.url;
     }
 
-    const item = await Consultancy.findByIdAndUpdate(id, patch, { new: true });
-    res.json({ success: true, item });
+    const updated = await Consultancy.findByIdAndUpdate(id, patch, { new: true });
+    res.json({ success: true, item: updated });
   } catch (e) {
-    console.error("Consultancy update:", e);
+    console.error("Consultancy update error:", e);
     res.status(500).json({ success: false, error: e.message });
   }
 });
@@ -112,17 +125,17 @@ router.delete("/:id", isAdmin, async (req, res) => {
     const doc = await Consultancy.findByIdAndDelete(req.params.id);
     if (!doc) return res.status(404).json({ success: false, error: "Not found" });
 
-    const p = parseFileUrl(doc.image);
-    if (p?.id) await delGrid(p.bucket || "consultancy", p.id);
+    const old = extractIdFromUrl(doc.image);
+    if (old?.bucket === "consultancy") await deleteGrid(old.id);
 
     res.json({ success: true, removed: doc });
   } catch (e) {
-    console.error("Consultancy delete:", e);
+    console.error("Consultancy delete error:", e);
     res.status(500).json({ success: false, error: e.message });
   }
 });
 
-// Error handler
+// Safety net
 router.use((err, _req, res, _next) => {
   console.error("Consultancy route error:", err);
   res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
