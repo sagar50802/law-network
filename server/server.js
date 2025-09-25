@@ -1,3 +1,4 @@
+// server/server.js
 import "dotenv/config";
 import express from "express";
 import mongoose from "mongoose";
@@ -40,24 +41,21 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.options("*", cors(corsOptions));
 
-// Always attach CORS headers even on errors/404 (helps browsers)
+// Always attach CORS headers even on errors/404
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (origin && ALLOWED_ORIGINS.includes(origin)) {
     res.header("Access-Control-Allow-Origin", origin);
     res.header("Vary", "Origin");
     res.header("Access-Control-Allow-Credentials", "true");
-    res.header(
-      "Access-Control-Allow-Headers",
-      "Content-Type, Authorization, X-Owner-Key, x-owner-key"
-    );
+    res.header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Owner-Key, x-owner-key");
     res.header("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
   }
   if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
 });
 
-// Tiny log (helps confirm the app is running)
+// Tiny log
 app.use((req, _res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
   next();
@@ -88,18 +86,14 @@ console.log("✅ Mounted: /api/banners");
 
 // Debug probes
 app.get("/api/ping", (_req, res) => res.json({ ok: true, ts: Date.now() }));
-app.get("/api/_routes_check", (_req, res) =>
-  res.json({ ok: true, hasArticles: true, hasBanners: true })
-);
+app.get("/api/_routes_check", (_req, res) => res.json({ ok: true, hasArticles: true, hasBanners: true }));
 
 // Root
 app.get("/", (_req, res) => res.json({ ok: true, root: true }));
 
 // ---- 404 ----
 app.use((req, res) => {
-  res
-    .status(404)
-    .json({ success: false, message: `Not Found: ${req.method} ${req.originalUrl}` });
+  res.status(404).json({ success: false, message: `Not Found: ${req.method} ${req.originalUrl}` });
 });
 
 // ---- Error handler ----
@@ -108,7 +102,7 @@ app.use((err, _req, res, _next) => {
   res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
 });
 
-// ---- Start server FIRST so it serves JSON even if DB is down ----
+// ---- Start server FIRST ----
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
 
 // ---- Connect Mongo (do not exit on failure) ----
