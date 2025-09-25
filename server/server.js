@@ -69,9 +69,12 @@ app.use((req, _res, next) => {
   const full = path.join(__dirname, dir);
   if (!fs.existsSync(full)) fs.mkdirSync(full, { recursive: true });
 });
-app.use("/uploads", express.static(path.join(__dirname, "uploads"), {
-  setHeaders: (res) => res.setHeader("Access-Control-Allow-Origin", CLIENT_URL),
-}));
+app.use(
+  "/uploads",
+  express.static(path.join(__dirname, "uploads"), {
+    setHeaders: (res) => res.setHeader("Access-Control-Allow-Origin", CLIENT_URL),
+  })
+);
 
 // routes
 import filesRoutes from "./routes/files.js";
@@ -80,8 +83,9 @@ import bannerRoutes from "./routes/banners.js";
 import consultancyRoutes from "./routes/consultancy.js";
 import newsRoutes from "./routes/news.js";
 
-// PDF GridFS route is CommonJS in your repo; require() it:
-const pdfGridfsRoutes = require("./routes/gridfs.js");
+// ⚠️ IMPORTANT: gridfs.js may be CJS *or* ESM in your repo. Normalize it:
+const pdfGridfsModule = require("./routes/gridfs.js");
+const pdfGridfsRoutes = pdfGridfsModule.default || pdfGridfsModule;
 
 app.use("/api/files", filesRoutes);
 app.use("/api/articles", articleRoutes);
@@ -95,7 +99,15 @@ console.log("✅ Mounted: /api/files /api/articles /api/banners /api/consultancy
 // probes
 app.get("/api/ping", (_req, res) => res.json({ ok: true, ts: Date.now() }));
 app.get("/api/_routes_check", (_req, res) =>
-  res.json({ ok: true, hasFiles: true, hasArticles: true, hasBanners: true, hasConsultancy: true, hasNews: true, hasPDFs: true })
+  res.json({
+    ok: true,
+    hasFiles: true,
+    hasArticles: true,
+    hasBanners: true,
+    hasConsultancy: true,
+    hasNews: true,
+    hasPDFs: true,
+  })
 );
 
 // root
