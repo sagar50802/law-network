@@ -1,11 +1,12 @@
 // server/routes/consultancy.js
 import express from "express";
 import path from "path";
+import fs from "fs";
 import fsp from "fs/promises";
 import multer from "multer";
+import mongoose from "mongoose";
 import { fileURLToPath } from "url";
-import { isAdmin, ensureDir } from "./utils.js";
-import Consultancy from "../models/Consultancy.js";
+import { isAdmin } from "./utils.js";
 
 const router = express.Router();
 
@@ -13,9 +14,26 @@ const router = express.Router();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+/* ---------- Mongoose Model ---------- */
+const Consultancy =
+  mongoose.models.Consultancy ||
+  mongoose.model(
+    "Consultancy",
+    new mongoose.Schema(
+      {
+        title: { type: String, required: true },
+        subtitle: { type: String, default: "" },
+        intro: { type: String, default: "" },
+        image: { type: String, required: true }, // /uploads/consultancy/filename.jpg
+        order: { type: Number, default: 0 },
+      },
+      { timestamps: true }
+    )
+  );
+
 /* ---------- Upload setup ---------- */
 const UP_DIR = path.join(__dirname, "..", "uploads", "consultancy");
-ensureDir(UP_DIR);
+if (!fs.existsSync(UP_DIR)) fs.mkdirSync(UP_DIR, { recursive: true });
 
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, UP_DIR),
@@ -53,7 +71,6 @@ router.post("/", isAdmin, upload.single("image"), async (req, res) => {
       order: Number(order || 0),
       image: rel,
     });
-
     res.json({ success: true, item: doc });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
@@ -103,9 +120,7 @@ router.delete("/:id", isAdmin, async (req, res) => {
 /* ---------- Error handler ---------- */
 router.use((err, _req, res, _next) => {
   console.error("Consultancy route error:", err);
-  res
-    .status(err.status || 500)
-    .json({ success: false, message: err.message || "Server error" });
+  res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
 });
 
 export default router;
