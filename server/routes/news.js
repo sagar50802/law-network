@@ -1,163 +1,93 @@
 // server/routes/news.js
 import express from "express";
-import path from "path";
-import fs from "fs";
-import fsp from "fs/promises";
 import multer from "multer";
 import mongoose from "mongoose";
-import { fileURLToPath } from "url";
+import { GridFsStorage } from "multer-gridfs-storage";
 import { isAdmin } from "./utils.js";
+import NewsItem from "../models/NewsItem.js";
 
 const router = express.Router();
 
-// Resolve __dirname in ESM
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-/* ----------------------- Model ----------------------- */
-const News =
-  mongoose.models.News ||
-  mongoose.model(
-    "News",
-    new mongoose.Schema(
-      {
-        title: { type: String, required: true },
-        link: { type: String, default: "" },
-        image: { type: String, default: "" }, // "/uploads/news/filename.jpg"
-        order: { type: Number, default: 0 },
-        publishedAt: { type: Date, default: Date.now },
-      },
-      { timestamps: true }
-    )
+/* helpers */
+function extractIdFromUrl(url = "", expectedBucket) {
+  const m = String(url).match(/^\/api\/files\/([^/]+)\/([a-f0-9]{24})$/i);
+  if (!m) return null;
+  const [, b, id] = m;
+  if (expectedBucket && b !== expectedBucket) return null;
+  return id;
+}
+async function deleteFromGrid(bucket, id) {
+  if (!id) return;
+  const db = mongoose.connection?.db;
+  if (!db) return;
+  const b = new mongoose.mongo.GridFSBucket(db, { bucketName: bucket });
+  await b.delete(new mongoose.Types.ObjectId(id)).catch(() => {});
+}
+const uploadSafe = (mw) => (req, res, next) =>
+  mw(req, res, (err) =>
+    err
+      ? res.status(400).json({ success: false, error: err.message || "Upload failed" })
+      : next()
   );
 
-/* --------------------- Upload setup ------------------- */
-const UP_DIR = path.join(__dirname, "..", "uploads", "news");
-fs.mkdirSync(UP_DIR, { recursive: true });
-
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, UP_DIR),
-  filename: (_req, file, cb) => {
-    const safe =
-      Date.now() + "-" + (file.originalname || "file").replace(/\s+/g, "_");
-    cb(null, safe);
+/* GridFS storage -> bucket: "news" */
+const storage = new GridFsStorage({
+  url: process.env.MONGO_URI,
+  file: (_req, file) => {
+    const safe = (file.originalname || "file").replace(/\s+/g, "_").replace(/[^\w.\-]/g, "");
+    return {
+      filename: `${Date.now()}-${safe}`,
+      bucketName: "news",
+      metadata: { mime: file.mimetype || "application/octet-stream", bucket: "news" },
+    };
   },
 });
 const upload = multer({ storage });
+const uploadImage = uploadSafe(upload.single("image"));
 
-/* ------------------------ GET list -------------------- */
+/* Routes */
+
+// List
 router.get("/", async (_req, res) => {
   try {
-    const docs = await News.find({}).sort({ order: 1, createdAt: -1 });
-    const news = docs.map((d) => ({
-      id: d._id.toString(),
-      title: d.title,
-      link: d.link,
-      image: d.image,
-      order: d.order,
-      createdAt: d.createdAt,
-      publishedAt: d.publishedAt,
-    }));
-    res.json({ success: true, news });
+    const items = await NewsItem.find({}).sort({ createdAt: -1 }).lean();
+    res.json({ success: true, items, news: items });
   } catch (e) {
-    console.error("GET /news error:", e);
     res.status(500).json({ success: false, error: e.message });
   }
 });
 
-/* ------------------------ CREATE ---------------------- */
-router.post("/", isAdmin, upload.single("image"), async (req, res) => {
+// Create
+router.post("/", isAdmin, uploadImage, async (req, res) => {
   try {
-    const { title, link, order } = req.body;
-    if (!title)
-      return res.status(400).json({ success: false, error: "Title required" });
-
-    const relImage = req.file ? "/uploads/news/" + req.file.filename : "";
-    const doc = await News.create({
-      title: title.trim(),
-      link: (link || "").trim(),
-      image: relImage,
-      order: Number(order || 0),
-    });
-
-    res.json({
-      success: true,
-      item: {
-        id: doc._id.toString(),
-        title: doc.title,
-        link: doc.link,
-        image: doc.image,
-        order: doc.order,
-        createdAt: doc.createdAt,
-        publishedAt: doc.publishedAt,
-      },
-    });
+    const { title = "", link = "" } = req.body;
+    const image = req.file?.id ? `/api/files/news/${String(req.file.id)}` : "";
+    const item = await NewsItem.create({ title, link, image });
+    res.json({ success: true, item });
   } catch (e) {
-    console.error("POST /news error:", e);
     res.status(500).json({ success: false, error: e.message });
   }
 });
 
-/* --------------------- UPDATE (PATCH) ----------------- */
-router.patch("/:id", isAdmin, upload.single("image"), async (req, res) => {
-  try {
-    const { id } = req.params;
-    const patch = {};
-    if (req.body.title != null) patch.title = String(req.body.title).trim();
-    if (req.body.link != null) patch.link = String(req.body.link).trim();
-    if (req.body.order != null) patch.order = Number(req.body.order);
-    if (req.file) patch.image = "/uploads/news/" + req.file.filename;
-
-    const updated = await News.findByIdAndUpdate(id, patch, { new: true });
-    if (!updated)
-      return res.status(404).json({ success: false, error: "Not found" });
-
-    res.json({
-      success: true,
-      item: {
-        id: updated._id.toString(),
-        title: updated.title,
-        link: updated.link,
-        image: updated.image,
-        order: updated.order,
-        createdAt: updated.createdAt,
-        publishedAt: updated.publishedAt,
-      },
-    });
-  } catch (e) {
-    console.error("PATCH /news error:", e);
-    res.status(500).json({ success: false, error: e.message });
-  }
-});
-
-/* ----------------------- DELETE ----------------------- */
+// Delete
 router.delete("/:id", isAdmin, async (req, res) => {
   try {
-    const { id } = req.params;
-    const doc = await News.findByIdAndDelete(id);
-    if (!doc)
-      return res.status(404).json({ success: false, error: "Not found" });
+    const doc = await NewsItem.findByIdAndDelete(req.params.id);
+    if (!doc) return res.status(404).json({ success: false, error: "Not found" });
 
-    if (doc.image && doc.image.startsWith("/uploads/news/")) {
-      const abs = path.join(__dirname, "..", doc.image.replace(/^\//, ""));
-      const safeRoot = path.join(__dirname, "..", "uploads", "news");
-      if (abs.startsWith(safeRoot)) await fsp.unlink(abs).catch(() => {});
-    }
+    const fileId = extractIdFromUrl(doc.image, "news");
+    if (fileId) await deleteFromGrid("news", fileId);
 
     res.json({ success: true, removed: doc });
   } catch (e) {
-    console.error("DELETE /news error:", e);
     res.status(500).json({ success: false, error: e.message });
   }
 });
 
-/* ------------------- Error handler -------------------- */
+// Error handler
 router.use((err, _req, res, _next) => {
   console.error("News route error:", err);
-  res.status(err.status || 500).json({
-    success: false,
-    message: err.message || "Server error",
-  });
+  res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
 });
 
 export default router;
