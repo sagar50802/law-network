@@ -1,3 +1,4 @@
+// server/server.js
 import "dotenv/config";
 import express from "express";
 import mongoose from "mongoose";
@@ -5,20 +6,23 @@ import cors from "cors";
 import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
+import { createRequire } from "module";
 
+const require = createRequire(import.meta.url);
 const app = express();
+
 const PORT = process.env.PORT || 5000;
 const CLIENT_URL = process.env.CLIENT_URL || "https://law-network-client.onrender.com";
 
-// ---- ESM __dirname ----
+// __dirname for ESM
 const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const __dirname  = path.dirname(__filename);
 
-// ---- Body / proxy ----
+// Body / proxy
 app.set("trust proxy", 1);
 app.use(express.json({ limit: "10mb" }));
 
-// ---- CORS (global) ----
+/* ---------- CORS (global) ---------- */
 const ALLOWED_ORIGINS = [
   CLIENT_URL,
   "https://law-network.onrender.com",
@@ -28,19 +32,19 @@ const ALLOWED_ORIGINS = [
 
 const corsOptions = {
   origin(origin, cb) {
-    if (!origin) return cb(null, true);
+    if (!origin) return cb(null, true);               // server-to-server
     if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
-    cb(new Error("CORS not allowed: " + origin));
+    return cb(new Error("CORS not allowed: " + origin));
   },
   credentials: true,
-  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Owner-Key", "x-owner-key"],
+  methods: ["GET","POST","PUT","PATCH","DELETE","OPTIONS"],
+  allowedHeaders: ["Content-Type","Authorization","X-Owner-Key","x-owner-key"],
   optionsSuccessStatus: 204,
 };
 app.use(cors(corsOptions));
 app.options("*", cors(corsOptions));
 
-// Always attach CORS headers (even on errors/404)
+// Always attach CORS headers (even on 404/errors)
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (origin && ALLOWED_ORIGINS.includes(origin)) {
@@ -56,18 +60,14 @@ app.use((req, res, next) => {
 });
 
 // Tiny log
-app.use((req, _res, next) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
-  next();
-});
+app.use((req, _res, next) => { console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`); next(); });
 
-// ---- Ensure legacy /uploads folders (harmless if unused) ----
-["uploads", "uploads/articles", "uploads/banners", "uploads/consultancy"].forEach((dir) => {
+/* ---------- Keep legacy /uploads public (safe) ---------- */
+["uploads", "uploads/articles", "uploads/banners", "uploads/consultancy"].forEach(dir => {
   const full = path.join(__dirname, dir);
   if (!fs.existsSync(full)) fs.mkdirSync(full, { recursive: true });
 });
 
-// ---- Serve legacy static files (if any) ----
 app.use(
   "/uploads",
   express.static(path.join(__dirname, "uploads"), {
@@ -75,12 +75,22 @@ app.use(
   })
 );
 
-// ---- Routes (GridFS + features) ----
-import filesRoutes from "./routes/files.js";
-import articleRoutes from "./routes/articles.js";
-import bannerRoutes from "./routes/banners.js";
-import consultancyRoutes from "./routes/consultancy.js";
-import newsRoutes from "./routes/news.js";
+/* ---------- Routes ---------- */
+import filesRoutes from "./routes/files.js";            // GridFS streamer (new)
+import articleRoutes from "./routes/articles.js";      // ESM
+import bannerRoutes from "./routes/banners.js";        // ESM
+import consultancyRoutes from "./routes/consultancy.js"; // ESM
+import newsRoutes from "./routes/news.js";             // ESM
+
+// Your existing PDF GridFS route is CommonJS; load with require to avoid ESM errors
+let pdfGridfsRoutes = null;
+try {
+  pdfGridfsRoutes = require("./routes/gridfs.js");
+  app.use("/api/gridfs", pdfGridfsRoutes);
+  console.log("✅ Mounted: /api/gridfs (PDFs)");
+} catch (e) {
+  console.warn("⚠️ Could not mount /api/gridfs (PDFs):", e.message);
+}
 
 app.use("/api/files", filesRoutes);
 console.log("✅ Mounted: /api/files");
@@ -97,22 +107,13 @@ console.log("✅ Mounted: /api/consultancy");
 app.use("/api/news", newsRoutes);
 console.log("✅ Mounted: /api/news");
 
-// Optional: mount your legacy PDF GridFS router if present (CommonJS or ESM)
-try {
-  const mod = await import("./routes/gridfs.js");
-  app.use("/api/gridfs", mod.default || mod);
-  console.log("✅ Mounted: /api/gridfs (PDFs)");
-} catch (e) {
-  console.warn("ℹ️ Skipping /api/gridfs (PDFs):", e.message);
-}
-
-// Small access probe to stop 404 spam from the client helper
-app.get("/api/access/status", (_req, res) => res.json({ access: false, expiry: 0 }));
+// Stub so client’s access.js stops 404 logging
+app.get("/api/access/status", (_req, res) => res.json({ access: false }));
 
 // Debug probes
 app.get("/api/ping", (_req, res) => res.json({ ok: true, ts: Date.now() }));
 app.get("/api/_routes_check", (_req, res) =>
-  res.json({ ok: true, hasFiles: true, hasArticles: true, hasBanners: true, hasConsultancy: true, hasNews: true })
+  res.json({ ok: true, hasFiles: true, hasArticles: true, hasBanners: true, hasConsultancy: true, hasNews: true, hasPDFs: !!pdfGridfsRoutes })
 );
 
 // Root
@@ -129,13 +130,13 @@ app.use((err, _req, res, _next) => {
   res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
 });
 
-// ---- Start server FIRST ----
+// Start server first (so JSON is served even if DB is cold)
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
 
-// ---- Connect Mongo (do not exit on failure) ----
+/* ---------- Mongo connect ---------- */
 const MONGO_URI = process.env.MONGO_URI;
 if (!MONGO_URI) {
-  console.error("✗ Missing MONGO_URI env var (service will run but DB calls will fail)");
+  console.error("✗ Missing MONGO_URI env var");
 } else {
   mongoose
     .connect(MONGO_URI)
