@@ -12,7 +12,8 @@ const require = createRequire(import.meta.url);
 const app = express();
 
 const PORT = process.env.PORT || 5000;
-const CLIENT_URL = process.env.CLIENT_URL || "https://law-network-client.onrender.com";
+const CLIENT_URL =
+  process.env.CLIENT_URL || "https://law-network-client.onrender.com";
 
 // __dirname
 const __filename = fileURLToPath(import.meta.url);
@@ -91,7 +92,7 @@ import bannerRoutes from "./routes/banners.js";
 import consultancyRoutes from "./routes/consultancy.js";
 import newsRoutes from "./routes/news.js";
 
-// ⚠️ gridfs.js may be CJS or ESM in your repo. Normalize it:
+// gridfs (CJS/ESM normalize)
 const pdfGridfsModule = require("./routes/gridfs.js");
 const pdfGridfsRoutes = pdfGridfsModule.default || pdfGridfsModule;
 
@@ -102,7 +103,7 @@ app.use("/api/consultancy", consultancyRoutes);
 app.use("/api/news", newsRoutes);
 app.use("/api/gridfs", pdfGridfsRoutes);
 
-// ADDED: small stub to stop client’s 404 logs for access status
+// quiet the client’s periodic probe
 app.get("/api/access/status", (_req, res) => res.json({ access: false }));
 
 console.log(
@@ -136,7 +137,9 @@ app.use((req, res) => {
 // error
 app.use((err, _req, res, _next) => {
   console.error("Server error:", err);
-  res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
+  res
+    .status(err.status || 500)
+    .json({ success: false, message: err.message || "Server error" });
 });
 
 // start
@@ -145,7 +148,10 @@ app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
 // mongo
 const MONGO_URI = process.env.MONGO_URI;
 if (!MONGO_URI) {
-  console.error("✗ Missing MONGO_URI env var (service will run but DB calls will fail)`);
+  // ✅ fixed: matching quotes, no stray backtick
+  console.error(
+    "✗ Missing MONGO_URI env var (service will run but DB calls will fail)"
+  );
 } else {
   mongoose
     .connect(MONGO_URI)
