@@ -83,7 +83,7 @@ import bannerRoutes from "./routes/banners.js";
 import consultancyRoutes from "./routes/consultancy.js";
 import newsRoutes from "./routes/news.js";
 
-// ⚠️ IMPORTANT: gridfs.js may be CJS *or* ESM in your repo. Normalize it:
+// ⚠️ gridfs.js may be CJS or ESM in your repo. Normalize it:
 const pdfGridfsModule = require("./routes/gridfs.js");
 const pdfGridfsRoutes = pdfGridfsModule.default || pdfGridfsModule;
 
@@ -93,6 +93,9 @@ app.use("/api/banners", bannerRoutes);
 app.use("/api/consultancy", consultancyRoutes);
 app.use("/api/news", newsRoutes);
 app.use("/api/gridfs", pdfGridfsRoutes);
+
+// ADDED: small stub to stop client’s 404 logs for access status
+app.get("/api/access/status", (_req, res) => res.json({ access: false }));
 
 console.log("✅ Mounted: /api/files /api/articles /api/banners /api/consultancy /api/news /api/gridfs");
 
