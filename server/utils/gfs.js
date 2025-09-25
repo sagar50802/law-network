@@ -2,85 +2,54 @@
 import multer from "multer";
 import { GridFsStorage } from "multer-gridfs-storage";
 import mongoose from "mongoose";
-import { ObjectId } from "mongodb";
 
-/** Create a Multer middleware that stores into GridFS bucket */
-export function gridUpload(bucketName, fieldName = "file") {
+/** Create a Multer middleware that stores into GridFS (per bucket). */
+export function gridUpload(bucket, fieldName = "file") {
   const storage = new GridFsStorage({
     url: process.env.MONGO_URI,
-    file: (_req, file) => ({
-      filename:
-        Date.now() + "-" + String(file.originalname || "file").replace(/\s+/g, "_"),
-      bucketName,
-      metadata: {
-        bucket: bucketName,
-        mime: file.mimetype || "",
-        original: file.originalname || "",
-      },
-      contentType: file.mimetype || undefined,
-    }),
+    file: (_req, file) => {
+      const safe = (file.originalname || "file")
+        .replace(/\s+/g, "_")
+        .replace(/[^\w.\-]/g, "");
+      return {
+        filename: `${Date.now()}-${safe}`,
+        bucketName: bucket,
+        metadata: { mime: file.mimetype || "application/octet-stream", bucket },
+      };
+    },
   });
-  return multer({ storage }).single(fieldName);
+  const uploader = multer({ storage }).single(fieldName);
+  return uploader;
 }
 
-/** Delete a GridFS file by bucket + id */
-export async function deleteFile(bucketName, id) {
+/** Wrap upload to return JSON errors instead of crashing the process. */
+export const uploadSafe = (mw) => (req, res, next) => {
+  mw(req, res, (err) => {
+    if (err) {
+      console.error("Upload error:", err);
+      return res
+        .status(400)
+        .json({ success: false, error: err.message || "Upload failed" });
+    }
+    next();
+  });
+};
+
+/** Delete a GridFS file by ObjectId string. */
+export async function deleteFile(bucket, id) {
+  if (!id) return;
   const db = mongoose.connection?.db;
   if (!db) return;
-  const _id = typeof id === "string" ? new ObjectId(id) : id;
-  try {
-    const bucket = new mongoose.mongo.GridFSBucket(db, { bucketName });
-    await bucket.delete(_id);
-  } catch (e) {
-    // ignore
-  }
+  const bucketApi = new mongoose.mongo.GridFSBucket(db, { bucketName: bucket });
+  await bucketApi.delete(new mongoose.Types.ObjectId(id)).catch(() => {});
 }
 
-/** Pull ObjectId from /api/files/:bucket/:id URL */
-export function extractIdFromUrl(url = "", bucket) {
-  const re = bucket
-    ? new RegExp(`/api/files/${bucket}/([a-f0-9]{24})`, "i")
-    : /\/api\/files\/[a-z0-9_-]+\/([a-f0-9]{24})/i;
+/** Extract ObjectId from `/api/files/:bucket/:id` */
+export function extractIdFromUrl(url = "", expectedBucket) {
+  const re = /^\/api\/files\/([^/]+)\/([a-f0-9]{24})$/i;
   const m = String(url).match(re);
-  return m ? m[1] : null;
+  if (!m) return null;
+  const [, bucket, id] = m;
+  if (expectedBucket && bucket !== expectedBucket) return null;
+  return id;
 }
-
-/** Stream a GridFS file to the response */
-export async function streamFile(bucketName, id, res) {
-  const db = mongoose.connection?.db;
-  if (!db) return res.status(503).json({ success: false, error: "DB not connected" });
-
-  let _id;
-  try {
-    _id = new ObjectId(id);
-  } catch {
-    return res.status(400).json({ success: false, error: "Bad id" });
-  }
-
-  const filesCol = db.collection(`${bucketName}.files`);
-  const doc = await filesCol.findOne({ _id });
-  if (!doc) return res.status(404).json({ success: false, error: "Not found" });
-
-  if (doc.contentType) res.setHeader("Content-Type", doc.contentType);
-  res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
-
-  const bucket = new mongoose.mongo.GridFSBucket(db, { bucketName });
-  bucket
-    .openDownloadStream(_id)
-    .on("error", () => res.status(404).end())
-    .pipe(res);
-}
-
-/** Wrap Multer so errors return JSON instead of crashing */
-export const uploadSafe =
-  (mw) =>
-  (req, res, next) =>
-    mw(req, res, (err) => {
-      if (err) {
-        console.error("Multer/GridFS error:", err);
-        return res
-          .status(400)
-          .json({ success: false, error: err.message || "Upload failed" });
-      }
-      next();
-    });
