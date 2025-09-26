@@ -32,7 +32,7 @@ const ALLOWED_ORIGINS = [
 ];
 const corsOptions = {
   origin(origin, cb) {
-    if (!origin) return cb(null, true);
+    if (!origin) return cb(null, true); // server-to-server
     if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
     return cb(new Error("CORS not allowed: " + origin));
   },
@@ -68,6 +68,16 @@ app.use((req, res, next) => {
 // tiny log
 app.use((req, _res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
+  next();
+});
+
+// --- fix accidental double /api (POST-safe via 308) ---
+app.use((req, res, next) => {
+  if (req.originalUrl.startsWith("/api/api/")) {
+    const fixed = req.originalUrl.replace("/api/api/", "/api/");
+    console.log("↪️  rewriting", req.originalUrl, "→", fixed);
+    return res.redirect(308, fixed); // preserves method & body
+  }
   next();
 });
 
@@ -148,10 +158,7 @@ app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
 // mongo
 const MONGO_URI = process.env.MONGO_URI;
 if (!MONGO_URI) {
-  // ✅ fixed: matching quotes, no stray backtick
-  console.error(
-    "✗ Missing MONGO_URI env var (service will run but DB calls will fail)"
-  );
+  console.error("✗ Missing MONGO_URI env var (service will run but DB calls will fail)");
 } else {
   mongoose
     .connect(MONGO_URI)
