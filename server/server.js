@@ -1,4 +1,3 @@
-// server/server.js
 import "dotenv/config";
 import express from "express";
 import mongoose from "mongoose";
@@ -64,6 +63,16 @@ app.use((req, _res, next) => {
   next();
 });
 
+// --- fix accidental double /api by rewriting the URL (no redirect, preserves method/body) ---
+app.use((req, _res, next) => {
+  if (req.url.startsWith("/api/api/")) {
+    const before = req.url;
+    req.url = req.url.replace(/^\/api\/api\//, "/api/");
+    console.log("↪️  internally rewrote", before, "→", req.url);
+  }
+  next();
+});
+
 // keep legacy /uploads (safe)
 ["uploads", "uploads/articles", "uploads/banners", "uploads/consultancy"].forEach((dir) => {
   const full = path.join(__dirname, dir);
@@ -94,10 +103,6 @@ app.use("/api/banners", bannerRoutes);
 app.use("/api/consultancy", consultancyRoutes);
 app.use("/api/news", newsRoutes);
 app.use("/api/gridfs", pdfGridfsRoutes);
-
-// 🔁 Aliases so accidental /api/api/* still work (no redirect, no CORS issues)
-app.use("/api/api/news", newsRoutes);                 // POST/GET/DELETE work
-app.get("/api/api/access/status", (_req, res) => res.json({ access: false }));
 
 // Quiet the client’s periodic probe
 app.get("/api/access/status", (_req, res) => res.json({ access: false }));
