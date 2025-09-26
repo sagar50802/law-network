@@ -3,12 +3,12 @@ import express from "express";
 import multer from "multer";
 import mongoose from "mongoose";
 import { isAdmin } from "./utils.js";
-import * as NewsModel from "../models/News.js";
+import * as NewsModel from "../models/News.js"; // resolves to NewsItem.js via alias
 
 const News = NewsModel.default || NewsModel;
 const router = express.Router();
 
-/* helpers */
+/* ---------- helpers ---------- */
 async function makeStorage(bucket) {
   const { GridFsStorage } = await import("multer-gridfs-storage");
   return new GridFsStorage({
@@ -41,44 +41,43 @@ function extractIdFromUrl(url = "", expectedBucket) {
   return id;
 }
 
-/* storage */
+/* ---------- multer storage ---------- */
 const storage = await makeStorage("news");
 const upload = multer({ storage });
 
-/* list (public) */
+/* ---------- routes ---------- */
+
+// List (public)
 router.get("/", async (_req, res) => {
   try {
     const items = await News.find({}).sort({ createdAt: -1 }).lean();
-    res.json({ success: true, news: items });
+    res.json({ success: true, items });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
 });
 
-/* create (admin) */
+// Create (admin)
 router.post("/", isAdmin, upload.single("image"), async (req, res) => {
   try {
-    const { title = "", link = "" } = req.body;
-    if (!title.trim()) return res.status(400).json({ success: false, error: "Title required" });
+    const { title, link = "" } = req.body;
+    if (!String(title || "").trim()) {
+      return res.status(400).json({ success: false, error: "Title required" });
+    }
+    const image = req.file ? idUrl("news", req.file.id) : "";
 
-    const image = req.file ? idUrl("news", req.file.id) : "";  // ✅ real id here
-
-    const doc = await News.create({
-      title: title.trim(),
-      link: link.trim(),
-      image,
-    });
-
+    const doc = await News.create({ title: title.trim(), link: link.trim(), image });
     res.json({ success: true, item: doc });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
 });
 
-/* patch (admin, optional) */
+// Update (admin)
 router.patch("/:id", isAdmin, upload.single("image"), async (req, res) => {
   try {
-    const prev = await News.findById(req.params.id);
+    const { id } = req.params;
+    const prev = await News.findById(id);
     if (!prev) return res.status(404).json({ success: false, error: "Not found" });
 
     const patch = {
@@ -92,17 +91,17 @@ router.patch("/:id", isAdmin, upload.single("image"), async (req, res) => {
         const b = grid("news");
         await b?.delete(new mongoose.Types.ObjectId(oldId)).catch(() => {});
       }
-      patch.image = idUrl("news", req.file.id);               // ✅ real id here
+      patch.image = idUrl("news", req.file.id);
     }
 
-    const updated = await News.findByIdAndUpdate(req.params.id, patch, { new: true });
+    const updated = await News.findByIdAndUpdate(id, patch, { new: true });
     res.json({ success: true, item: updated });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
 });
 
-/* delete (admin) */
+// Delete (admin)
 router.delete("/:id", isAdmin, async (req, res) => {
   try {
     const doc = await News.findByIdAndDelete(req.params.id);
@@ -114,10 +113,16 @@ router.delete("/:id", isAdmin, async (req, res) => {
       await b?.delete(new mongoose.Types.ObjectId(oldId)).catch(() => {});
     }
 
-    res.json({ success: true, removed: doc._id });
+    res.json({ success: true, removed: doc });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
+});
+
+/* ---------- error handler ---------- */
+router.use((err, _req, res, _next) => {
+  console.error("News route error:", err);
+  res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
 });
 
 export default router;
