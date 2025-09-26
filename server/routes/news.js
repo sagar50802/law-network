@@ -1,4 +1,3 @@
-// server/routes/news.js  (ESM)
 import express from "express";
 import multer from "multer";
 import mongoose from "mongoose";
@@ -13,8 +12,8 @@ async function makeStorage(bucket) {
   const { GridFsStorage } = await import("multer-gridfs-storage");
   return new GridFsStorage({
     url: process.env.MONGO_URI,
+    // Always return a file spec; let fileFilter decide if we actually store
     file: (_req, file) => {
-      // Always return a spec; never null/undefined
       const safe = (file?.originalname || "file")
         .replace(/\s+/g, "_")
         .replace(/[^\w.\-]/g, "");
@@ -42,9 +41,16 @@ function extractIdFromUrl(url = "", expectedBucket) {
   return id;
 }
 
-/* ---------- multer storage ---------- */
+/* ---------- multer (skip empty file parts) ---------- */
 const storage = await makeStorage("news");
-const upload = multer({ storage });
+const upload = multer({
+  storage,
+  fileFilter: (_req, file, cb) => {
+    // If user clicked file input but didn't select a file, originalname is empty -> ignore
+    if (!file || !file.originalname) return cb(null, false);
+    cb(null, true);
+  },
+});
 
 /* ---------- routes ---------- */
 
@@ -52,20 +58,22 @@ const upload = multer({ storage });
 router.get("/", async (_req, res) => {
   try {
     const docs = await News.find({}).sort({ createdAt: -1 }).lean();
-    const news = docs.map((d) => ({
-      id: String(d._id),
-      title: d.title || "",
-      link: d.link || "",
-      image: d.image || "",
-      createdAt: d.createdAt,
-    }));
-    res.json({ success: true, news });
+    res.json({
+      success: true,
+      news: docs.map((d) => ({
+        id: String(d._id),
+        title: d.title || "",
+        link: d.link || "",
+        image: d.image || "",
+        createdAt: d.createdAt,
+      })),
+    });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
 });
 
-// Create (admin) — image optional
+// Create (admin) — image optional and SAFE even if no image/empty part
 router.post("/", isAdmin, upload.single("image"), async (req, res) => {
   try {
     const title = String(req.body?.title || "").trim();
@@ -80,11 +88,12 @@ router.post("/", isAdmin, upload.single("image"), async (req, res) => {
       item: { id: String(doc._id), title: doc.title, link: doc.link, image: doc.image, createdAt: doc.createdAt },
     });
   } catch (e) {
+    // Never crash the process
     res.status(500).json({ success: false, error: e.message });
   }
 });
 
-// Delete (admin)
+// Delete (admin) — also remove GridFS file if present
 router.delete("/:id", isAdmin, async (req, res) => {
   try {
     const doc = await News.findByIdAndDelete(req.params.id);
@@ -101,7 +110,7 @@ router.delete("/:id", isAdmin, async (req, res) => {
   }
 });
 
-/* ---------- error handler ---------- */
+// Error guard
 router.use((err, _req, res, _next) => {
   console.error("News route error:", err);
   res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
