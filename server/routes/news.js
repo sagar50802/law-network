@@ -8,13 +8,13 @@ import * as NewsModel from "../models/NewsItem.js";
 const News = NewsModel.default || NewsModel;
 const router = express.Router();
 
-/* ---------- helpers (same pattern you used elsewhere) ---------- */
+/* ---------- helpers ---------- */
 async function makeStorage(bucket) {
   const { GridFsStorage } = await import("multer-gridfs-storage");
   return new GridFsStorage({
     url: process.env.MONGO_URI,
     file: (_req, file) => {
-      // Always return a spec; never return null/undefined
+      // Always return a spec; never null/undefined
       const safe = (file?.originalname || "file")
         .replace(/\s+/g, "_")
         .replace(/[^\w.\-]/g, "");
@@ -52,12 +52,11 @@ const upload = multer({ storage });
 router.get("/", async (_req, res) => {
   try {
     const docs = await News.find({}).sort({ createdAt: -1 }).lean();
-    // keep your client-friendly shape
     const news = docs.map((d) => ({
       id: String(d._id),
       title: d.title || "",
       link: d.link || "",
-      image: d.image || "", // may be /api/files/news/<id> or empty
+      image: d.image || "",
       createdAt: d.createdAt,
     }));
     res.json({ success: true, news });
@@ -66,34 +65,21 @@ router.get("/", async (_req, res) => {
   }
 });
 
-// Create (admin). Works with OR without an uploaded image.
+// Create (admin) — image optional
 router.post("/", isAdmin, upload.single("image"), async (req, res) => {
   try {
-    const { title = "", link = "" } = req.body || {};
-    if (!title.trim()) {
-      return res.status(400).json({ success: false, error: "Title required" });
-    }
+    const title = String(req.body?.title || "").trim();
+    const link = String(req.body?.link || "").trim();
+    if (!title) return res.status(400).json({ success: false, error: "Title required" });
 
     const image = req.file ? idUrl("news", req.file.id) : "";
-
-    const doc = await News.create({
-      title: String(title).trim(),
-      link: String(link || "").trim(),
-      image,
-    });
+    const doc = await News.create({ title, link, image });
 
     res.json({
       success: true,
-      item: {
-        id: String(doc._id),
-        title: doc.title,
-        link: doc.link,
-        image: doc.image,
-        createdAt: doc.createdAt,
-      },
+      item: { id: String(doc._id), title: doc.title, link: doc.link, image: doc.image, createdAt: doc.createdAt },
     });
   } catch (e) {
-    // Never crash; return a clean error
     res.status(500).json({ success: false, error: e.message });
   }
 });
@@ -104,13 +90,11 @@ router.delete("/:id", isAdmin, async (req, res) => {
     const doc = await News.findByIdAndDelete(req.params.id);
     if (!doc) return res.status(404).json({ success: false, error: "Not found" });
 
-    // If it had an image in the news bucket, remove the GridFS file
     const oldId = extractIdFromUrl(doc.image, "news");
     if (oldId) {
       const b = grid("news");
       await b?.delete(new mongoose.Types.ObjectId(oldId)).catch(() => {});
     }
-
     res.json({ success: true, removed: { id: String(doc._id) } });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
