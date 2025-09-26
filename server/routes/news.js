@@ -1,26 +1,27 @@
-// server/routes/news.js (ESM)
+// server/routes/news.js  (ESM)
 import express from "express";
 import multer from "multer";
 import mongoose from "mongoose";
 import { isAdmin } from "./utils.js";
-import * as NewsModel from "../models/News.js"; // resolves to NewsItem.js via alias
+import * as NewsModel from "../models/NewsItem.js";
 
 const News = NewsModel.default || NewsModel;
 const router = express.Router();
 
-/* ---------- helpers ---------- */
+/* ---------- helpers (same pattern you used elsewhere) ---------- */
 async function makeStorage(bucket) {
   const { GridFsStorage } = await import("multer-gridfs-storage");
   return new GridFsStorage({
     url: process.env.MONGO_URI,
     file: (_req, file) => {
-      const safe = (file.originalname || "file")
+      // Always return a spec; never return null/undefined
+      const safe = (file?.originalname || "file")
         .replace(/\s+/g, "_")
         .replace(/[^\w.\-]/g, "");
       return {
         filename: `${Date.now()}-${safe}`,
         bucketName: bucket,
-        metadata: { mime: file.mimetype || "application/octet-stream" },
+        metadata: { mime: file?.mimetype || "application/octet-stream" },
       };
     },
   });
@@ -50,53 +51,49 @@ const upload = multer({ storage });
 // List (public)
 router.get("/", async (_req, res) => {
   try {
-    const items = await News.find({}).sort({ createdAt: -1 }).lean();
-    res.json({ success: true, items });
+    const docs = await News.find({}).sort({ createdAt: -1 }).lean();
+    // keep your client-friendly shape
+    const news = docs.map((d) => ({
+      id: String(d._id),
+      title: d.title || "",
+      link: d.link || "",
+      image: d.image || "", // may be /api/files/news/<id> or empty
+      createdAt: d.createdAt,
+    }));
+    res.json({ success: true, news });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
 });
 
-// Create (admin)
+// Create (admin). Works with OR without an uploaded image.
 router.post("/", isAdmin, upload.single("image"), async (req, res) => {
   try {
-    const { title, link = "" } = req.body;
-    if (!String(title || "").trim()) {
+    const { title = "", link = "" } = req.body || {};
+    if (!title.trim()) {
       return res.status(400).json({ success: false, error: "Title required" });
     }
+
     const image = req.file ? idUrl("news", req.file.id) : "";
 
-    const doc = await News.create({ title: title.trim(), link: link.trim(), image });
-    res.json({ success: true, item: doc });
+    const doc = await News.create({
+      title: String(title).trim(),
+      link: String(link || "").trim(),
+      image,
+    });
+
+    res.json({
+      success: true,
+      item: {
+        id: String(doc._id),
+        title: doc.title,
+        link: doc.link,
+        image: doc.image,
+        createdAt: doc.createdAt,
+      },
+    });
   } catch (e) {
-    res.status(500).json({ success: false, error: e.message });
-  }
-});
-
-// Update (admin)
-router.patch("/:id", isAdmin, upload.single("image"), async (req, res) => {
-  try {
-    const { id } = req.params;
-    const prev = await News.findById(id);
-    if (!prev) return res.status(404).json({ success: false, error: "Not found" });
-
-    const patch = {
-      ...(req.body.title != null ? { title: String(req.body.title) } : {}),
-      ...(req.body.link != null ? { link: String(req.body.link) } : {}),
-    };
-
-    if (req.file) {
-      const oldId = extractIdFromUrl(prev.image, "news");
-      if (oldId) {
-        const b = grid("news");
-        await b?.delete(new mongoose.Types.ObjectId(oldId)).catch(() => {});
-      }
-      patch.image = idUrl("news", req.file.id);
-    }
-
-    const updated = await News.findByIdAndUpdate(id, patch, { new: true });
-    res.json({ success: true, item: updated });
-  } catch (e) {
+    // Never crash; return a clean error
     res.status(500).json({ success: false, error: e.message });
   }
 });
@@ -107,13 +104,14 @@ router.delete("/:id", isAdmin, async (req, res) => {
     const doc = await News.findByIdAndDelete(req.params.id);
     if (!doc) return res.status(404).json({ success: false, error: "Not found" });
 
+    // If it had an image in the news bucket, remove the GridFS file
     const oldId = extractIdFromUrl(doc.image, "news");
     if (oldId) {
       const b = grid("news");
       await b?.delete(new mongoose.Types.ObjectId(oldId)).catch(() => {});
     }
 
-    res.json({ success: true, removed: doc });
+    res.json({ success: true, removed: { id: String(doc._id) } });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
