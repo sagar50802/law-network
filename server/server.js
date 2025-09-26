@@ -12,8 +12,7 @@ const require = createRequire(import.meta.url);
 const app = express();
 
 const PORT = process.env.PORT || 5000;
-const CLIENT_URL =
-  process.env.CLIENT_URL || "https://law-network-client.onrender.com";
+const CLIENT_URL = process.env.CLIENT_URL || "https://law-network-client.onrender.com";
 
 // __dirname
 const __filename = fileURLToPath(import.meta.url);
@@ -32,7 +31,7 @@ const ALLOWED_ORIGINS = [
 ];
 const corsOptions = {
   origin(origin, cb) {
-    if (!origin) return cb(null, true); // server-to-server
+    if (!origin) return cb(null, true);
     if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
     return cb(new Error("CORS not allowed: " + origin));
   },
@@ -51,14 +50,8 @@ app.use((req, res, next) => {
     res.header("Access-Control-Allow-Origin", origin);
     res.header("Vary", "Origin");
     res.header("Access-Control-Allow-Credentials", "true");
-    res.header(
-      "Access-Control-Allow-Headers",
-      "Content-Type, Authorization, X-Owner-Key, x-owner-key"
-    );
-    res.header(
-      "Access-Control-Allow-Methods",
-      "GET,POST,PUT,PATCH,DELETE,OPTIONS"
-    );
+    res.header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Owner-Key, x-owner-key");
+    res.header("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
     res.header("Cross-Origin-Resource-Policy", "cross-origin");
   }
   if (req.method === "OPTIONS") return res.sendStatus(204);
@@ -71,23 +64,11 @@ app.use((req, _res, next) => {
   next();
 });
 
-// --- fix accidental double /api (POST-safe via 308) ---
-app.use((req, res, next) => {
-  if (req.originalUrl.startsWith("/api/api/")) {
-    const fixed = req.originalUrl.replace("/api/api/", "/api/");
-    console.log("↪️  rewriting", req.originalUrl, "→", fixed);
-    return res.redirect(308, fixed); // preserves method & body
-  }
-  next();
-});
-
 // keep legacy /uploads (safe)
-["uploads", "uploads/articles", "uploads/banners", "uploads/consultancy"].forEach(
-  (dir) => {
-    const full = path.join(__dirname, dir);
-    if (!fs.existsSync(full)) fs.mkdirSync(full, { recursive: true });
-  }
-);
+["uploads", "uploads/articles", "uploads/banners", "uploads/consultancy"].forEach((dir) => {
+  const full = path.join(__dirname, dir);
+  if (!fs.existsSync(full)) fs.mkdirSync(full, { recursive: true });
+});
 app.use(
   "/uploads",
   express.static(path.join(__dirname, "uploads"), {
@@ -106,6 +87,7 @@ import newsRoutes from "./routes/news.js";
 const pdfGridfsModule = require("./routes/gridfs.js");
 const pdfGridfsRoutes = pdfGridfsModule.default || pdfGridfsModule;
 
+// Normal mounts
 app.use("/api/files", filesRoutes);
 app.use("/api/articles", articleRoutes);
 app.use("/api/banners", bannerRoutes);
@@ -113,12 +95,14 @@ app.use("/api/consultancy", consultancyRoutes);
 app.use("/api/news", newsRoutes);
 app.use("/api/gridfs", pdfGridfsRoutes);
 
-// quiet the client’s periodic probe
+// 🔁 Aliases so accidental /api/api/* still work (no redirect, no CORS issues)
+app.use("/api/api/news", newsRoutes);                 // POST/GET/DELETE work
+app.get("/api/api/access/status", (_req, res) => res.json({ access: false }));
+
+// Quiet the client’s periodic probe
 app.get("/api/access/status", (_req, res) => res.json({ access: false }));
 
-console.log(
-  "✅ Mounted: /api/files /api/articles /api/banners /api/consultancy /api/news /api/gridfs"
-);
+console.log("✅ Mounted: /api/files /api/articles /api/banners /api/consultancy /api/news /api/gridfs");
 
 // probes
 app.get("/api/ping", (_req, res) => res.json({ ok: true, ts: Date.now() }));
@@ -139,17 +123,13 @@ app.get("/", (_req, res) => res.json({ ok: true, root: true }));
 
 // 404
 app.use((req, res) => {
-  res
-    .status(404)
-    .json({ success: false, message: `Not Found: ${req.method} ${req.originalUrl}` });
+  res.status(404).json({ success: false, message: `Not Found: ${req.method} ${req.originalUrl}` });
 });
 
 // error
 app.use((err, _req, res, _next) => {
   console.error("Server error:", err);
-  res
-    .status(err.status || 500)
-    .json({ success: false, message: err.message || "Server error" });
+  res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
 });
 
 // start
