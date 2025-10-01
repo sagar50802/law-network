@@ -93,6 +93,7 @@ import bannerRoutes from "./routes/banners.js";
 import consultancyRoutes from "./routes/consultancy.js";
 import newsRoutes from "./routes/news.js";
 import podcastRoutes from "./routes/podcast.js"; // ⬅️ ADDED
+import submissionsRoutes from "./routes/submissions.js";
 
 // gridfs (CJS/ESM normalize)
 const pdfGridfsModule = require("./routes/gridfs.js");
@@ -110,7 +111,7 @@ app.use("/api/consultancy", consultancyRoutes);
 app.use("/api/news", newsRoutes);
 app.use("/api/gridfs", pdfGridfsRoutes);
 app.use("/api/podcasts", podcastRoutes); // ⬅️ ADDED
-app.use("/api/submissions", submissionsRoutes); // ⬅️ NEW
+app.use("/api/submissions", submissionsRoutes);
 
 // Quiet the client’s periodic probe
 app.get("/api/access/status", (_req, res) => res.json({ access: false }));
