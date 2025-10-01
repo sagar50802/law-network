@@ -1,39 +1,29 @@
 {
-  "name": "server",
+  "name": "law-network-server",
+  "private": true,
   "version": "1.0.0",
-  "type": "module",
+  "description": "Law Network backend",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js"
+    "dev": "node server.js"
   },
   "dependencies": {
-    "@mozilla/readability": "^0.6.0",
-    "bcryptjs": "^3.0.2",
-    "cheerio": "^1.0.0-rc.12",
+    "@mozilla/readability": "0.5.0",
+    "cheerio": "1.0.0-rc.12",
     "cors": "^2.8.5",
-    "dictionary-en": "^4.0.0",
+    "dictionary-en": "3.2.0",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
-    "express-rate-limit": "^8.0.1",
-    "franc": "^6.2.0",
-    "helmet": "^8.1.0",
-    "html-to-text": "^9.0.5",
-    "jsdom": "^26.1.0",
-    "jsonwebtoken": "^9.0.2",
-    "mongodb": "^6.19.0",
-    "mongoose": "^8.18.0",
-    "morgan": "^1.10.1",
-    "multer": "^1.4.2",
-    "multer-gridfs-storage": "^5.0.2",
-    "nspell": "^2.0.1",
-    "pdf-parse": "^1.1.1",
-    "pdfkit": "^0.17.2",
-    "sanitize-html": "^2.17.0",
-    "socket.io": "^4.8.1",
-    "synonyms": "^1.0.1"
-  },
-  "devDependencies": {
-    "nodemon": "^3.1.10"
+    "jsdom": "24.0.0",
+    "mongoose": "^8.6.1",
+    "multer": "^2.0.2",
+    "node-fetch": "^3.3.2",
+    "nspell": "2.3.4",
+    "pdf-parse": "1.1.1",
+    "pdfkit": "0.15.0",
+    "synonyms": "1.0.6",
+    "@aws-sdk/client-s3": "^3.600.0",
+    "nanoid": "^4.0.0"
   }
 }
