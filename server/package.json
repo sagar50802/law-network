@@ -22,7 +22,7 @@
     "nspell": "2.0.0",
     "pdf-parse": "1.1.1",
     "pdfkit": "0.15.0",
-    "synonyms": "1.0.6",
+    "synonyms": "1.0.1",
     "@aws-sdk/client-s3": "^3.600.0",
     "nanoid": "^4.0.0"
   }
