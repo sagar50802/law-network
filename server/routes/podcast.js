@@ -1,76 +1,140 @@
+// server/routes/podcasts.js  ✅ patched
 import express from "express";
 import multer from "multer";
 import path from "path";
-import { ensureDir, isAdmin } from "./utils.js";
+import fs from "fs";
+import mongoose from "mongoose";
+import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import { nanoid } from "nanoid";
+import { isAdmin } from "./utils.js";   // only isAdmin now
 
 const router = express.Router();
 
-/* ---------- Upload folder ---------- */
-const UP_DIR = path.join(process.cwd(), "server", "uploads", "podcasts");
-ensureDir(UP_DIR);
+// ✅ ensureDir inline so no broken import
+function ensureDir(dir) {
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+  } catch (err) {
+    console.error("ensureDir error:", err.message);
+  }
+}
 
-/* ---------- Multer setup ---------- */
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, UP_DIR),
-  filename: (req, file, cb) => cb(null, Date.now() + "-" + file.originalname),
+// --- Models ---
+const PodcastPlaylistSchema = new mongoose.Schema({
+  name: String,
+  items: [
+    {
+      id: String,
+      title: String,
+      artist: String,
+      url: String,
+      locked: { type: Boolean, default: true },
+    },
+  ],
 });
-const upload = multer({ storage });
+const PodcastPlaylist = mongoose.model("PodcastPlaylist", PodcastPlaylistSchema);
 
-/* ---------- In-memory playlists (replace with DB later) ---------- */
-let playlists = [];
+// --- S3 client for R2 ---
+const s3 = new S3Client({
+  region: "auto",
+  endpoint: process.env.R2_ENDPOINT,
+  credentials: {
+    accessKeyId: process.env.R2_ACCESS_KEY_ID,
+    secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
+  },
+});
 
-/* ---------- Routes ---------- */
+// --- Multer ---
+const upload = multer({ storage: multer.memoryStorage() });
 
-// GET all playlists with their items
+// --- GET all playlists (public) ---
 router.get("/", async (req, res) => {
+  const playlists = await PodcastPlaylist.find();
   res.json({ playlists });
 });
 
-// Create a new playlist
+// --- Create playlist (admin) ---
 router.post("/playlists", isAdmin, async (req, res) => {
-  const { name } = req.body;
-  if (!name) return res.status(400).json({ error: "Playlist name is required" });
-
-  const playlist = {
-    id: Date.now().toString(),
-    name,
-    items: [],
-  };
-  playlists.push(playlist);
-  res.json(playlist);
+  try {
+    const { name } = req.body;
+    if (!name) return res.status(400).json({ error: "Name required" });
+    const playlist = await PodcastPlaylist.create({ name, items: [] });
+    res.json({ playlist });
+  } catch (err) {
+    console.error("Podcast create playlist error:", err);
+    res.status(500).json({ error: err.message || "Server error" });
+  }
 });
 
-// Upload audio into a playlist
-router.post("/:playlistId", isAdmin, upload.single("file"), async (req, res) => {
-  const playlist = playlists.find((p) => p.id === req.params.playlistId);
+// --- Upload audio into playlist (admin) ---
+router.post(
+  "/playlists/:pid/items",
+  isAdmin,
+  upload.single("audio"),
+  async (req, res) => {
+    try {
+      const { pid } = req.params;
+      const { title, artist, locked } = req.body;
+
+      if (!req.file) return res.status(400).json({ error: "No audio file uploaded" });
+
+      const ext = req.file.originalname.split(".").pop();
+      const key = `podcasts/${Date.now()}-${nanoid()}.${ext}`;
+
+      await s3.send(
+        new PutObjectCommand({
+          Bucket: process.env.R2_BUCKET || "lawprepx", // your bucket name
+          Key: key,
+          Body: req.file.buffer,
+          ContentType: req.file.mimetype,
+        })
+      );
+
+      const publicUrl = `${process.env.R2_PUBLIC_BASE}/${key}`;
+
+      const playlist = await PodcastPlaylist.findById(pid);
+      if (!playlist) return res.status(404).json({ error: "Playlist not found" });
+
+      const newItem = {
+        id: nanoid(),
+        title: title || "Untitled",
+        artist: artist || "",
+        url: publicUrl,
+        locked: String(locked) === "true",
+      };
+
+      playlist.items.push(newItem);
+      await playlist.save();
+
+      res.json({ success: true, item: newItem });
+    } catch (err) {
+      console.error("Podcast upload error:", err);
+      res.status(500).json({ error: err.message || "Upload failed" });
+    }
+  }
+);
+
+// --- Delete item (admin) ---
+router.delete("/playlists/:pid/items/:iid", isAdmin, async (req, res) => {
+  const { pid, iid } = req.params;
+  const playlist = await PodcastPlaylist.findById(pid);
   if (!playlist) return res.status(404).json({ error: "Playlist not found" });
-
-  // title and optional audio URL from frontend
-  const { title, audioUrl } = req.body;
-
-  const item = {
-    id: Date.now().toString(),
-    title: title || "Untitled",
-    fileUrl: audioUrl || "/uploads/podcasts/" + (req.file?.filename || ""),
-  };
-
-  playlist.items.push(item);
-  res.json(item);
-});
-
-// Delete a playlist completely
-router.delete("/playlists/:playlistId", isAdmin, async (req, res) => {
-  playlists = playlists.filter((p) => p.id !== req.params.playlistId);
+  playlist.items = playlist.items.filter((x) => x.id !== iid);
+  await playlist.save();
   res.json({ success: true });
 });
 
-// Delete an audio item from a playlist
-router.delete("/:playlistId/:itemId", isAdmin, async (req, res) => {
-  const playlist = playlists.find((p) => p.id === req.params.playlistId);
+// --- Toggle lock (admin) ---
+router.patch("/playlists/:pid/items/:iid/lock", isAdmin, async (req, res) => {
+  const { pid, iid } = req.params;
+  const { locked } = req.body;
+  const playlist = await PodcastPlaylist.findById(pid);
   if (!playlist) return res.status(404).json({ error: "Playlist not found" });
-
-  playlist.items = playlist.items.filter((item) => item.id !== req.params.itemId);
-  res.json({ success: true });
+  const item = playlist.items.find((x) => x.id === iid);
+  if (!item) return res.status(404).json({ error: "Item not found" });
+  item.locked = !!locked;
+  await playlist.save();
+  res.json({ success: true, item });
 });
 
 export default router;
