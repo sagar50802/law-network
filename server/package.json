@@ -19,7 +19,7 @@
     "mongoose": "^8.6.1",
     "multer": "^2.0.2",
     "node-fetch": "^3.3.2",
-    "nspell": "2.3.4",
+    "nspell": "2.2.2"
     "pdf-parse": "1.1.1",
     "pdfkit": "0.15.0",
     "synonyms": "1.0.6",
