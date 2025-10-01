@@ -7,7 +7,6 @@ import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
 import { createRequire } from "module";
-
 const require = createRequire(import.meta.url);
 const app = express();
 
@@ -93,9 +92,11 @@ import bannerRoutes from "./routes/banners.js";
 import consultancyRoutes from "./routes/consultancy.js";
 import newsRoutes from "./routes/news.js";
 
-// ✅ ESM imports for new routes
-import podcastRoutes from "./routes/podcast.js";
-import submissionsRoutes from "./routes/submissions.js";
+// ✅ Podcast router (Cloudflare R2)
+import podcastRouter from "./routes/podcast.js";
+
+// ✅ Submissions router (only once)
+import submissionsRouter from "./routes/submissions.js";
 
 // gridfs (CJS/ESM normalize)
 const pdfGridfsModule = require("./routes/gridfs.js");
@@ -109,17 +110,15 @@ app.use("/api/consultancy", consultancyRoutes);
 app.use("/api/news", newsRoutes);
 app.use("/api/gridfs", pdfGridfsRoutes);
 
-// ✅ mount podcasts (API + alias without /api for AdminPodcastEditor.jsx)
-app.use("/api/podcasts", podcastRoutes);
-app.use("/podcasts", podcastRoutes); // alias for AdminPodcastEditor.jsx
+// ✅ mount podcast (single)
+app.use("/api/podcast", podcastRouter);
 
-// ✅ submissions (already ESM)
-app.use("/api/submissions", submissionsRoutes);
+// ✅ submissions (single)
+app.use("/api/submissions", submissionsRouter);
 
-// Quiet the client’s periodic probe
 app.get("/api/access/status", (_req, res) => res.json({ access: false }));
 
-console.log("✅ Mounted: /api/files /api/articles /api/banners /api/consultancy /api/news /api/gridfs /api/podcasts /api/submissions");
+console.log("✅ Mounted: /api/files /api/articles /api/banners /api/consultancy /api/news /api/gridfs /api/podcast /api/submissions");
 
 // probes
 app.get("/api/ping", (_req, res) => res.json({ ok: true, ts: Date.now() }));
