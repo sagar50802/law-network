@@ -1,73 +1,55 @@
 // server/routes/podcast.js
 import express from "express";
 import multer from "multer";
-import mongoose from "mongoose";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { nanoid } from "nanoid";
+import mongoose from "mongoose";
 
 const router = express.Router();
 
-/* --------------------- Mongo Schema --------------------- */
+// --- Models ---
 const PodcastPlaylistSchema = new mongoose.Schema({
-  name: { type: String, required: true },
+  name: String,
   items: [
     {
       id: String,
       title: String,
       artist: String,
-      url: String, // Cloudflare R2 URL
+      url: String,
       locked: { type: Boolean, default: true },
     },
   ],
 });
 
-const PodcastPlaylist =
-  mongoose.models.PodcastPlaylist ||
-  mongoose.model("PodcastPlaylist", PodcastPlaylistSchema);
+const PodcastPlaylist = mongoose.model("PodcastPlaylist", PodcastPlaylistSchema);
 
-/* --------------------- R2 / S3 client --------------------- */
+// --- S3 client for R2 ---
 const s3 = new S3Client({
   region: "auto",
-  endpoint: process.env.R2_ENDPOINT, // eg https://xxxx.r2.cloudflarestorage.com
+  endpoint: process.env.R2_ENDPOINT,
   credentials: {
     accessKeyId: process.env.R2_ACCESS_KEY_ID,
     secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
   },
 });
 
-// your bucket name from Cloudflare R2 (hardcoded or env)
-const BUCKET = process.env.R2_BUCKET || "lawprepx";
-
-/* --------------------- Multer (memory) --------------------- */
+// --- Multer ---
 const upload = multer({ storage: multer.memoryStorage() });
 
-/* --------------------- Routes --------------------- */
-
-// GET all playlists
+// --- GET all playlists ---
 router.get("/", async (req, res) => {
-  try {
-    const playlists = await PodcastPlaylist.find().lean();
-    res.json({ playlists });
-  } catch (err) {
-    console.error("Error fetching playlists:", err);
-    res.status(500).json({ error: "Failed to load playlists" });
-  }
+  const playlists = await PodcastPlaylist.find();
+  res.json({ playlists });
 });
 
-// Create new playlist
+// --- Create playlist ---
 router.post("/playlists", async (req, res) => {
-  try {
-    const { name } = req.body;
-    if (!name) return res.status(400).json({ error: "Missing playlist name" });
-    const playlist = await PodcastPlaylist.create({ name, items: [] });
-    res.json({ playlist });
-  } catch (err) {
-    console.error("Error creating playlist:", err);
-    res.status(500).json({ error: "Failed to create playlist" });
-  }
+  const { name } = req.body;
+  const playlist = await PodcastPlaylist.create({ name, items: [] });
+  res.json({ playlist });
 });
 
-// Upload audio file to R2 and attach metadata
+// --- Upload audio into playlist ---
 router.post(
   "/playlists/:pid/items",
   upload.single("audio"),
@@ -76,27 +58,23 @@ router.post(
       const { pid } = req.params;
       const { title, artist, locked } = req.body;
 
-      if (!req.file)
-        return res.status(400).json({ error: "No audio file uploaded" });
+      if (!req.file) return res.status(400).json({ error: "No audio file uploaded" });
 
-      // create unique key in bucket
       const ext = req.file.originalname.split(".").pop();
       const key = `podcasts/${Date.now()}-${nanoid()}.${ext}`;
 
-      // upload to Cloudflare R2
       await s3.send(
         new PutObjectCommand({
-          Bucket: BUCKET,
+          Bucket: "lawprepx", // your bucket
           Key: key,
           Body: req.file.buffer,
           ContentType: req.file.mimetype,
         })
       );
 
-      // build public URL
       const publicUrl = `${process.env.R2_PUBLIC_BASE}/${key}`;
 
-      // save in MongoDB
+      // Save to Mongo
       const playlist = await PodcastPlaylist.findById(pid);
       if (!playlist) return res.status(404).json({ error: "Playlist not found" });
 
@@ -119,37 +97,27 @@ router.post(
   }
 );
 
-// Delete an audio item from playlist
+// --- Delete item ---
 router.delete("/playlists/:pid/items/:iid", async (req, res) => {
-  try {
-    const { pid, iid } = req.params;
-    const playlist = await PodcastPlaylist.findById(pid);
-    if (!playlist) return res.status(404).json({ error: "Playlist not found" });
-    playlist.items = playlist.items.filter((x) => x.id !== iid);
-    await playlist.save();
-    res.json({ success: true });
-  } catch (err) {
-    console.error("Delete error:", err);
-    res.status(500).json({ error: "Delete failed" });
-  }
+  const { pid, iid } = req.params;
+  const playlist = await PodcastPlaylist.findById(pid);
+  if (!playlist) return res.status(404).json({ error: "Playlist not found" });
+  playlist.items = playlist.items.filter((x) => x.id !== iid);
+  await playlist.save();
+  res.json({ success: true });
 });
 
-// Toggle lock/unlock an item
+// --- Toggle lock ---
 router.patch("/playlists/:pid/items/:iid/lock", async (req, res) => {
-  try {
-    const { pid, iid } = req.params;
-    const { locked } = req.body;
-    const playlist = await PodcastPlaylist.findById(pid);
-    if (!playlist) return res.status(404).json({ error: "Playlist not found" });
-    const item = playlist.items.find((x) => x.id === iid);
-    if (!item) return res.status(404).json({ error: "Item not found" });
-    item.locked = !!locked;
-    await playlist.save();
-    res.json({ success: true, item });
-  } catch (err) {
-    console.error("Lock toggle error:", err);
-    res.status(500).json({ error: "Update failed" });
-  }
+  const { pid, iid } = req.params;
+  const { locked } = req.body;
+  const playlist = await PodcastPlaylist.findById(pid);
+  if (!playlist) return res.status(404).json({ error: "Playlist not found" });
+  const item = playlist.items.find((x) => x.id === iid);
+  if (!item) return res.status(404).json({ error: "Item not found" });
+  item.locked = !!locked;
+  await playlist.save();
+  res.json({ success: true, item });
 });
 
 export default router;
