@@ -1,13 +1,14 @@
 // server/routes/podcast.js
 import express from "express";
 import multer from "multer";
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
 import { nanoid } from "nanoid";
 import mongoose from "mongoose";
+import { isAdmin } from "./utils.js";
 
 const router = express.Router();
 
-// --- Models ---
+/* ---------- Mongo model ---------- */
 const PodcastPlaylistSchema = new mongoose.Schema({
   name: String,
   items: [
@@ -17,13 +18,15 @@ const PodcastPlaylistSchema = new mongoose.Schema({
       artist: String,
       url: String,
       locked: { type: Boolean, default: true },
+      key: String, // the R2 key for deletion
+      createdAt: { type: Date, default: Date.now },
     },
   ],
 });
+const PodcastPlaylist =
+  mongoose.models.PodcastPlaylist || mongoose.model("PodcastPlaylist", PodcastPlaylistSchema);
 
-const PodcastPlaylist = mongoose.model("PodcastPlaylist", PodcastPlaylistSchema);
-
-// --- S3 client for R2 ---
+/* ---------- Cloudflare R2 client ---------- */
 const s3 = new S3Client({
   region: "auto",
   endpoint: process.env.R2_ENDPOINT,
@@ -32,92 +35,122 @@ const s3 = new S3Client({
     secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
   },
 });
+const BUCKET = process.env.R2_BUCKET || "law-network";
 
-// --- Multer ---
-const upload = multer({ storage: multer.memoryStorage() });
+/* ---------- Multer in-memory ---------- */
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 800 * 1024 * 1024 } });
 
-// --- GET all playlists ---
-router.get("/", async (req, res) => {
-  const playlists = await PodcastPlaylist.find();
-  res.json({ playlists });
+/* ---------- Routes ---------- */
+
+// Public GET all playlists
+router.get("/", async (_req, res) => {
+  const playlists = await PodcastPlaylist.find().lean();
+  res.json({ success: true, playlists });
 });
 
-// --- Create playlist ---
-router.post("/playlists", async (req, res) => {
+// Admin create playlist
+router.post("/playlists", isAdmin, async (req, res) => {
   const { name } = req.body;
+  if (!name) return res.status(400).json({ success: false, message: "Name required" });
   const playlist = await PodcastPlaylist.create({ name, items: [] });
-  res.json({ playlist });
+  res.json({ success: true, playlist });
 });
 
-// --- Upload audio into playlist ---
-router.post(
-  "/playlists/:pid/items",
-  upload.single("audio"),
-  async (req, res) => {
-    try {
-      const { pid } = req.params;
-      const { title, artist, locked } = req.body;
+// Admin upload audio into playlist
+router.post("/playlists/:pid/items", isAdmin, upload.single("audio"), async (req, res) => {
+  try {
+    const { pid } = req.params;
+    const { title, artist, locked } = req.body;
+    if (!req.file) return res.status(400).json({ success: false, message: "No audio uploaded" });
 
-      if (!req.file) return res.status(400).json({ error: "No audio file uploaded" });
+    const ext = req.file.originalname.split(".").pop();
+    const key = `podcasts/${Date.now()}-${nanoid()}.${ext}`;
 
-      const ext = req.file.originalname.split(".").pop();
-      const key = `podcasts/${Date.now()}-${nanoid()}.${ext}`;
+    await s3.send(
+      new PutObjectCommand({
+        Bucket: BUCKET,
+        Key: key,
+        Body: req.file.buffer,
+        ContentType: req.file.mimetype,
+      })
+    );
 
-      await s3.send(
-        new PutObjectCommand({
-          Bucket: "lawprepx", // your bucket
-          Key: key,
-          Body: req.file.buffer,
-          ContentType: req.file.mimetype,
-        })
-      );
+    const publicUrl = `${process.env.R2_PUBLIC_BASE}/${key}`;
 
-      const publicUrl = `${process.env.R2_PUBLIC_BASE}/${key}`;
+    const playlist = await PodcastPlaylist.findById(pid);
+    if (!playlist) return res.status(404).json({ success: false, message: "Playlist not found" });
 
-      // Save to Mongo
-      const playlist = await PodcastPlaylist.findById(pid);
-      if (!playlist) return res.status(404).json({ error: "Playlist not found" });
+    const newItem = {
+      id: nanoid(),
+      title: title || "Untitled",
+      artist: artist || "",
+      url: publicUrl,
+      locked: String(locked) === "true",
+      key,
+    };
 
-      const newItem = {
-        id: nanoid(),
-        title: title || "Untitled",
-        artist: artist || "",
-        url: publicUrl,
-        locked: String(locked) === "true",
-      };
+    playlist.items.push(newItem);
+    await playlist.save();
 
-      playlist.items.push(newItem);
-      await playlist.save();
-
-      res.json({ success: true, item: newItem });
-    } catch (err) {
-      console.error("Podcast upload error:", err);
-      res.status(500).json({ error: err.message || "Upload failed" });
-    }
+    res.json({ success: true, item: newItem });
+  } catch (err) {
+    console.error("Podcast upload error:", err);
+    res.status(500).json({ success: false, message: err.message || "Upload failed" });
   }
-);
+});
 
-// --- Delete item ---
-router.delete("/playlists/:pid/items/:iid", async (req, res) => {
+// Admin delete item
+router.delete("/playlists/:pid/items/:iid", isAdmin, async (req, res) => {
   const { pid, iid } = req.params;
   const playlist = await PodcastPlaylist.findById(pid);
-  if (!playlist) return res.status(404).json({ error: "Playlist not found" });
-  playlist.items = playlist.items.filter((x) => x.id !== iid);
+  if (!playlist) return res.status(404).json({ success: false, message: "Playlist not found" });
+
+  const idx = playlist.items.findIndex((x) => x.id === iid);
+  if (idx < 0) return res.status(404).json({ success: false, message: "Item not found" });
+
+  const removed = playlist.items.splice(idx, 1)[0];
   await playlist.save();
+
+  // delete from R2
+  if (removed?.key) {
+    try {
+      await s3.send(new DeleteObjectCommand({ Bucket: BUCKET, Key: removed.key }));
+    } catch (e) {
+      console.error("R2 delete error:", e.message);
+    }
+  }
+
   res.json({ success: true });
 });
 
-// --- Toggle lock ---
-router.patch("/playlists/:pid/items/:iid/lock", async (req, res) => {
+// Admin toggle lock
+router.patch("/playlists/:pid/items/:iid/lock", isAdmin, async (req, res) => {
   const { pid, iid } = req.params;
   const { locked } = req.body;
   const playlist = await PodcastPlaylist.findById(pid);
-  if (!playlist) return res.status(404).json({ error: "Playlist not found" });
+  if (!playlist) return res.status(404).json({ success: false, message: "Playlist not found" });
   const item = playlist.items.find((x) => x.id === iid);
-  if (!item) return res.status(404).json({ error: "Item not found" });
+  if (!item) return res.status(404).json({ success: false, message: "Item not found" });
   item.locked = !!locked;
   await playlist.save();
   res.json({ success: true, item });
+});
+
+// Admin delete playlist
+router.delete("/playlists/:pid", isAdmin, async (req, res) => {
+  const playlist = await PodcastPlaylist.findById(req.params.pid);
+  if (!playlist) return res.status(404).json({ success: false, message: "Playlist not found" });
+
+  for (const it of playlist.items) {
+    if (it.key) {
+      try {
+        await s3.send(new DeleteObjectCommand({ Bucket: BUCKET, Key: it.key }));
+      } catch {}
+    }
+  }
+
+  await PodcastPlaylist.findByIdAndDelete(req.params.pid);
+  res.json({ success: true });
 });
 
 export default router;
