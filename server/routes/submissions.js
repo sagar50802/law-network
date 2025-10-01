@@ -1,9 +1,18 @@
+// server/routes/submissions.js
 import express from "express";
 import fs from "fs";
 import path from "path";
 import multer from "multer";
 import mongoose from "mongoose";
-import { isAdmin } from "./utils.js";   // ✅ ESM import
+
+// ✅ Local admin middleware (replaces import from utils.js)
+function isAdmin(req, res, next) {
+  const key = req.headers["x-owner-key"];
+  if (!key || key !== process.env.VITE_OWNER_KEY) {
+    return res.status(401).json({ success: false, message: "Unauthorized" });
+  }
+  next();
+}
 
 const router = express.Router();
 
