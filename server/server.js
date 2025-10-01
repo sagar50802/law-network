@@ -1,190 +1,60 @@
-import "dotenv/config";
 import express from "express";
-import mongoose from "mongoose";
-import cors from "cors";
+import multer from "multer";
 import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
-import { createRequire } from "module";
 
-const require = createRequire(import.meta.url);
-const app = express();
+// simple owner-key check
+function isAdmin(req, res, next) {
+  const key = req.headers["x-owner-key"];
+  if (!key || key !== process.env.VITE_OWNER_KEY) {
+    return res.status(401).json({ success: false, message: "Unauthorized" });
+  }
+  next();
+}
 
-const PORT = process.env.PORT || 5000;
-const CLIENT_URL =
-  process.env.CLIENT_URL || "https://law-network-client.onrender.com";
-
-// __dirname
+const router = express.Router();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// body / proxy
-app.set("trust proxy", 1);
-app.use(express.json({ limit: "10mb" }));
+// local uploads folder
+const UP_DIR = path.join(__dirname, "..", "uploads", "podcasts");
+if (!fs.existsSync(UP_DIR)) fs.mkdirSync(UP_DIR, { recursive: true });
 
-// CORS
-const ALLOWED_ORIGINS = [
-  CLIENT_URL,
-  "https://law-network.onrender.com",
-  "http://localhost:5173",
-  "http://localhost:3000",
-];
-const corsOptions = {
-  origin(origin, cb) {
-    if (!origin) return cb(null, true);
-    if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
-    return cb(new Error("CORS not allowed: " + origin));
-  },
-  credentials: true,
-  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: [
-    "Content-Type",
-    "Authorization",
-    "X-Owner-Key",
-    "x-owner-key",
-  ],
-  optionsSuccessStatus: 204,
-};
-app.use(cors(corsOptions));
-app.options("*", cors(corsOptions));
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, UP_DIR),
+  filename: (req, file, cb) => cb(null, Date.now() + "-" + file.originalname),
+});
+const upload = multer({ storage });
 
-// Always attach CORS headers
-app.use((req, res, next) => {
-  const origin = req.headers.origin;
-  if (origin && ALLOWED_ORIGINS.includes(origin)) {
-    res.header("Access-Control-Allow-Origin", origin);
-    res.header("Vary", "Origin");
-    res.header("Access-Control-Allow-Credentials", "true");
-    res.header(
-      "Access-Control-Allow-Headers",
-      "Content-Type, Authorization, X-Owner-Key, x-owner-key"
-    );
-    res.header(
-      "Access-Control-Allow-Methods",
-      "GET,POST,PUT,PATCH,DELETE,OPTIONS"
-    );
-    res.header("Cross-Origin-Resource-Policy", "cross-origin");
-  }
-  if (req.method === "OPTIONS") return res.sendStatus(204);
-  next();
+// fake in-memory playlists for now
+let playlists = [];
+
+// GET playlists
+router.get("/playlists", (req, res) => {
+  res.json({ success: true, playlists });
 });
 
-// tiny log
-app.use((req, _res, next) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
-  next();
+// POST create playlist
+router.post("/playlists", isAdmin, express.json(), (req, res) => {
+  const { name } = req.body;
+  if (!name) return res.status(400).json({ success: false, message: "Name required" });
+  const pl = { id: Date.now().toString(), name, items: [] };
+  playlists.push(pl);
+  res.json({ success: true, playlist: pl });
 });
 
-// fix accidental double /api by rewriting the URL (no redirect)
-app.use((req, _res, next) => {
-  if (req.url.startsWith("/api/api/")) {
-    const before = req.url;
-    req.url = req.url.replace(/^\/api\/api\//, "/api/");
-    console.log("↪️  internally rewrote", before, "→", req.url);
-  }
-  next();
+// upload a podcast file
+router.post("/:playlistId/upload", isAdmin, upload.single("file"), (req, res) => {
+  const { playlistId } = req.params;
+  const pl = playlists.find((p) => p.id === playlistId);
+  if (!pl) return res.status(404).json({ success: false, message: "Playlist not found" });
+
+  const fileUrl = `/uploads/podcasts/${path.basename(req.file.path)}`;
+  const item = { id: Date.now().toString(), title: req.body.title || req.file.originalname, url: fileUrl };
+  pl.items.push(item);
+
+  res.json({ success: true, item });
 });
 
-// keep legacy /uploads (safe)
-[
-  "uploads",
-  "uploads/articles",
-  "uploads/banners",
-  "uploads/consultancy",
-].forEach((dir) => {
-  const full = path.join(__dirname, dir);
-  if (!fs.existsSync(full)) fs.mkdirSync(full, { recursive: true });
-});
-app.use(
-  "/uploads",
-  express.static(path.join(__dirname, "uploads"), {
-    setHeaders: (res) =>
-      res.setHeader("Access-Control-Allow-Origin", CLIENT_URL),
-  })
-);
-
-// routes
-import filesRoutes from "./routes/files.js";
-import articleRoutes from "./routes/articles.js";
-import bannerRoutes from "./routes/banners.js";
-import consultancyRoutes from "./routes/consultancy.js";
-import newsRoutes from "./routes/news.js";
-
-// ✅ ESM imports for new routes
-import podcastRouter from "./routes/podcast.js";
-import submissionsRoutes from "./routes/submissions.js";
-
-// gridfs (CJS/ESM normalize)
-const pdfGridfsModule = require("./routes/gridfs.js");
-const pdfGridfsRoutes = pdfGridfsModule.default || pdfGridfsModule;
-
-// mounts
-app.use("/api/files", filesRoutes);
-app.use("/api/articles", articleRoutes);
-app.use("/api/banners", bannerRoutes);
-app.use("/api/consultancy", consultancyRoutes);
-app.use("/api/news", newsRoutes);
-app.use("/api/gridfs", pdfGridfsRoutes);
-
-// ✅ Podcasts API — mount both plural and singular so frontend works
-app.use("/api/podcast", podcastRouter); // singular
-app.use("/api/podcasts", podcastRouter); // plural (AdminPodcastEditor & Podcast.jsx)
-app.use("/podcasts", podcastRouter); // plain alias (just in case)
-
-// ✅ submissions (already ESM)
-app.use("/api/submissions", submissionsRoutes);
-
-// Quiet the client’s periodic probe
-app.get("/api/access/status", (_req, res) => res.json({ access: false }));
-
-console.log(
-  "✅ Mounted: /api/files /api/articles /api/banners /api/consultancy /api/news /api/gridfs /api/podcast /api/podcasts /api/submissions"
-);
-
-// probes
-app.get("/api/ping", (_req, res) => res.json({ ok: true, ts: Date.now() }));
-app.get("/api/_routes_check", (_req, res) =>
-  res.json({
-    ok: true,
-    hasFiles: true,
-    hasArticles: true,
-    hasBanners: true,
-    hasConsultancy: true,
-    hasNews: true,
-    hasPDFs: true,
-    hasPodcasts: true,
-    hasSubmissions: true,
-  })
-);
-
-// root
-app.get("/", (_req, res) => res.json({ ok: true, root: true }));
-
-// 404
-app.use((req, res) => {
-  res
-    .status(404)
-    .json({ success: false, message: `Not Found: ${req.method} ${req.originalUrl}` });
-});
-
-// error
-app.use((err, _req, res, _next) => {
-  console.error("Server error:", err);
-  res
-    .status(err.status || 500)
-    .json({ success: false, message: err.message || "Server error" });
-});
-
-// start
-app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
-
-// mongo
-const MONGO_URI = process.env.MONGO_URI;
-if (!MONGO_URI) {
-  console.error("✗ Missing MONGO_URI env var (service will run but DB calls will fail)");
-} else {
-  mongoose
-    .connect(MONGO_URI)
-    .then(() => console.log("✅ MongoDB connected"))
-    .catch((err) => console.error("✗ MongoDB connection failed:", err.message));
-}
+export default router;
