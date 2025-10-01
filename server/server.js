@@ -1,3 +1,4 @@
+// server/server.js
 import "dotenv/config";
 import express from "express";
 import mongoose from "mongoose";
@@ -63,7 +64,7 @@ app.use((req, _res, next) => {
   next();
 });
 
-// --- fix accidental double /api by rewriting the URL ---
+// --- fix accidental double /api by rewriting the URL (no redirect, preserves method/body) ---
 app.use((req, _res, next) => {
   if (req.url.startsWith("/api/api/")) {
     const before = req.url;
@@ -91,7 +92,7 @@ import articleRoutes from "./routes/articles.js";
 import bannerRoutes from "./routes/banners.js";
 import consultancyRoutes from "./routes/consultancy.js";
 import newsRoutes from "./routes/news.js";
-import podcastRoutes from "./routes/podcast.js"; // <-- added import
+import podcastRoutes from "./routes/podcast.js"; // ⬅️ ADDED
 
 // gridfs (CJS/ESM normalize)
 const pdfGridfsModule = require("./routes/gridfs.js");
@@ -104,7 +105,7 @@ app.use("/api/banners", bannerRoutes);
 app.use("/api/consultancy", consultancyRoutes);
 app.use("/api/news", newsRoutes);
 app.use("/api/gridfs", pdfGridfsRoutes);
-app.use("/api/podcasts", podcastRoutes); // <-- added mount
+app.use("/api/podcasts", podcastRoutes); // ⬅️ ADDED
 
 // Quiet the client’s periodic probe
 app.get("/api/access/status", (_req, res) => res.json({ access: false }));
