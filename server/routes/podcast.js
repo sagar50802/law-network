@@ -18,7 +18,7 @@ const PodcastPlaylistSchema = new mongoose.Schema({
       artist: String,
       url: String,
       locked: { type: Boolean, default: true },
-      key: String, // the R2 key for deletion
+      key: String, // R2 key for deletion
       createdAt: { type: Date, default: Date.now },
     },
   ],
@@ -44,38 +44,55 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 800
 
 // Public GET all playlists
 router.get("/", async (_req, res) => {
-  const playlists = await PodcastPlaylist.find().lean();
-  res.json({ success: true, playlists });
+  try {
+    const playlists = await PodcastPlaylist.find().lean();
+    res.json({ success: true, playlists });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message || "Failed to fetch playlists" });
+  }
 });
 
 // Admin create playlist
 router.post("/playlists", isAdmin, async (req, res) => {
-  const { name } = req.body;
-  if (!name) return res.status(400).json({ success: false, message: "Name required" });
-  const playlist = await PodcastPlaylist.create({ name, items: [] });
-  res.json({ success: true, playlist });
+  try {
+    const { name } = req.body;
+    if (!name) return res.status(400).json({ success: false, message: "Name required" });
+    const playlist = await PodcastPlaylist.create({ name, items: [] });
+    res.json({ success: true, playlist });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message || "Failed to create playlist" });
+  }
 });
 
 // Admin upload audio into playlist
 router.post("/playlists/:pid/items", isAdmin, upload.single("audio"), async (req, res) => {
   try {
     const { pid } = req.params;
-    const { title, artist, locked } = req.body;
-    if (!req.file) return res.status(400).json({ success: false, message: "No audio uploaded" });
+    const { title, artist, locked, url } = req.body;
 
-    const ext = req.file.originalname.split(".").pop();
-    const key = `podcasts/${Date.now()}-${nanoid()}.${ext}`;
+    let publicUrl;
+    let key;
 
-    await s3.send(
-      new PutObjectCommand({
-        Bucket: BUCKET,
-        Key: key,
-        Body: req.file.buffer,
-        ContentType: req.file.mimetype,
-      })
-    );
-
-    const publicUrl = `${process.env.R2_PUBLIC_BASE}/${key}`;
+    // if a file was uploaded → send to R2
+    if (req.file) {
+      const ext = req.file.originalname.split(".").pop();
+      key = `podcasts/${Date.now()}-${nanoid()}.${ext}`;
+      await s3.send(
+        new PutObjectCommand({
+          Bucket: BUCKET,
+          Key: key,
+          Body: req.file.buffer,
+          ContentType: req.file.mimetype,
+        })
+      );
+      publicUrl = `${process.env.R2_PUBLIC_BASE}/${key}`;
+    } else if (url) {
+      // fallback direct URL
+      publicUrl = url;
+      key = null;
+    } else {
+      return res.status(400).json({ success: false, message: "No audio uploaded" });
+    }
 
     const playlist = await PodcastPlaylist.findById(pid);
     if (!playlist) return res.status(404).json({ success: false, message: "Playlist not found" });
@@ -101,56 +118,68 @@ router.post("/playlists/:pid/items", isAdmin, upload.single("audio"), async (req
 
 // Admin delete item
 router.delete("/playlists/:pid/items/:iid", isAdmin, async (req, res) => {
-  const { pid, iid } = req.params;
-  const playlist = await PodcastPlaylist.findById(pid);
-  if (!playlist) return res.status(404).json({ success: false, message: "Playlist not found" });
+  try {
+    const { pid, iid } = req.params;
+    const playlist = await PodcastPlaylist.findById(pid);
+    if (!playlist) return res.status(404).json({ success: false, message: "Playlist not found" });
 
-  const idx = playlist.items.findIndex((x) => x.id === iid);
-  if (idx < 0) return res.status(404).json({ success: false, message: "Item not found" });
+    const idx = playlist.items.findIndex((x) => x.id === iid);
+    if (idx < 0) return res.status(404).json({ success: false, message: "Item not found" });
 
-  const removed = playlist.items.splice(idx, 1)[0];
-  await playlist.save();
+    const removed = playlist.items.splice(idx, 1)[0];
+    await playlist.save();
 
-  // delete from R2
-  if (removed?.key) {
-    try {
-      await s3.send(new DeleteObjectCommand({ Bucket: BUCKET, Key: removed.key }));
-    } catch (e) {
-      console.error("R2 delete error:", e.message);
+    // delete from R2
+    if (removed?.key) {
+      try {
+        await s3.send(new DeleteObjectCommand({ Bucket: BUCKET, Key: removed.key }));
+      } catch (e) {
+        console.error("R2 delete error:", e.message);
+      }
     }
-  }
 
-  res.json({ success: true });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message || "Delete failed" });
+  }
 });
 
 // Admin toggle lock
 router.patch("/playlists/:pid/items/:iid/lock", isAdmin, async (req, res) => {
-  const { pid, iid } = req.params;
-  const { locked } = req.body;
-  const playlist = await PodcastPlaylist.findById(pid);
-  if (!playlist) return res.status(404).json({ success: false, message: "Playlist not found" });
-  const item = playlist.items.find((x) => x.id === iid);
-  if (!item) return res.status(404).json({ success: false, message: "Item not found" });
-  item.locked = !!locked;
-  await playlist.save();
-  res.json({ success: true, item });
+  try {
+    const { pid, iid } = req.params;
+    const { locked } = req.body;
+    const playlist = await PodcastPlaylist.findById(pid);
+    if (!playlist) return res.status(404).json({ success: false, message: "Playlist not found" });
+    const item = playlist.items.find((x) => x.id === iid);
+    if (!item) return res.status(404).json({ success: false, message: "Item not found" });
+    item.locked = !!locked;
+    await playlist.save();
+    res.json({ success: true, item });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message || "Toggle failed" });
+  }
 });
 
 // Admin delete playlist
 router.delete("/playlists/:pid", isAdmin, async (req, res) => {
-  const playlist = await PodcastPlaylist.findById(req.params.pid);
-  if (!playlist) return res.status(404).json({ success: false, message: "Playlist not found" });
+  try {
+    const playlist = await PodcastPlaylist.findById(req.params.pid);
+    if (!playlist) return res.status(404).json({ success: false, message: "Playlist not found" });
 
-  for (const it of playlist.items) {
-    if (it.key) {
-      try {
-        await s3.send(new DeleteObjectCommand({ Bucket: BUCKET, Key: it.key }));
-      } catch {}
+    for (const it of playlist.items) {
+      if (it.key) {
+        try {
+          await s3.send(new DeleteObjectCommand({ Bucket: BUCKET, Key: it.key }));
+        } catch {}
+      }
     }
-  }
 
-  await PodcastPlaylist.findByIdAndDelete(req.params.pid);
-  res.json({ success: true });
+    await PodcastPlaylist.findByIdAndDelete(req.params.pid);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message || "Delete playlist failed" });
+  }
 });
 
 export default router;
