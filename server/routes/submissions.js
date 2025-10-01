@@ -1,10 +1,10 @@
 // server/routes/submissions.js
-const express = require("express");
-const fs = require("fs");
-const path = require("path");
-const multer = require("multer");
-const mongoose = require("mongoose");
-const { isAdmin } = require("./utils");   // ✅ central util
+import express from "express";
+import fs from "fs";
+import path from "path";
+import multer from "multer";
+import mongoose from "mongoose";
+import { isAdmin } from "./utils.js";
 
 const router = express.Router();
 
@@ -304,4 +304,5 @@ router.use((err, req, res, _next) => {
   res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
 });
 
-module.exports = router;
+ export default router;
+
