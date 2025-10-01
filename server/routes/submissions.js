@@ -1,16 +1,15 @@
-// server/routes/submissions.js
 import express from "express";
 import fs from "fs";
 import path from "path";
 import multer from "multer";
 import mongoose from "mongoose";
-import { isAdmin } from "./utils.js";
+import { isAdmin } from "./utils.js";   // ✅ ESM import
 
 const router = express.Router();
 
 /* ---------------------- Folders & Data Setup ------------------------- */
-const DATA_DIR  = path.join(__dirname, "..", "data");
-const UP_DIR    = path.join(__dirname, "..", "uploads", "submissions");
+const DATA_DIR  = path.join(process.cwd(), "server", "data");
+const UP_DIR    = path.join(process.cwd(), "server", "uploads", "submissions");
 const DATA_FILE = path.join(DATA_DIR, "submissions.json");
 const AUTO_FILE = path.join(DATA_DIR, "submissions.auto.json");
 
@@ -257,8 +256,8 @@ router.post("/:id/reject", isAdmin, async (req, res) => {
   writeAll(items);
 
   if (removed.proofUrl?.startsWith("/uploads/submissions/")) {
-    const abs = path.join(__dirname, "..", removed.proofUrl.replace(/^\//,""));
-    const safeRoot = path.join(__dirname, "..", "uploads", "submissions");
+    const abs = path.join(process.cwd(), "server", removed.proofUrl.replace(/^\//,""));
+    const safeRoot = path.join(process.cwd(), "server", "uploads", "submissions");
     if (abs.startsWith(safeRoot)) await fs.promises.unlink(abs).catch(() => {});
   }
 
@@ -274,8 +273,8 @@ router.delete("/:id", isAdmin, async (req, res) => {
   writeAll(items);
 
   if (removed.proofUrl?.startsWith("/uploads/submissions/")) {
-    const abs = path.join(__dirname, "..", removed.proofUrl.replace(/^\//,""));
-    const safeRoot = path.join(__dirname, "..", "uploads", "submissions");
+    const abs = path.join(process.cwd(), "server", removed.proofUrl.replace(/^\//,""));
+    const safeRoot = path.join(process.cwd(), "server", "uploads", "submissions");
     if (abs.startsWith(safeRoot)) await fs.promises.unlink(abs).catch(() => {});
   }
 
@@ -304,5 +303,4 @@ router.use((err, req, res, _next) => {
   res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
 });
 
- export default router;
-
+export default router;
