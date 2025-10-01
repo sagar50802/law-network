@@ -50,7 +50,10 @@ app.use((req, res, next) => {
     res.header("Access-Control-Allow-Origin", origin);
     res.header("Vary", "Origin");
     res.header("Access-Control-Allow-Credentials", "true");
-    res.header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Owner-Key, x-owner-key");
+    res.header(
+      "Access-Control-Allow-Headers",
+      "Content-Type, Authorization, X-Owner-Key, x-owner-key"
+    );
     res.header("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
     res.header("Cross-Origin-Resource-Policy", "cross-origin");
   }
@@ -92,16 +95,12 @@ import articleRoutes from "./routes/articles.js";
 import bannerRoutes from "./routes/banners.js";
 import consultancyRoutes from "./routes/consultancy.js";
 import newsRoutes from "./routes/news.js";
-import podcastRoutes from "./routes/podcast.js"; // ⬅️ ADDED
+import podcastRoutes from "./routes/podcast.js";
 import submissionsRoutes from "./routes/submissions.js";
 
-// gridfs (CJS/ESM normalize)
+// gridfs (CJS/ESM normalize just for gridfs)
 const pdfGridfsModule = require("./routes/gridfs.js");
 const pdfGridfsRoutes = pdfGridfsModule.default || pdfGridfsModule;
-
-// submissions (CJS/ESM normalize) ⬅️ NEW
-const submissionsModule = require("./routes/submissions.js");
-const submissionsRoutes = submissionsModule.default || submissionsModule;
 
 // Normal mounts
 app.use("/api/files", filesRoutes);
@@ -110,13 +109,15 @@ app.use("/api/banners", bannerRoutes);
 app.use("/api/consultancy", consultancyRoutes);
 app.use("/api/news", newsRoutes);
 app.use("/api/gridfs", pdfGridfsRoutes);
-app.use("/api/podcasts", podcastRoutes); // ⬅️ ADDED
+app.use("/api/podcasts", podcastRoutes);
 app.use("/api/submissions", submissionsRoutes);
 
 // Quiet the client’s periodic probe
 app.get("/api/access/status", (_req, res) => res.json({ access: false }));
 
-console.log("✅ Mounted: /api/files /api/articles /api/banners /api/consultancy /api/news /api/gridfs /api/podcasts /api/submissions");
+console.log(
+  "✅ Mounted: /api/files /api/articles /api/banners /api/consultancy /api/news /api/gridfs /api/podcasts /api/submissions"
+);
 
 // probes
 app.get("/api/ping", (_req, res) => res.json({ ok: true, ts: Date.now() }));
@@ -139,7 +140,9 @@ app.get("/", (_req, res) => res.json({ ok: true, root: true }));
 
 // 404
 app.use((req, res) => {
-  res.status(404).json({ success: false, message: `Not Found: ${req.method} ${req.originalUrl}` });
+  res
+    .status(404)
+    .json({ success: false, message: `Not Found: ${req.method} ${req.originalUrl}` });
 });
 
 // error
