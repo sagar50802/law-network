@@ -1,9 +1,10 @@
-const mongoose = require('mongoose');
+// server/models/Playlist.js
+import mongoose from "mongoose";
 
 const playlistSchema = new mongoose.Schema({
-  name: { type: String, required: true, unique: true },
-  locked: { type: Boolean, default: true },
+  name: { type: String, required: true },
+  description: { type: String },
   createdAt: { type: Date, default: Date.now },
 });
 
-module.exports = mongoose.model('Playlist', playlistSchema);
+export default mongoose.model("Playlist", playlistSchema);
