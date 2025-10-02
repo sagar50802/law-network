@@ -1,4 +1,3 @@
-// server/routes/podcast.js
 import express from "express";
 import multer from "multer";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
@@ -29,15 +28,39 @@ const PodcastPlaylist =
 /* ---------- R2 / S3 Client ---------- */
 const s3 = new S3Client({
   region: "auto",
-  endpoint: process.env.R2_ENDPOINT,
+  endpoint: process.env.R2_ENDPOINT, // e.g. https://<account>.r2.cloudflarestorage.com
   credentials: {
     accessKeyId: process.env.R2_ACCESS_KEY_ID,
     secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
   },
 });
 
+// Build a correct public base that includes the bucket
+function r2PublicUrl(key) {
+  const base = String(process.env.R2_PUBLIC_BASE || "").replace(/\/+$/, "");
+  const bucket = String(process.env.R2_BUCKET || "").replace(/^\/+|\/+$/g, "");
+  // Cloudflare R2 public URLs require /<bucket>/<key>
+  return `${base}/${bucket}/${key}`;
+}
+
 /* ---------- Multer (memory) ---------- */
 const upload = multer({ storage: multer.memoryStorage() });
+
+// Accept multiple possible field names: audio | file | upload
+const uploadAny = upload.fields([
+  { name: "audio", maxCount: 1 },
+  { name: "file", maxCount: 1 },
+  { name: "upload", maxCount: 1 },
+]);
+function pickUploaded(req) {
+  return (
+    req.file ||
+    req.files?.audio?.[0] ||
+    req.files?.file?.[0] ||
+    req.files?.upload?.[0] ||
+    null
+  );
+}
 
 /* ---------- Routes ---------- */
 
@@ -55,7 +78,7 @@ router.get("/", async (_req, res) => {
 // Admin: create new playlist
 router.post("/playlists", isAdmin, express.json(), async (req, res) => {
   try {
-    const { name } = req.body;
+    const { name } = req.body || {};
     if (!name) return res.status(400).json({ success: false, message: "Name required" });
 
     const playlist = await PodcastPlaylist.create({ name, items: [] });
@@ -66,56 +89,59 @@ router.post("/playlists", isAdmin, express.json(), async (req, res) => {
   }
 });
 
-// Admin: upload audio into playlist
-router.post(
-  "/playlists/:pid/items",
-  isAdmin,
-  upload.single("audio"), // field name "audio"
-  async (req, res) => {
-    try {
-      const { pid } = req.params;
-      const { title, artist, locked } = req.body;
+// Admin: upload audio OR attach external URL into playlist
+router.post("/playlists/:pid/items", isAdmin, uploadAny, async (req, res) => {
+  try {
+    const { pid } = req.params;
+    const { title, artist, locked, url: externalUrl } = req.body || {};
 
-      if (!req.file)
-        return res.status(400).json({ success: false, message: "No audio file uploaded" });
+    const playlist = await PodcastPlaylist.findById(pid);
+    if (!playlist) {
+      return res.status(404).json({ success: false, message: "Playlist not found" });
+    }
 
-      const ext = req.file.originalname.split(".").pop();
+    let finalUrl = "";
+    const up = pickUploaded(req);
+
+    if (up) {
+      // Upload the file to R2
+      const ext = (up.originalname || "").split(".").pop() || "mp3";
       const key = `podcasts/${Date.now()}-${nanoid()}.${ext}`;
 
       await s3.send(
         new PutObjectCommand({
-          Bucket: process.env.R2_BUCKET, // name of your bucket
+          Bucket: process.env.R2_BUCKET,
           Key: key,
-          Body: req.file.buffer,
-          ContentType: req.file.mimetype,
+          Body: up.buffer,
+          ContentType: up.mimetype || "audio/mpeg",
         })
       );
 
-      const publicUrl = `${process.env.R2_PUBLIC_BASE}/${key}`;
-
-      // Save to Mongo
-      const playlist = await PodcastPlaylist.findById(pid);
-      if (!playlist)
-        return res.status(404).json({ success: false, message: "Playlist not found" });
-
-      const newItem = {
-        id: nanoid(),
-        title: title || "Untitled",
-        artist: artist || "",
-        url: publicUrl,
-        locked: String(locked) === "true",
-      };
-
-      playlist.items.push(newItem);
-      await playlist.save();
-
-      res.json({ success: true, item: newItem });
-    } catch (err) {
-      console.error("Podcast upload error:", err);
-      res.status(500).json({ success: false, message: err.message || "Upload failed" });
+      finalUrl = r2PublicUrl(key);
+    } else if (externalUrl && /^https?:\/\//i.test(externalUrl)) {
+      // Support direct external URL
+      finalUrl = externalUrl.trim();
+    } else {
+      return res.status(400).json({ success: false, message: "No audio file or URL" });
     }
+
+    const newItem = {
+      id: nanoid(),
+      title: title || "Untitled",
+      artist: artist || "",
+      url: finalUrl,
+      locked: String(locked) === "true" || locked === true,
+    };
+
+    playlist.items.push(newItem);
+    await playlist.save();
+
+    res.json({ success: true, item: newItem });
+  } catch (err) {
+    console.error("Podcast upload error:", err);
+    res.status(500).json({ success: false, message: err.message || "Upload failed" });
   }
-);
+});
 
 // Admin: delete item
 router.delete("/playlists/:pid/items/:iid", isAdmin, async (req, res) => {
@@ -123,7 +149,7 @@ router.delete("/playlists/:pid/items/:iid", isAdmin, async (req, res) => {
     const { pid, iid } = req.params;
     const playlist = await PodcastPlaylist.findById(pid);
     if (!playlist) return res.status(404).json({ success: false, message: "Playlist not found" });
-    playlist.items = playlist.items.filter((x) => x.id !== iid);
+    playlist.items = (playlist.items || []).filter((x) => x.id !== iid);
     await playlist.save();
     res.json({ success: true });
   } catch (err) {
@@ -136,10 +162,10 @@ router.delete("/playlists/:pid/items/:iid", isAdmin, async (req, res) => {
 router.patch("/playlists/:pid/items/:iid/lock", isAdmin, express.json(), async (req, res) => {
   try {
     const { pid, iid } = req.params;
-    const { locked } = req.body;
+    const { locked } = req.body || {};
     const playlist = await PodcastPlaylist.findById(pid);
     if (!playlist) return res.status(404).json({ success: false, message: "Playlist not found" });
-    const item = playlist.items.find((x) => x.id === iid);
+    const item = (playlist.items || []).find((x) => x.id === iid);
     if (!item) return res.status(404).json({ success: false, message: "Item not found" });
     item.locked = !!locked;
     await playlist.save();
