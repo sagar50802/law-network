@@ -1,4 +1,5 @@
-const mongoose = require('mongoose');
+// server/models/Audio.js
+import mongoose from "mongoose";
 
 const audioSchema = new mongoose.Schema({
   title: { type: String, required: true },
@@ -7,4 +8,5 @@ const audioSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now },
 });
 
-module.exports = mongoose.model('Audio', audioSchema);
+// 👇 default export so ESModules can import Audio directly
+export default mongoose.model("Audio", audioSchema);
