@@ -17,7 +17,7 @@ const __dirname = path.dirname(__filename);
 // ---------- CORS ----------
 const CLIENT_URL =
   process.env.CLIENT_URL ||
-  process.env.VITE_CLIENT_URL ||
+  process.env.VITE_BACKEND_URL || // just in case you set this
   "https://law-network-client.onrender.com";
 
 const ALLOWED_ORIGINS = [
@@ -95,7 +95,6 @@ app.use((req, _res, next) => {
   "uploads/submissions",
   "uploads/videos",
   "uploads/podcasts",
-  "uploads/pdfs",
   "uploads/qr",
 ].forEach((rel) => {
   const full = path.join(__dirname, rel);
@@ -105,10 +104,8 @@ app.use((req, _res, next) => {
 app.use(
   "/uploads",
   express.static(path.join(__dirname, "uploads"), {
-    setHeaders: (res, filePath) => {
-      // always allow client to fetch uploaded files
+    setHeaders: (res) => {
       res.setHeader("Access-Control-Allow-Origin", CLIENT_URL);
-      res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
     },
   })
 );
@@ -118,11 +115,13 @@ import articleRoutes from "./routes/articles.js";
 import bannerRoutes from "./routes/banners.js";
 import consultancyRoutes from "./routes/consultancy.js";
 import newsRoutes from "./routes/news.js";
-import pdfRoutes from "./routes/pdfs.js";
+import pdfRoutes from "./routes/pdfs.js"; // your pdfs route
 
 import podcastRoutes from "./routes/podcast.js"; // podcasts
 import videoRoutes from "./routes/videos.js";     // videos
-import submissionsRoutes from "./routes/submissions.js"; // admin submissions
+
+import submissionsRoutes from "./routes/submissions.js"; // admin submissions + SSE
+import qrRoutes from "./routes/qr.js"; // ✅ new QR route (converted to ESM)
 
 // ---------- Mounts ----------
 app.use("/api/articles", articleRoutes);
@@ -141,6 +140,9 @@ app.use("/api/videos", videoRoutes);
 // Submissions (admin list, auto-mode, approve/revoke, SSE stream)
 app.use("/api/submissions", submissionsRoutes);
 
+// ✅ QR route
+app.use("/api/qr", qrRoutes);
+
 // Quiet the client probe
 app.get("/api/access/status", (_req, res) => res.json({ access: false }));
 
@@ -157,6 +159,7 @@ app.get("/api/_routes_check", (_req, res) =>
     hasPodcasts: true,
     hasVideos: true,
     hasSubmissions: true,
+    hasQR: true,
   })
 );
 
