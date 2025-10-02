@@ -1,4 +1,3 @@
-// server/server.js
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
@@ -18,7 +17,7 @@ const __dirname = path.dirname(__filename);
 // ---------- CORS ----------
 const CLIENT_URL =
   process.env.CLIENT_URL ||
-  process.env.VITE_BACKEND_URL || // just in case you set this
+  process.env.VITE_CLIENT_URL ||
   "https://law-network-client.onrender.com";
 
 const ALLOWED_ORIGINS = [
@@ -96,6 +95,8 @@ app.use((req, _res, next) => {
   "uploads/submissions",
   "uploads/videos",
   "uploads/podcasts",
+  "uploads/pdfs",
+  "uploads/qr",
 ].forEach((rel) => {
   const full = path.join(__dirname, rel);
   if (!fs.existsSync(full)) fs.mkdirSync(full, { recursive: true });
@@ -104,8 +105,10 @@ app.use((req, _res, next) => {
 app.use(
   "/uploads",
   express.static(path.join(__dirname, "uploads"), {
-    setHeaders: (res) => {
+    setHeaders: (res, filePath) => {
+      // always allow client to fetch uploaded files
       res.setHeader("Access-Control-Allow-Origin", CLIENT_URL);
+      res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
     },
   })
 );
@@ -115,12 +118,11 @@ import articleRoutes from "./routes/articles.js";
 import bannerRoutes from "./routes/banners.js";
 import consultancyRoutes from "./routes/consultancy.js";
 import newsRoutes from "./routes/news.js";
-import pdfRoutes from "./routes/pdfs.js"; // your pdfs route
+import pdfRoutes from "./routes/pdfs.js";
 
-import podcastRoutes from "./routes/podcast.js"; // podcasts (ESM default export)
-import videoRoutes from "./routes/videos.js";     // videos (converted to ESM)
-
-import submissionsRoutes from "./routes/submissions.js"; // admin submissions + SSE
+import podcastRoutes from "./routes/podcast.js"; // podcasts
+import videoRoutes from "./routes/videos.js";     // videos
+import submissionsRoutes from "./routes/submissions.js"; // admin submissions
 
 // ---------- Mounts ----------
 app.use("/api/articles", articleRoutes);
