@@ -1,3 +1,4 @@
+// server/server.js
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
@@ -117,7 +118,7 @@ import consultancyRoutes from "./routes/consultancy.js";
 import newsRoutes from "./routes/news.js";
 import pdfRoutes from "./routes/pdfs.js"; // your pdfs route
 
-import podcastRoutes from "./routes/podcast.js"; // podcasts
+import podcastRoutes from "./routes/podcasts.js"; // ✅ plural file name
 import videoRoutes from "./routes/videos.js";     // videos
 
 import submissionsRoutes from "./routes/submissions.js"; // admin submissions + SSE
@@ -130,9 +131,8 @@ app.use("/api/consultancy", consultancyRoutes);
 app.use("/api/news", newsRoutes);
 app.use("/api/pdfs", pdfRoutes);
 
-// Podcasts — mount both plural & singular so AdminPodcastEditor + Podcast.jsx both work
+// Podcasts
 app.use("/api/podcasts", podcastRoutes);
-app.use("/api/podcast", podcastRoutes);
 
 // Videos
 app.use("/api/videos", videoRoutes);
