@@ -118,8 +118,9 @@ import consultancyRoutes from "./routes/consultancy.js";
 import newsRoutes from "./routes/news.js";
 import pdfRoutes from "./routes/pdfs.js"; // your pdfs route
 
+// ⬇️ make sure this file exists at server/routes/podcast.js
 import podcastRoutes from "./routes/podcast.js";
-import videoRoutes from "./routes/videos.js";     // videos
+import videoRoutes from "./routes/videos.js"; // videos
 
 import submissionsRoutes from "./routes/submissions.js"; // admin submissions + SSE
 import qrRoutes from "./routes/qr.js"; // ✅ new QR route (converted to ESM)
