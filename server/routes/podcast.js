@@ -28,7 +28,7 @@ const PodcastPlaylist =
 /* ---------- R2 / S3 Client ---------- */
 const s3 = new S3Client({
   region: "auto",
-  endpoint: process.env.R2_ENDPOINT, // e.g. https://<account>.r2.cloudflarestorage.com
+  endpoint: process.env.R2_ENDPOINT,
   credentials: {
     accessKeyId: process.env.R2_ACCESS_KEY_ID,
     secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
@@ -39,14 +39,11 @@ const s3 = new S3Client({
 function r2PublicUrl(key) {
   const base = String(process.env.R2_PUBLIC_BASE || "").replace(/\/+$/, "");
   const bucket = String(process.env.R2_BUCKET || "").replace(/^\/+|\/+$/g, "");
-  // Cloudflare R2 public URLs require /<bucket>/<key>
   return `${base}/${bucket}/${key}`;
 }
 
 /* ---------- Multer (memory) ---------- */
 const upload = multer({ storage: multer.memoryStorage() });
-
-// Accept multiple possible field names: audio | file | upload
 const uploadAny = upload.fields([
   { name: "audio", maxCount: 1 },
   { name: "file", maxCount: 1 },
@@ -104,7 +101,6 @@ router.post("/playlists/:pid/items", isAdmin, uploadAny, async (req, res) => {
     const up = pickUploaded(req);
 
     if (up) {
-      // Upload the file to R2
       const ext = (up.originalname || "").split(".").pop() || "mp3";
       const key = `podcasts/${Date.now()}-${nanoid()}.${ext}`;
 
@@ -119,7 +115,6 @@ router.post("/playlists/:pid/items", isAdmin, uploadAny, async (req, res) => {
 
       finalUrl = r2PublicUrl(key);
     } else if (externalUrl && /^https?:\/\//i.test(externalUrl)) {
-      // Support direct external URL
       finalUrl = externalUrl.trim();
     } else {
       return res.status(400).json({ success: false, message: "No audio file or URL" });
