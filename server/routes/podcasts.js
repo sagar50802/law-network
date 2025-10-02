@@ -20,8 +20,7 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-/* ---------------- in-memory store ----------------
-   Replace with Mongo later; this makes API work now. */
+/* ---------------- in-memory store ---------------- */
 let playlists = []; // [{ _id, name, items:[{ id, title, artist, url, locked }] }]
 const newId = () => Math.random().toString(36).slice(2, 10);
 const findPl = (id) => playlists.find((p) => String(p._id) === String(id));
@@ -31,8 +30,7 @@ router.get("/", (_req, res) => {
   res.json({ playlists });
 });
 
-/* ---------------- create playlist ----------------
-   Matches AdminPodcastEditor: POST /podcasts/playlists {name} */
+/* ---------------- create playlist ---------------- */
 router.post("/playlists", (req, res) => {
   const name = (req.body?.name || "").trim() || "Untitled";
   const _id = newId();
@@ -47,13 +45,7 @@ router.delete("/playlists/:pid", (req, res) => {
   res.json({ success: true });
 });
 
-/* ---------------- add item (upload or URL) -------
-   Matches AdminPodcastEditor uploadItem():
-   - POST /podcasts/playlists/:pid/items
-   - multipart/form-data with field "audio" for file
-   - OR "url" for external mp3
-   - plus title, artist, locked ("true"/"false")
--------------------------------------------------- */
+/* ---------------- add item (upload or URL) ------- */
 router.post("/playlists/:pid/items", upload.single("audio"), (req, res) => {
   const pid = req.params.pid;
   const pl = findPl(pid);
