@@ -1,14 +1,15 @@
-const express = require("express");
-const path = require("path");
-const fs = require("fs");
-const fsp = require("fs/promises");
-const multer = require("multer");
-const { isAdmin } = require("./utils");
+// server/routes/videos.js
+import express from "express";
+import path from "path";
+import fs from "fs";
+import fsp from "fs/promises";
+import multer from "multer";
+import { isAdmin } from "./utils.js"; // 👈 .js extension for ESM
 
 const router = express.Router();
 
 /* ---------- paths & helpers ---------- */
-const ROOT = path.join(__dirname, "..");
+const ROOT = path.join(process.cwd(), "server");
 const DATA_DIR = path.join(ROOT, "data");
 const UP_DIR = path.join(ROOT, "uploads", "videos"); // plural
 const DB_FILE = path.join(DATA_DIR, "videos.json");
@@ -200,4 +201,4 @@ router.use((err, req, res, _next) => {
     .json({ success: false, message: err.message || "Server error" });
 });
 
-module.exports = router;
+export default router; // 👈 ES module default export
