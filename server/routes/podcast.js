@@ -1,201 +1,201 @@
-// server/routes/podcast.js
+import "dotenv/config";
 import express from "express";
-import multer from "multer";
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
-import { nanoid } from "nanoid";
+import cors from "cors";
+import path from "path";
+import fs from "fs";
 import mongoose from "mongoose";
-import { isAdmin } from "./utils.js";
+import { fileURLToPath } from "url";
 
-const router = express.Router();
+// ---------- app/bootstrap ----------
+const app = express();
+const PORT = process.env.PORT || 5000;
 
-/* ---------- Mongo Model ---------- */
-const PodcastPlaylistSchema = new mongoose.Schema({
-  name: String,
-  items: [
-    {
-      id: String,
-      title: String,
-      artist: String,
-      url: String,
-      locked: { type: Boolean, default: true },
-    },
-  ],
-});
+// __dirname in ESM
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-const PodcastPlaylist =
-  mongoose.models.PodcastPlaylist ||
-  mongoose.model("PodcastPlaylist", PodcastPlaylistSchema);
+// ---------- CORS ----------
+const CLIENT_URL =
+  process.env.CLIENT_URL ||
+  process.env.VITE_BACKEND_URL || // just in case you set this
+  "https://law-network-client.onrender.com";
 
-/* ---------- R2 / S3 Client ---------- */
-const s3 = new S3Client({
-  region: "auto",
-  endpoint: process.env.R2_ENDPOINT,
-  credentials: {
-    accessKeyId: process.env.R2_ACCESS_KEY_ID,
-    secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
+const ALLOWED_ORIGINS = [
+  CLIENT_URL,
+  "https://law-network.onrender.com",
+  "http://localhost:5173",
+  "http://localhost:3000",
+];
+
+const corsOptions = {
+  origin(origin, cb) {
+    if (!origin) return cb(null, true); // allow server-to-server / curl
+    if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
+    return cb(new Error("CORS not allowed: " + origin));
   },
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "X-Owner-Key",
+    "x-owner-key",
+  ],
+  optionsSuccessStatus: 204,
+};
+
+app.set("trust proxy", 1);
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
+app.use(express.json({ limit: "10mb" }));
+
+// Always attach permissive headers for allowed origins (helps on some hosts)
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin && ALLOWED_ORIGINS.includes(origin)) {
+    res.header("Access-Control-Allow-Origin", origin);
+    res.header("Vary", "Origin");
+    res.header("Access-Control-Allow-Credentials", "true");
+    res.header(
+      "Access-Control-Allow-Headers",
+      "Content-Type, Authorization, X-Owner-Key, x-owner-key"
+    );
+    res.header(
+      "Access-Control-Allow-Methods",
+      "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+    );
+    res.header("Cross-Origin-Resource-Policy", "cross-origin");
+  }
+  if (req.method === "OPTIONS") return res.sendStatus(204);
+  next();
 });
 
-// Build a correct public base that includes the bucket (works for R2 public buckets)
-function r2PublicUrl(key) {
-  const base = String(process.env.R2_PUBLIC_BASE || "").replace(/\/+$/, "");
-  const bucket = String(process.env.R2_BUCKET || "").replace(/^\/+|\/+$/g, "");
-  return `${base}/${bucket}/${key}`;
+// Tiny log
+app.use((req, _res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
+  next();
+});
+
+// Fix accidental /api/api/*
+app.use((req, _res, next) => {
+  if (req.url.startsWith("/api/api/")) {
+    const before = req.url;
+    req.url = req.url.replace(/^\/api\/api\//, "/api/");
+    console.log("↪️  internally rewrote", before, "→", req.url);
+  }
+  next();
+});
+
+// ---------- Static uploads (make sure folders exist) ----------
+[
+  "uploads",
+  "uploads/articles",
+  "uploads/banners",
+  "uploads/consultancy",
+  "uploads/submissions",
+  "uploads/videos",
+  "uploads/podcasts",
+  "uploads/qr",
+].forEach((rel) => {
+  const full = path.join(__dirname, rel);
+  if (!fs.existsSync(full)) fs.mkdirSync(full, { recursive: true });
+});
+
+app.use(
+  "/uploads",
+  express.static(path.join(__dirname, "uploads"), {
+    setHeaders: (res) => {
+      res.setHeader("Access-Control-Allow-Origin", CLIENT_URL);
+    },
+  })
+);
+
+// ---------- Routes (ESM) ----------
+import articleRoutes from "./routes/articles.js";
+import bannerRoutes from "./routes/banners.js";
+import consultancyRoutes from "./routes/consultancy.js";
+import newsRoutes from "./routes/news.js";
+import pdfRoutes from "./routes/pdfs.js"; // your pdfs route
+
+import podcastRoutes from "./routes/podcast.js"; // podcasts
+import videoRoutes from "./routes/videos.js";     // videos
+
+import submissionsRoutes from "./routes/submissions.js"; // admin submissions + SSE
+import qrRoutes from "./routes/qr.js"; // ✅ new QR route (converted to ESM)
+
+// ---------- Mounts ----------
+app.use("/api/articles", articleRoutes);
+app.use("/api/banners", bannerRoutes);
+app.use("/api/consultancy", consultancyRoutes);
+app.use("/api/news", newsRoutes);
+app.use("/api/pdfs", pdfRoutes);
+
+// Podcasts — mount both plural & singular so AdminPodcastEditor + Podcast.jsx both work
+app.use("/api/podcasts", podcastRoutes);
+app.use("/api/podcast", podcastRoutes);
+
+// Videos
+app.use("/api/videos", videoRoutes);
+
+// Submissions (admin list, auto-mode, approve/revoke, SSE stream)
+app.use("/api/submissions", submissionsRoutes);
+
+// ✅ QR route
+app.use("/api/qr", qrRoutes);
+
+// Quiet the client probe
+app.get("/api/access/status", (_req, res) => res.json({ access: false }));
+
+// ---------- Probes ----------
+app.get("/api/ping", (_req, res) => res.json({ ok: true, ts: Date.now() }));
+app.get("/api/_routes_check", (_req, res) =>
+  res.json({
+    ok: true,
+    hasArticles: true,
+    hasBanners: true,
+    hasConsultancy: true,
+    hasNews: true,
+    hasPDFs: true,
+    hasPodcasts: true,
+    hasVideos: true,
+    hasSubmissions: true,
+    hasQR: true,
+  })
+);
+
+// Root
+app.get("/", (_req, res) => res.json({ ok: true, root: true }));
+
+// 404
+app.use((req, res) => {
+  res
+    .status(404)
+    .json({ success: false, message: `Not Found: ${req.method} ${req.originalUrl}` });
+});
+
+// Error
+app.use((err, _req, res, _next) => {
+  console.error("Server error:", err);
+  res
+    .status(err.status || 500)
+    .json({ success: false, message: err.message || "Server error" });
+});
+
+// ---------- Mongo ----------
+const MONGO =
+  process.env.MONGO_URI ||
+  process.env.MONGO_URL ||
+  process.env.MONGODB_URI ||
+  "";
+
+if (!MONGO) {
+  console.error("✗ Missing MONGO connection string (MONGO_URI/MONGO_URL/MONGODB_URI)");
+} else {
+  mongoose
+    .connect(MONGO, { dbName: process.env.MONGO_DB || undefined })
+    .then(() => console.log("✅ MongoDB connected"))
+    .catch((err) => console.error("✗ MongoDB connection failed:", err.message));
 }
 
-/* ---------- Multer (memory) ---------- */
-const upload = multer({ storage: multer.memoryStorage() });
-const uploadAny = upload.fields([
-  { name: "audio", maxCount: 1 },
-  { name: "file", maxCount: 1 },
-  { name: "upload", maxCount: 1 },
-]);
-function pickUploaded(req) {
-  return (
-    req.file ||
-    req.files?.audio?.[0] ||
-    req.files?.file?.[0] ||
-    req.files?.upload?.[0] ||
-    null
-  );
-}
-
-/* ---------- Routes ---------- */
-
-// Public: get all playlists
-router.get("/", async (_req, res) => {
-  try {
-    const playlists = await PodcastPlaylist.find().lean();
-    console.log("[/api/podcasts] GET ->", playlists.length, "playlists");
-    res.json({ success: true, playlists });
-  } catch (err) {
-    console.error("Podcast list error:", err);
-    res.status(500).json({ success: false, message: "Failed to fetch playlists" });
-  }
-});
-
-// Admin: create new playlist
-router.post("/playlists", isAdmin, express.json(), async (req, res) => {
-  try {
-    console.log("[/api/podcasts/playlists] POST body:", req.body);
-    const { name } = req.body || {};
-    if (!name) return res.status(400).json({ success: false, message: "Name required" });
-
-    const playlist = await PodcastPlaylist.create({ name, items: [] });
-    console.log(" created playlist:", playlist?._id, playlist?.name);
-    res.json({ success: true, playlist });
-  } catch (err) {
-    console.error("Podcast create error:", err);
-    res.status(500).json({ success: false, message: "Failed to create playlist" });
-  }
-});
-
-// Admin: upload audio OR attach external URL into playlist
-router.post("/playlists/:pid/items", isAdmin, uploadAny, async (req, res) => {
-  try {
-    const { pid } = req.params;
-    const { title, artist, locked, url: externalUrl } = req.body || {};
-    console.log("[/api/podcasts/:pid/items] POST pid:", pid, "fields:", {
-      title, artist, locked, externalUrl: !!externalUrl, hasUpload: !!pickUploaded(req)
-    });
-
-    const playlist = await PodcastPlaylist.findById(pid);
-    if (!playlist) {
-      console.warn(" 404 playlist not found for", pid);
-      return res.status(404).json({ success: false, message: "Playlist not found" });
-    }
-
-    let finalUrl = "";
-    const up = pickUploaded(req);
-
-    if (up) {
-      const ext = (up.originalname || "").split(".").pop() || "mp3";
-      const key = `podcasts/${Date.now()}-${nanoid()}.${ext}`;
-      await s3.send(new PutObjectCommand({
-        Bucket: process.env.R2_BUCKET,
-        Key: key,
-        Body: up.buffer,
-        ContentType: up.mimetype || "audio/mpeg",
-      }));
-      finalUrl = r2PublicUrl(key);
-      console.log("  uploaded to R2:", finalUrl);
-    } else if (externalUrl && /^https?:\/\//i.test(externalUrl)) {
-      finalUrl = externalUrl.trim();
-      console.log("  using external URL:", finalUrl);
-    } else {
-      console.warn(" 400: no audio or url");
-      return res.status(400).json({ success: false, message: "No audio file or URL" });
-    }
-
-    const newItem = {
-      id: nanoid(),
-      title: title || "Untitled",
-      artist: artist || "",
-      url: finalUrl,
-      locked: String(locked) === "true" || locked === true,
-    };
-
-    playlist.items.push(newItem);
-    await playlist.save();
-    console.log("  appended item:", newItem.id, "title:", newItem.title);
-
-    res.json({ success: true, item: newItem });
-  } catch (err) {
-    console.error("Podcast upload error:", err);
-    res.status(500).json({ success: false, message: err.message || "Upload failed" });
-  }
-});
-
-// Admin: delete item
-router.delete("/playlists/:pid/items/:iid", isAdmin, async (req, res) => {
-  try {
-    const { pid, iid } = req.params;
-    console.log("[/api/podcasts/:pid/items/:iid] DELETE", pid, iid);
-    const playlist = await PodcastPlaylist.findById(pid);
-    if (!playlist) return res.status(404).json({ success: false, message: "Playlist not found" });
-    const before = playlist.items?.length || 0;
-    playlist.items = (playlist.items || []).filter((x) => x.id !== iid);
-    await playlist.save();
-    console.log("  items:", before, "=>", playlist.items.length);
-    res.json({ success: true });
-  } catch (err) {
-    console.error("Podcast delete item error:", err);
-    res.status(500).json({ success: false, message: "Failed to delete item" });
-  }
-});
-
-// Admin: toggle lock
-router.patch("/playlists/:pid/items/:iid/lock", isAdmin, express.json(), async (req, res) => {
-  try {
-    const { pid, iid } = req.params;
-    const { locked } = req.body || {};
-    console.log("[/api/podcasts/:pid/items/:iid/lock] PATCH", pid, iid, "->", locked);
-    const playlist = await PodcastPlaylist.findById(pid);
-    if (!playlist) return res.status(404).json({ success: false, message: "Playlist not found" });
-    const item = (playlist.items || []).find((x) => x.id === iid);
-    if (!item) return res.status(404).json({ success: false, message: "Item not found" });
-    item.locked = !!locked;
-    await playlist.save();
-    res.json({ success: true, item });
-  } catch (err) {
-    console.error("Podcast toggle lock error:", err);
-    res.status(500).json({ success: false, message: "Failed to toggle lock" });
-  }
-});
-
-// ✅ Admin: delete playlist (so Admin can remove a whole playlist)
-router.delete("/playlists/:pid", isAdmin, async (req, res) => {
-  try {
-    const { pid } = req.params;
-    console.log("[/api/podcasts/playlists/:pid] DELETE", pid);
-    const pl = await PodcastPlaylist.findById(pid);
-    if (!pl) return res.status(404).json({ success: false, message: "Playlist not found" });
-    await PodcastPlaylist.findByIdAndDelete(pid);
-    res.json({ success: true });
-  } catch (err) {
-    console.error("Podcast delete playlist error:", err);
-    res.status(500).json({ success: false, message: "Failed to delete playlist" });
-  }
-});
-
-export default router;
+// ---------- Start ----------
+app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
