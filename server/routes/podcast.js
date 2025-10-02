@@ -54,30 +54,28 @@ router.delete("/playlists/:pid", (req, res) => {
 });
 
 // POST /api/podcasts/playlists/:pid/items  (upload audio)
-router.post(
-  "/playlists/:pid/items",
-  upload.single("audio"),
-  (req, res) => {
-    const pid = req.params.pid;
-    const pl = findPl(pid);
-    if (!pl) return res.status(404).json({ success: false, message: "Playlist not found" });
+router.post("/playlists/:pid/items", upload.single("audio"), (req, res) => {
+  const pid = req.params.pid;
+  const pl = findPl(pid);
+  if (!pl)
+    return res.status(404).json({ success: false, message: "Playlist not found" });
 
-    const id = newId();
-    const title = req.body.title || "Untitled";
-    const artist = req.body.artist || "";
-    const locked = String(req.body.locked) === "true";
+  const id = newId();
+  const title = req.body.title || "Untitled";
+  const artist = req.body.artist || "";
+  const locked = String(req.body.locked) === "true";
 
-    let url = req.body.url?.trim();
-    if (!url && req.file) {
-      // local uploaded file served under /uploads
-      url = `/uploads/podcasts/${req.file.filename}`;
-    }
-    if (!url) return res.status(400).json({ success: false, message: "No file or URL provided" });
-
-    pl.items.push({ id, title, artist, url, locked });
-    res.json({ success: true, id });
+  let url = req.body.url?.trim();
+  if (!url && req.file) {
+    // local uploaded file served under /uploads
+    url = `/uploads/podcasts/${req.file.filename}`;
   }
-);
+  if (!url)
+    return res.status(400).json({ success: false, message: "No file or URL provided" });
+
+  pl.items.push({ id, title, artist, url, locked });
+  res.json({ success: true, id });
+});
 
 // DELETE /api/podcasts/playlists/:pid/items/:iid
 router.delete("/playlists/:pid/items/:iid", (req, res) => {
