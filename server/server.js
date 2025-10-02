@@ -1,60 +1,45 @@
-import express from "express";
-import multer from "multer";
-import path from "path";
-import fs from "fs";
-import { fileURLToPath } from "url";
+import 'dotenv/config';
+import express from 'express';
+import cors from 'cors';
+import path from 'path';
+import mongoose from 'mongoose';
 
-// simple owner-key check
-function isAdmin(req, res, next) {
-  const key = req.headers["x-owner-key"];
-  if (!key || key !== process.env.VITE_OWNER_KEY) {
-    return res.status(401).json({ success: false, message: "Unauthorized" });
-  }
-  next();
-}
+import articleRoutes from './routes/articles.js';
+import bannerRoutes from './routes/banners.js';
+import consultancyRoutes from './routes/consultancy.js';
+import newsRoutes from './routes/news.js';
+import pdfRoutes from './routes/pdfs.js';
+import podcastRoutes from './routes/podcast.js';
+import videoRoutes from './routes/videos.js';
 
-const router = express.Router();
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const app = express();
 
-// local uploads folder
-const UP_DIR = path.join(__dirname, "..", "uploads", "podcasts");
-if (!fs.existsSync(UP_DIR)) fs.mkdirSync(UP_DIR, { recursive: true });
+// middlewares
+app.use(cors());
+app.use(express.json());
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, UP_DIR),
-  filename: (req, file, cb) => cb(null, Date.now() + "-" + file.originalname),
-});
-const upload = multer({ storage });
+// simple ping
+app.get('/api/ping', (_req, res) => res.json({ ok: true }));
 
-// fake in-memory playlists for now
-let playlists = [];
+// attach routes
+app.use('/api/articles', articleRoutes);
+app.use('/api/banners', bannerRoutes);
+app.use('/api/consultancy', consultancyRoutes);
+app.use('/api/news', newsRoutes);
+app.use('/api/pdfs', pdfRoutes);
+app.use('/api/podcasts', podcastRoutes); // <-- now picks up your router code
+app.use('/api/videos', videoRoutes);
 
-// GET playlists
-router.get("/playlists", (req, res) => {
-  res.json({ success: true, playlists });
-});
+// static uploads
+app.use('/uploads', express.static(path.join(process.cwd(), 'server', 'uploads')));
 
-// POST create playlist
-router.post("/playlists", isAdmin, express.json(), (req, res) => {
-  const { name } = req.body;
-  if (!name) return res.status(400).json({ success: false, message: "Name required" });
-  const pl = { id: Date.now().toString(), name, items: [] };
-  playlists.push(pl);
-  res.json({ success: true, playlist: pl });
-});
+// connect to Mongo
+mongoose.connect(process.env.MONGO_URL || process.env.MONGODB_URI || '', {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+})
+  .then(() => console.log('MongoDB connected'))
+  .catch(err => console.error('MongoDB connection error:', err));
 
-// upload a podcast file
-router.post("/:playlistId/upload", isAdmin, upload.single("file"), (req, res) => {
-  const { playlistId } = req.params;
-  const pl = playlists.find((p) => p.id === playlistId);
-  if (!pl) return res.status(404).json({ success: false, message: "Playlist not found" });
-
-  const fileUrl = `/uploads/podcasts/${path.basename(req.file.path)}`;
-  const item = { id: Date.now().toString(), title: req.body.title || req.file.originalname, url: fileUrl };
-  pl.items.push(item);
-
-  res.json({ success: true, item });
-});
-
-export default router;
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
