@@ -118,7 +118,7 @@ import consultancyRoutes from "./routes/consultancy.js";
 import newsRoutes from "./routes/news.js";
 import pdfRoutes from "./routes/pdfs.js"; // your pdfs route
 
-import podcastRoutes from "./routes/podcasts.js"; // ✅ plural file name
+import podcastRoutes from "./routes/podcast.js";
 import videoRoutes from "./routes/videos.js";     // videos
 
 import submissionsRoutes from "./routes/submissions.js"; // admin submissions + SSE
