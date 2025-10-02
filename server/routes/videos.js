@@ -4,7 +4,7 @@ import path from "path";
 import fs from "fs";
 import fsp from "fs/promises";
 import multer from "multer";
-import { isAdmin } from "./utils.js"; // 👈 .js extension for ESM
+import { isAdmin } from "./utils.js";
 
 const router = express.Router();
 
@@ -65,6 +65,7 @@ function pickUploadedFile(req) {
 // Public: list playlists
 router.get("/", async (_req, res) => {
   const db = await readDB();
+  console.log("[/api/videos] GET ->", db.playlists.length, "playlists");
   res.json({ success: true, playlists: db.playlists });
 });
 
@@ -72,8 +73,8 @@ router.get("/", async (_req, res) => {
 router.post("/playlists", isAdmin, express.json(), async (req, res, next) => {
   try {
     const name = (req.body?.name || "").trim();
-    if (!name)
-      return res.status(400).json({ success: false, message: "Name required" });
+    console.log("[/api/videos/playlists] POST name:", name);
+    if (!name) return res.status(400).json({ success: false, message: "Name required" });
 
     const db = await readDB();
     const id = name.toLowerCase().replace(/\s+/g, "-") || uid();
@@ -100,20 +101,21 @@ async function addItem(req, res) {
     req.body.playlist_id ||
     req.body.pid;
 
-  if (!key)
-    return res.status(400).json({ success: false, message: "Missing playlist" });
+  console.log("[/api/videos/*/items] POST key:", key, "fields:", {
+    title: req.body?.title, hasUpload: !!pickUploadedFile(req), url: !!req.body?.url
+  });
+
+  if (!key) return res.status(400).json({ success: false, message: "Missing playlist" });
 
   const pl = findPlaylist(db, key);
-  if (!pl)
-    return res.status(404).json({ success: false, message: "Playlist not found" });
+  if (!pl) return res.status(404).json({ success: false, message: "Playlist not found" });
 
   const title = (req.body.title || "Untitled").trim();
   let url = (req.body.url || "").trim();
 
   const up = pickUploadedFile(req);
   if (up) url = publicUrl(up.path);
-  if (!url)
-    return res.status(400).json({ success: false, message: "Video file or url required" });
+  if (!url) return res.status(400).json({ success: false, message: "Video file or url required" });
 
   const locked =
     typeof req.body.locked === "string"
@@ -133,6 +135,7 @@ async function addItem(req, res) {
   pl.items.push(it);
   await writeDB(db);
 
+  console.log("  added item to", key, "->", it.id, it.title, it.url);
   res.json({ success: true, item: it, playlist: pl.id || pl._id || pl.name });
 }
 
@@ -146,6 +149,7 @@ router.post("/", isAdmin, uploadAny, addItem); // fallback
 router.delete("/items/:id", isAdmin, async (req, res) => {
   const db = await readDB();
   let removed = null;
+  console.log("[/api/videos/items/:id] DELETE", req.params.id);
   for (const pl of db.playlists) {
     const idx = (pl.items || []).findIndex((x) => (x.id || x._id) === req.params.id);
     if (idx >= 0) {
@@ -166,33 +170,6 @@ router.delete("/items/:id", isAdmin, async (req, res) => {
   res.json({ success: true, removed: !!removed });
 });
 
-// DELETE a whole playlist (+ uploaded files)
-async function deletePlaylist(req, res) {
-  const db = await readDB();
-  const key = req.params.playlist;
-  const idx = db.playlists.findIndex((p) => (p._id || p.id || p.name) === key);
-  if (idx < 0)
-    return res.status(404).json({ success: false, message: "Playlist not found" });
-
-  const pl = db.playlists[idx];
-  for (const it of pl.items || []) {
-    try {
-      if (it.url?.startsWith("/uploads/videos/")) {
-        const abs = path.join(ROOT, it.url.replace(/^\//, ""));
-        if (abs.startsWith(path.join(ROOT, "uploads", "videos"))) {
-          await fsp.unlink(abs).catch(() => {});
-        }
-      }
-    } catch {}
-  }
-  db.playlists.splice(idx, 1);
-  await writeDB(db);
-  res.json({ success: true });
-}
-
-router.delete("/:playlist", isAdmin, deletePlaylist);
-router.delete("/playlists/:playlist", isAdmin, deletePlaylist);
-
 /* ---------- Error handler ---------- */
 router.use((err, req, res, _next) => {
   console.error("Videos route error:", err);
@@ -201,4 +178,4 @@ router.use((err, req, res, _next) => {
     .json({ success: false, message: err.message || "Server error" });
 });
 
-export default router; // 👈 ES module default export
+export default router;
