@@ -1,14 +1,14 @@
 // server/routes/qr.js
-const express = require("express");
-const fs = require("fs");
-const fsp = require("fs/promises");
-const path = require("path");
-const multer = require("multer");
-const { isAdmin } = require("./utils");
+import express from "express";
+import fs from "fs";
+import fsp from "fs/promises";
+import path from "path";
+import multer from "multer";
+import { isAdmin } from "./utils.js";
 
 const router = express.Router();
 
-const ROOT = path.join(__dirname, "..");
+const ROOT = path.join(process.cwd(), "server"); // consistent root
 const DATA_DIR = path.join(ROOT, "data");
 const DATA_FILE = path.join(DATA_DIR, "qr.json");
 const UP_DIR = path.join(ROOT, "uploads", "qr");
@@ -148,4 +148,4 @@ router.use((err, _req, res, _next) => {
     .json({ success: false, message: err.message || "Server error" });
 });
 
-module.exports = router;
+export default router;
