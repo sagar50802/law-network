@@ -1,14 +1,16 @@
-// server/routes/qr.js
 import express from "express";
 import fs from "fs";
 import fsp from "fs/promises";
 import path from "path";
 import multer from "multer";
-import { isAdmin } from "./utils.js";
+import { isAdmin } from "./utils.js"; // adjust if your utils path differs
+import { fileURLToPath } from "url";
 
 const router = express.Router();
 
-const ROOT = path.join(process.cwd(), "server"); // consistent root
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const ROOT = path.join(__dirname, "..");
 const DATA_DIR = path.join(ROOT, "data");
 const DATA_FILE = path.join(DATA_DIR, "qr.json");
 const UP_DIR = path.join(ROOT, "uploads", "qr");
@@ -92,10 +94,13 @@ router.get("/current", async (_req, res) => {
 
 // POST update (admin)
 router.post("/", isAdmin, upload.single("image"), async (req, res) => {
+  console.log("=== QR upload ===", req.file); // log upload details
+
   const cfg = await ensureConfig();
 
   if (req.file) {
     if (cfg.url) await unlinkQuiet(cfg.url);
+    // always save as /uploads/qr/<filename>
     cfg.url = `/uploads/qr/${req.file.filename}`;
   }
 
@@ -128,7 +133,11 @@ router.post("/", isAdmin, upload.single("image"), async (req, res) => {
   cfg.plans.yearly.price = num(yearlyPrice, cfg.plans.yearly.price);
 
   await writeJSON(cfg);
-  res.json({ success: true, qr: cfg });
+
+  // send back full URL as well for immediate preview
+  const fullUrl = `${req.protocol}://${req.get("host")}${cfg.url}`;
+
+  res.json({ success: true, qr: { ...cfg, fullUrl } });
 });
 
 // DELETE image
