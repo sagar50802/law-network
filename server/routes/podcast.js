@@ -1,22 +1,11 @@
-// server/routes/podcast.js
 import express from "express";
 import multer from "multer";
-import {
-  S3Client,
-  PutObjectCommand,
-  DeleteObjectCommand,
-} from "@aws-sdk/client-s3";
-import { ensureDir } from "./utils.js";
-import Audio from "../models/Audio.js"; // your Audio.js model
-import Playlist from "../models/Playlist.js"; // if you have one
+import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import Audio from "../models/Audio.js"; // your mongoose model
 
 const router = express.Router();
 
-/** ---------- Multer setup (in-memory) ---------- */
-const storage = multer.memoryStorage();
-const upload = multer({ storage });
-
-/** ---------- S3 Client for Cloudflare R2 ---------- */
+// ============= Cloudflare R2 S3 client =============
 const s3 = new S3Client({
   region: "auto",
   endpoint: process.env.R2_ENDPOINT,
@@ -26,21 +15,24 @@ const s3 = new S3Client({
   },
 });
 const BUCKET = process.env.R2_BUCKET;
+const PUBLIC_BASE = process.env.R2_PUBLIC_BASE;
 
-/** ---------- GET all playlists with items ---------- */
+// ============= Multer (memory) =============
+const storage = multer.memoryStorage();
+const upload = multer({ storage });
+
+// ============= Routes =============
+
+// fetch all playlists with their items
 router.get("/", async (req, res) => {
   try {
-    // fetch all audio docs and group by playlist
-    const items = await Audio.find().lean();
-    const grouped = items.reduce((acc, item) => {
-      if (!acc[item.playlistName]) acc[item.playlistName] = [];
-      acc[item.playlistName].push(item);
-      return acc;
-    }, {});
-    const playlists = Object.entries(grouped).map(([name, audios]) => ({
-      name,
-      audios,
-    }));
+    const audios = await Audio.find().sort({ createdAt: -1 });
+    // group by playlistName
+    const playlists = {};
+    for (const a of audios) {
+      if (!playlists[a.playlistName]) playlists[a.playlistName] = [];
+      playlists[a.playlistName].push(a);
+    }
     res.json({ playlists });
   } catch (err) {
     console.error("GET /podcasts error", err);
@@ -48,16 +40,14 @@ router.get("/", async (req, res) => {
   }
 });
 
-/** ---------- POST upload audio to playlist ---------- */
-router.post("/upload", upload.single("audio"), async (req, res) => {
+// upload a new audio file to R2 and save metadata
+router.post("/", upload.single("audio"), async (req, res) => {
   try {
-    const { playlistName, title, speaker } = req.body;
-    if (!playlistName || !title || !req.file)
-      return res
-        .status(400)
-        .json({ success: false, message: "Missing fields" });
+    const { title, speaker, playlistName } = req.body;
+    if (!req.file) throw new Error("No audio file uploaded");
 
-    // key name in bucket
+    // create unique key
+    const ext = req.file.originalname.split(".").pop();
     const key = `podcasts/${Date.now()}_${req.file.originalname}`;
 
     // upload to R2
@@ -70,45 +60,30 @@ router.post("/upload", upload.single("audio"), async (req, res) => {
       })
     );
 
-    // public URL
-    const url = `${process.env.R2_PUBLIC_BASE}/${key}`;
+    const publicUrl = `${PUBLIC_BASE}/${key}`;
 
-    // store in Mongo
-    const audio = await Audio.create({
+    // save to Mongo
+    const audio = new Audio({
       title,
       playlistName,
-      audioPath: url,
+      audioPath: publicUrl,
+      speaker: speaker || "",
     });
+    await audio.save();
 
     res.json({ success: true, audio });
   } catch (err) {
-    console.error("POST /podcasts/upload error", err);
+    console.error("POST /podcasts error", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-/** ---------- DELETE audio ---------- */
+// delete an audio entry (optional)
 router.delete("/:id", async (req, res) => {
   try {
-    const audio = await Audio.findById(req.params.id);
-    if (!audio) return res.status(404).json({ success: false, message: "Not found" });
-
-    // extract key from URL (R2_PUBLIC_BASE/key)
-    const publicBase = process.env.R2_PUBLIC_BASE + "/";
-    const key = audio.audioPath.replace(publicBase, "");
-
-    // delete from R2
-    await s3.send(
-      new DeleteObjectCommand({
-        Bucket: BUCKET,
-        Key: key,
-      })
-    );
-
-    await audio.deleteOne();
+    await Audio.findByIdAndDelete(req.params.id);
     res.json({ success: true });
   } catch (err) {
-    console.error("DELETE /podcasts/:id error", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
