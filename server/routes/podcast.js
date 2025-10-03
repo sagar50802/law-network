@@ -7,23 +7,25 @@ import {
   PutObjectCommand,
   DeleteObjectCommand,
 } from "@aws-sdk/client-s3";
-import Playlist from "../models/Playlist.js";      // <-- your Mongoose model
+
+// Use wrappers so we DON'T touch your existing files
+import Playlist from "../models/PlaylistWrapper.js";
 import isOwner from "../middlewares/isOwnerWrapper.js";
 
 const router = express.Router();
 
-/* ---------------- Cloudflare R2 ---------------- */
+/* ---------------- Cloudflare R2 (envs must be set in Render) ---------------- */
 const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID;
 const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID;
 const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY;
 const R2_BUCKET = process.env.R2_BUCKET || "lawprepx";
 const R2_PUBLIC_BASE = (process.env.R2_PUBLIC_BASE || "").replace(/\/+$/, "");
 
-const canUseR2 =
+const r2Ready =
   !!R2_ACCOUNT_ID && !!R2_ACCESS_KEY_ID && !!R2_SECRET_ACCESS_KEY && !!R2_PUBLIC_BASE;
 
-if (!canUseR2) {
-  console.warn("⚠️  R2 is not fully configured. Uploads will fail until env vars are set.");
+if (!r2Ready) {
+  console.warn("⚠️ R2 not fully configured. Set R2_ACCOUNT_ID / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY / R2_PUBLIC_BASE.");
 }
 
 const s3 = new S3Client({
@@ -38,6 +40,8 @@ const s3 = new S3Client({
 /* ---------------- Helpers ---------------- */
 const upload = multer({ storage: multer.memoryStorage() });
 const newId = () => Math.random().toString(36).slice(2, 10);
+
+// Read from JSON, x-www-form-urlencoded, or query; if blank → "Untitled"
 const getName = (req) => {
   const bodyName = req.body?.name || req.body?.playlistName || "";
   const queryName = req.query?.name || req.query?.playlistName || "";
@@ -46,24 +50,32 @@ const getName = (req) => {
 
 /* ---------------- Routes ---------------- */
 
-// Public GET: all playlists + items
+// Public: list playlists
 router.get("/", async (_req, res) => {
   try {
     const playlists = await Playlist.find().lean();
     res.json({ playlists });
   } catch (err) {
-    console.error("GET playlists failed:", err);
+    console.error("GET /podcasts failed:", err);
     res.status(500).json({ success: false, message: "Failed to fetch playlists." });
   }
 });
 
-// Admin: create playlist
+// Admin: create playlist (tolerant name handling)
 router.post("/playlists", isOwner, async (req, res) => {
   try {
-    const name = getName(req);
+    const name = getName(req); // will use what you typed if present
     const slug = name.toLowerCase().replace(/\s+/g, "-");
     const doc = await Playlist.create({ name, slug, items: [] });
-    res.status(201).json({ success: true, playlist: doc });
+    res.status(201).json({
+      success: true,
+      playlist: {
+        _id: doc._id,
+        id: doc._id,         // your client accepts _id or id
+        name: doc.name,
+        items: doc.items || [],
+      },
+    });
   } catch (err) {
     console.error("Create playlist failed:", err);
     res.status(500).json({ success: false, message: "Failed to create playlist." });
@@ -81,7 +93,7 @@ router.delete("/playlists/:pid", isOwner, async (req, res) => {
   }
 });
 
-// Admin: add item (upload file to R2 or use external URL)
+// Admin: add item (upload to R2 or use external URL)
 router.post(
   "/playlists/:pid/items",
   isOwner,
@@ -98,10 +110,10 @@ router.post(
       let url = (req.body?.url || "").trim();
 
       if (!url && req.file) {
-        if (!canUseR2) {
+        if (!r2Ready) {
           return res.status(500).json({
             success: false,
-            message: "R2 not configured. Set R2_ACCOUNT_ID/KEYS and R2_PUBLIC_BASE.",
+            message: "R2 not configured.",
           });
         }
         const ext = (extname(req.file.originalname) || ".mp3").toLowerCase();
@@ -131,7 +143,7 @@ router.post(
   }
 );
 
-// Admin: delete item (also best-effort delete from R2)
+// Admin: delete item (best-effort delete from R2)
 router.delete("/playlists/:pid/items/:iid", isOwner, async (req, res) => {
   try {
     const playlist = await Playlist.findById(req.params.pid);
@@ -142,10 +154,10 @@ router.delete("/playlists/:pid/items/:iid", isOwner, async (req, res) => {
     if (idx === -1)
       return res.status(404).json({ success: false, message: "Item not found" });
 
-    const url = playlist.items[idx].url || "";
-    if (canUseR2 && url.startsWith(R2_PUBLIC_BASE + "/")) {
+    const fileUrl = playlist.items[idx].url || "";
+    if (r2Ready && fileUrl.startsWith(R2_PUBLIC_BASE + "/")) {
       try {
-        const key = url.substring(R2_PUBLIC_BASE.length + 1);
+        const key = fileUrl.substring(R2_PUBLIC_BASE.length + 1);
         if (key) {
           await s3.send(new DeleteObjectCommand({ Bucket: R2_BUCKET, Key: key }));
         }
