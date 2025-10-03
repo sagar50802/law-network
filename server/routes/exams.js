@@ -7,6 +7,10 @@ import { uploadToR2 } from "../utils/r2.js";
 import { ocrFileToText } from "../utils/ocr.js";
  import { isAdmin } from "./utils.js";
 import fs from "fs";
+
+function ensureDir(dir) {
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+}
 const router = express.Router();
 const TMP_DIR = path.join(process.cwd(), "server", "tmp");
 ensureDir(TMP_DIR);
