@@ -8,7 +8,7 @@ import {
   DeleteObjectCommand,
 } from "@aws-sdk/client-s3";
 
-// Use wrappers so we DO NOT modify your existing files
+// Use wrappers so we DO NOT touch your existing CommonJS files
 import Playlist from "../models/PlaylistWrapper.js";
 import isOwner from "../middlewares/isOwnerWrapper.js";
 
@@ -44,12 +44,28 @@ const getName = (req) => {
   return String(bodyName || queryName).trim() || "Untitled";
 };
 
+// Map DB doc -> consistent shape for clients (id + _id, normalized items)
+const shapePlaylist = (doc) => ({
+  _id: doc._id,
+  id: String(doc._id), // your React uses `id`
+  name: doc.name || "Untitled",
+  slug: doc.slug || "",
+  items: (doc.items || []).map((it) => ({
+    id: String(it.id || it._id || newId()), // keep existing id; fallback safe
+    title: it.title || "Untitled",
+    artist: it.artist || "",
+    url: it.url || "",
+    locked: !!it.locked,
+  })),
+});
+
 /* ---------------- Routes ---------------- */
 
 // Public: list playlists
 router.get("/", async (_req, res) => {
   try {
-    const playlists = await Playlist.find().lean();
+    const docs = await Playlist.find().lean();
+    const playlists = docs.map(shapePlaylist);
     res.json({ playlists });
   } catch (err) {
     console.error("GET /podcasts failed:", err);
@@ -60,18 +76,10 @@ router.get("/", async (_req, res) => {
 // Admin: create playlist (tolerant name handling)
 router.post("/playlists", isOwner, async (req, res) => {
   try {
-    const name = getName(req); // will use what admin typed if present
+    const name = getName(req); // uses what admin typed if present
     const slug = name.toLowerCase().replace(/\s+/g, "-");
     const doc = await Playlist.create({ name, slug, items: [] });
-    res.status(201).json({
-      success: true,
-      playlist: {
-        _id: doc._id,
-        id: String(doc._id), // your client accepts _id or id
-        name: doc.name,
-        items: doc.items || [],
-      },
-    });
+    res.status(201).json({ success: true, playlist: shapePlaylist(doc) });
   } catch (err) {
     console.error("Create playlist failed:", err);
     res.status(500).json({ success: false, message: "Failed to create playlist." });
@@ -93,7 +101,7 @@ router.delete("/playlists/:pid", isOwner, async (req, res) => {
 router.post(
   "/playlists/:pid/items",
   isOwner,
-  upload.single("audio"),
+  upload.single("audio"), // field name must be "audio"
   async (req, res) => {
     try {
       const playlist = await Playlist.findById(req.params.pid);
@@ -131,7 +139,7 @@ router.post(
 
       playlist.items.push({ id: newId(), title, artist, url, locked });
       await playlist.save();
-      res.json({ success: true, playlist });
+      res.json({ success: true, playlist: shapePlaylist(playlist) });
     } catch (err) {
       console.error("Upload item failed:", err);
       res.status(500).json({ success: false, message: "Server error" });
