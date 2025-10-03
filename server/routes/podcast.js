@@ -7,10 +7,12 @@ import {
   PutObjectCommand,
   DeleteObjectCommand,
 } from "@aws-sdk/client-s3";
+import Playlist from "../models/Playlist.js";      // <-- your Mongoose model
+import isOwner from "../middlewares/isOwner.js";   // <-- admin check
 
 const router = express.Router();
 
-/* ---------------- Cloudflare R2 (REQUIRED) ---------------- */
+/* ---------------- Cloudflare R2 ---------------- */
 const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID;
 const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID;
 const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY;
@@ -21,9 +23,7 @@ const canUseR2 =
   !!R2_ACCOUNT_ID && !!R2_ACCESS_KEY_ID && !!R2_SECRET_ACCESS_KEY && !!R2_PUBLIC_BASE;
 
 if (!canUseR2) {
-  console.warn(
-    "⚠️  R2 is not fully configured. Set R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET, R2_PUBLIC_BASE."
-  );
+  console.warn("⚠️  R2 is not fully configured. Uploads will fail until env vars are set.");
 }
 
 const s3 = new S3Client({
@@ -35,80 +35,77 @@ const s3 = new S3Client({
   },
 });
 
-/* ---------------- Upload (memory) ---------------- */
-const upload = multer({ storage: multer.memoryStorage() });
-
 /* ---------------- Helpers ---------------- */
+const upload = multer({ storage: multer.memoryStorage() });
 const newId = () => Math.random().toString(36).slice(2, 10);
-
-/* In-memory store:
-   [{ _id, id, name, items:[{ id, title, artist, url, locked }] }]
-   (Swap to Mongo later without changing the client)
-*/
-let playlists = [];
+const getName = (req) => {
+  const bodyName = req.body?.name || req.body?.playlistName || "";
+  const queryName = req.query?.name || req.query?.playlistName || "";
+  return String(bodyName || queryName).trim() || "Untitled";
+};
 
 /* ---------------- Routes ---------------- */
 
-// List all playlists
-router.get("/", (_req, res) => {
-  res.json({ playlists });
+// Public GET: all playlists + items
+router.get("/", async (_req, res) => {
+  try {
+    const playlists = await Playlist.find().lean();
+    res.json({ playlists });
+  } catch (err) {
+    console.error("GET playlists failed:", err);
+    res.status(500).json({ success: false, message: "Failed to fetch playlists." });
+  }
 });
 
-// Create playlist (accepts JSON, x-www-form-urlencoded, or ?name=...)
-router.post("/playlists", (req, res) => {
-  const nameFromBody =
-    (req.body && (req.body.name || req.body.playlistName)) || "";
-  const nameFromQuery =
-    (req.query && (req.query.name || req.query.playlistName)) || "";
-  const name = String(nameFromBody || nameFromQuery).trim() || "Untitled";
-
-  const id = newId();
-  const pl = { _id: id, id, name, items: [] };
-  playlists.push(pl);
-
-  return res.json({
-    success: true,
-    playlist: { _id: pl._id, id: pl.id, name: pl.name, items: [] },
-  });
+// Admin: create playlist
+router.post("/playlists", isOwner, async (req, res) => {
+  try {
+    const name = getName(req);
+    const slug = name.toLowerCase().replace(/\s+/g, "-");
+    const doc = await Playlist.create({ name, slug, items: [] });
+    res.status(201).json({ success: true, playlist: doc });
+  } catch (err) {
+    console.error("Create playlist failed:", err);
+    res.status(500).json({ success: false, message: "Failed to create playlist." });
+  }
 });
 
-// Delete playlist
-router.delete("/playlists/:pid", (req, res) => {
-  const pid = String(req.params.pid);
-  playlists = playlists.filter((p) => String(p._id) !== pid);
-  res.json({ success: true });
+// Admin: delete playlist
+router.delete("/playlists/:pid", isOwner, async (req, res) => {
+  try {
+    await Playlist.findByIdAndDelete(req.params.pid);
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Delete playlist failed:", err);
+    res.status(500).json({ success: false, message: "Failed to delete playlist." });
+  }
 });
 
-// Add item (upload file to R2 OR attach external URL)
+// Admin: add item (upload file to R2 or use external URL)
 router.post(
   "/playlists/:pid/items",
+  isOwner,
   upload.single("audio"),
   async (req, res) => {
     try {
-      const pid = String(req.params.pid);
-      const pl = playlists.find((p) => String(p._id) === pid);
-      if (!pl)
-        return res
-          .status(404)
-          .json({ success: false, message: "Playlist not found" });
+      const playlist = await Playlist.findById(req.params.pid);
+      if (!playlist)
+        return res.status(404).json({ success: false, message: "Playlist not found" });
 
       const title = String(req.body?.title || "Untitled").trim();
       const artist = String(req.body?.artist || "").trim();
       const locked = String(req.body?.locked) === "true";
       let url = (req.body?.url || "").trim();
 
-      // If a file was sent, upload to R2 (required)
       if (!url && req.file) {
         if (!canUseR2) {
           return res.status(500).json({
             success: false,
-            message:
-              "R2 not configured. Set R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_PUBLIC_BASE, R2_BUCKET.",
+            message: "R2 not configured. Set R2_ACCOUNT_ID/KEYS and R2_PUBLIC_BASE.",
           });
         }
         const ext = (extname(req.file.originalname) || ".mp3").toLowerCase();
-        const key = `podcasts/${pid}/${Date.now()}_${newId()}${ext}`;
-
+        const key = `podcasts/${playlist._id}/${Date.now()}_${newId()}${ext}`;
         await s3.send(
           new PutObjectCommand({
             Bucket: R2_BUCKET,
@@ -117,20 +114,16 @@ router.post(
             ContentType: req.file.mimetype || "audio/mpeg",
           })
         );
-
         url = `${R2_PUBLIC_BASE}/${key}`;
       }
 
       if (!url) {
-        return res
-          .status(400)
-          .json({ success: false, message: "No file or URL provided" });
+        return res.status(400).json({ success: false, message: "No file or URL provided" });
       }
 
-      const item = { id: newId(), title, artist, url, locked };
-      pl.items.push(item);
-
-      res.json({ success: true, id: item.id, playlist: pl });
+      playlist.items.push({ id: newId(), title, artist, url, locked });
+      await playlist.save();
+      res.json({ success: true, playlist });
     } catch (err) {
       console.error("Upload item failed:", err);
       res.status(500).json({ success: false, message: "Server error" });
@@ -138,59 +131,56 @@ router.post(
   }
 );
 
-// Delete item (best-effort delete in R2 if it was uploaded there)
-router.delete("/playlists/:pid/items/:iid", async (req, res) => {
-  const pid = String(req.params.pid);
-  const iid = String(req.params.iid);
-  const pl = playlists.find((p) => String(p._id) === pid);
-  if (!pl)
-    return res
-      .status(404)
-      .json({ success: false, message: "Playlist not found" });
+// Admin: delete item (also best-effort delete from R2)
+router.delete("/playlists/:pid/items/:iid", isOwner, async (req, res) => {
+  try {
+    const playlist = await Playlist.findById(req.params.pid);
+    if (!playlist)
+      return res.status(404).json({ success: false, message: "Playlist not found" });
 
-  const idx = pl.items.findIndex((it) => String(it.id) === iid);
-  if (idx === -1)
-    return res
-      .status(404)
-      .json({ success: false, message: "Item not found" });
+    const idx = playlist.items.findIndex((it) => String(it.id) === req.params.iid);
+    if (idx === -1)
+      return res.status(404).json({ success: false, message: "Item not found" });
 
-  const url = pl.items[idx].url || "";
-  if (canUseR2 && url.startsWith(R2_PUBLIC_BASE + "/")) {
-    try {
-      const key = url.substring(R2_PUBLIC_BASE.length + 1);
-      if (key) {
-        await s3.send(new DeleteObjectCommand({ Bucket: R2_BUCKET, Key: key }));
+    const url = playlist.items[idx].url || "";
+    if (canUseR2 && url.startsWith(R2_PUBLIC_BASE + "/")) {
+      try {
+        const key = url.substring(R2_PUBLIC_BASE.length + 1);
+        if (key) {
+          await s3.send(new DeleteObjectCommand({ Bucket: R2_BUCKET, Key: key }));
+        }
+      } catch (e) {
+        console.warn("R2 delete warning:", e?.message || e);
       }
-    } catch (e) {
-      console.warn("R2 delete warning:", e?.message || e);
     }
-  }
 
-  pl.items.splice(idx, 1);
-  res.json({ success: true });
+    playlist.items.splice(idx, 1);
+    await playlist.save();
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Delete item failed:", err);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
 });
 
-// Lock/unlock item
-router.patch("/playlists/:pid/items/:iid/lock", (req, res) => {
-  const pid = String(req.params.pid);
-  const iid = String(req.params.iid);
-  const locked =
-    String(req.body?.locked) === "true" || req.body?.locked === true;
+// Admin: lock/unlock item
+router.patch("/playlists/:pid/items/:iid/lock", isOwner, async (req, res) => {
+  try {
+    const playlist = await Playlist.findById(req.params.pid);
+    if (!playlist)
+      return res.status(404).json({ success: false, message: "Playlist not found" });
 
-  const pl = playlists.find((p) => String(p._id) === pid);
-  if (!pl)
-    return res
-      .status(404)
-      .json({ success: false, message: "Playlist not found" });
+    const it = playlist.items.find((x) => String(x.id) === req.params.iid);
+    if (!it)
+      return res.status(404).json({ success: false, message: "Item not found" });
 
-  const it = pl.items.find((x) => String(x.id) === iid);
-  if (!it)
-    return res
-      .status(404)
-      .json({ success: false, message: "Item not found" });
-
-  it.locked = locked;
-  res.json({ success: true });
+    it.locked = String(req.body?.locked) === "true" || req.body?.locked === true;
+    await playlist.save();
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Lock item failed:", err);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
 });
 
 export default router;
