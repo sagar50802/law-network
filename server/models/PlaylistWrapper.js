@@ -2,10 +2,12 @@
 import { createRequire } from "module";
 const require = createRequire(import.meta.url);
 
-// Your existing CommonJS Mongoose model is in the SAME folder:
-const cjs = require("./Playlist.js");
+let mod;
+try { mod = require("./Playlist.js"); } catch { /* ignore */ }
 
-// If it's CommonJS, require() returns the model; if ESM compiled to CJS, it may be on .default
-const Model = (cjs && cjs.default) || cjs;
+if (!mod) {
+  throw new Error("Cannot locate models/Playlist.js next to this wrapper.");
+}
 
+const Model = mod?.default || mod;
 export default Model;
