@@ -123,6 +123,9 @@ import videoRoutes from "./routes/videos.js";
 import submissionsRoutes from "./routes/submissions.js";
 import qrRoutes from "./routes/qr.js";
 
+// ✅ new exams route
+import examRoutes from "./routes/exams.js";
+
 app.use("/api/articles", articleRoutes);
 app.use("/api/banners", bannerRoutes);
 app.use("/api/consultancy", consultancyRoutes);
@@ -132,6 +135,9 @@ app.use("/api/podcasts", podcastRoutes);
 app.use("/api/videos", videoRoutes);
 app.use("/api/submissions", submissionsRoutes);
 app.use("/api/qr", qrRoutes);
+
+// ✅ mount the new exams endpoint
+app.use("/api/exams", examRoutes);
 
 /* ---------- Health/probes ---------- */
 app.get("/api/access/status", (_req, res) => res.json({ access: false }));
