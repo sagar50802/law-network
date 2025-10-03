@@ -35,12 +35,7 @@ const corsOptions = {
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: [
-    "Content-Type",
-    "Authorization",
-    "X-Owner-Key",
-    "x-owner-key",
-  ],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Owner-Key", "x-owner-key"],
   optionsSuccessStatus: 204,
 };
 
@@ -48,11 +43,11 @@ app.set("trust proxy", 1);
 app.use(cors(corsOptions));
 app.options("*", cors(corsOptions));
 
-/* ✅ body parsers (critical for your POST) */
+/* ---------- Body parsers (before routes) ---------- */
 app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ extended: true, limit: "10mb" })); // <— this fixes req.body.name undefined
+app.use(express.urlencoded({ extended: true, limit: "10mb" })); // form posts
 
-/* Always attach permissive headers */
+/* ---------- Helpful headers for allowed origins ---------- */
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (origin && ALLOWED_ORIGINS.includes(origin)) {
@@ -73,13 +68,13 @@ app.use((req, res, next) => {
   next();
 });
 
-/* Tiny log */
+/* ---------- Tiny log ---------- */
 app.use((req, _res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
   next();
 });
 
-/* Fix accidental /api/api/* */
+/* ---------- Fix accidental /api/api/* ---------- */
 app.use((req, _res, next) => {
   if (req.url.startsWith("/api/api/")) {
     const before = req.url;
@@ -107,8 +102,12 @@ app.use((req, _res, next) => {
 app.use(
   "/uploads",
   express.static(path.join(__dirname, "uploads"), {
-    setHeaders: (res) => {
+    setHeaders: (res, _path, stat) => {
       res.setHeader("Access-Control-Allow-Origin", CLIENT_URL);
+      res.setHeader("Vary", "Origin");
+      if (stat && stat.mtime) {
+        res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+      }
     },
   })
 );
@@ -134,19 +133,24 @@ app.use("/api/videos", videoRoutes);
 app.use("/api/submissions", submissionsRoutes);
 app.use("/api/qr", qrRoutes);
 
+/* ---------- Health/probes ---------- */
 app.get("/api/access/status", (_req, res) => res.json({ access: false }));
 app.get("/api/ping", (_req, res) => res.json({ ok: true, ts: Date.now() }));
 app.get("/", (_req, res) => res.json({ ok: true, root: true }));
 
+/* ---------- 404 ---------- */
 app.use((req, res) =>
   res
     .status(404)
     .json({ success: false, message: `Not Found: ${req.method} ${req.originalUrl}` })
 );
 
+/* ---------- Error handler ---------- */
 app.use((err, _req, res, _next) => {
   console.error("Server error:", err);
-  res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
+  res
+    .status(err.status || 500)
+    .json({ success: false, message: err.message || "Server error" });
 });
 
 /* ---------- Mongo ---------- */
@@ -165,4 +169,5 @@ if (!MONGO) {
     .catch((err) => console.error("✗ MongoDB connection failed:", err.message));
 }
 
+/* ---------- Start ---------- */
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
