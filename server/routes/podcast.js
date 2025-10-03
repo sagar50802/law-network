@@ -8,13 +8,13 @@ import {
   DeleteObjectCommand,
 } from "@aws-sdk/client-s3";
 
-// Use wrappers so we DON'T touch your existing files
+// Use wrappers so we DO NOT modify your existing files
 import Playlist from "../models/PlaylistWrapper.js";
 import isOwner from "../middlewares/isOwnerWrapper.js";
 
 const router = express.Router();
 
-/* ---------------- Cloudflare R2 (envs must be set in Render) ---------------- */
+/* ---------------- Cloudflare R2 ---------------- */
 const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID;
 const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID;
 const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY;
@@ -23,10 +23,6 @@ const R2_PUBLIC_BASE = (process.env.R2_PUBLIC_BASE || "").replace(/\/+$/, "");
 
 const r2Ready =
   !!R2_ACCOUNT_ID && !!R2_ACCESS_KEY_ID && !!R2_SECRET_ACCESS_KEY && !!R2_PUBLIC_BASE;
-
-if (!r2Ready) {
-  console.warn("⚠️ R2 not fully configured. Set R2_ACCOUNT_ID / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY / R2_PUBLIC_BASE.");
-}
 
 const s3 = new S3Client({
   region: "auto",
@@ -64,14 +60,14 @@ router.get("/", async (_req, res) => {
 // Admin: create playlist (tolerant name handling)
 router.post("/playlists", isOwner, async (req, res) => {
   try {
-    const name = getName(req); // will use what you typed if present
+    const name = getName(req); // will use what admin typed if present
     const slug = name.toLowerCase().replace(/\s+/g, "-");
     const doc = await Playlist.create({ name, slug, items: [] });
     res.status(201).json({
       success: true,
       playlist: {
         _id: doc._id,
-        id: doc._id,         // your client accepts _id or id
+        id: String(doc._id), // your client accepts _id or id
         name: doc.name,
         items: doc.items || [],
       },
@@ -113,7 +109,7 @@ router.post(
         if (!r2Ready) {
           return res.status(500).json({
             success: false,
-            message: "R2 not configured.",
+            message: "R2 not configured. Set R2_ACCOUNT_ID/KEYS and R2_PUBLIC_BASE.",
           });
         }
         const ext = (extname(req.file.originalname) || ".mp3").toLowerCase();
