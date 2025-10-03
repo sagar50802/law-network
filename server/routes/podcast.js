@@ -8,7 +8,7 @@ import {
   DeleteObjectCommand,
 } from "@aws-sdk/client-s3";
 
-// Use wrappers so we DO NOT modify your existing files
+// DO NOT change your originals — use wrappers
 import Playlist from "../models/PlaylistWrapper.js";
 import isOwner from "../middlewares/isOwnerWrapper.js";
 
@@ -37,7 +37,7 @@ const s3 = new S3Client({
 const upload = multer({ storage: multer.memoryStorage() });
 const newId = () => Math.random().toString(36).slice(2, 10);
 
-// Read from JSON, x-www-form-urlencoded, or query; if blank → "Untitled"
+// JSON, x-www-form-urlencoded, or query; blank → "Untitled"
 const getName = (req) => {
   const bodyName = req.body?.name || req.body?.playlistName || "";
   const queryName = req.query?.name || req.query?.playlistName || "";
@@ -45,30 +45,26 @@ const getName = (req) => {
 };
 
 /**
- * preOwner: set req.isOwner = true if OWNER_KEY matches
- * (supports X-Owner-Key, Authorization: Bearer, body.key/owner, query key/owner)
- * Then we still call your original isOwner middleware.
+ * preOwner: mark req.isOwner = true if OWNER_KEY matches any of:
+ *  - header X-Owner-Key
+ *  - header Authorization: Bearer <key>
+ *  - body { key } or { owner }
+ *  - query ?key= or ?owner=
+ * We still pass through your original isOwner middleware.
  */
 const preOwner = (req, _res, next) => {
-  try {
-    const expected = String(process.env.OWNER_KEY || "");
-    if (!expected) return next();
+  const expected = String(process.env.OWNER_KEY || "");
+  if (!expected) return next();
 
-    const headerKey = String(req.headers["x-owner-key"] || "");
-    const auth = String(req.headers.authorization || "");
-    const bearer = auth.startsWith("Bearer ") ? auth.slice(7) : "";
-    const bodyKey = String(req.body?.key || req.body?.owner || "");
-    const qKey = String(req.query?.key || req.query?.owner || "");
+  const headerKey = String(req.headers["x-owner-key"] || "");
+  const auth = String(req.headers.authorization || "");
+  const bearer = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  const bodyKey = String(req.body?.key || req.body?.owner || "");
+  const qKey = String(req.query?.key || req.query?.owner || "");
 
-    if (
-      headerKey === expected ||
-      bearer === expected ||
-      bodyKey === expected ||
-      qKey === expected
-    ) {
-      req.isOwner = true;
-    }
-  } catch (_) {}
+  if ([headerKey, bearer, bodyKey, qKey].includes(expected)) {
+    req.isOwner = true;
+  }
   next();
 };
 
@@ -88,10 +84,10 @@ router.get("/", async (_req, res) => {
   }
 });
 
-// Admin: create playlist (tolerant name handling)
+// Admin: create playlist
 router.post("/playlists", preOwner, isOwner, async (req, res) => {
   try {
-    const name = getName(req); // uses what admin typed if present
+    const name = getName(req);
     const slug = name.toLowerCase().replace(/\s+/g, "-");
     const doc = await Playlist.create({ name, slug, items: [] });
     res.status(201).json({
