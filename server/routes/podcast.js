@@ -8,7 +8,7 @@ import {
   DeleteObjectCommand,
 } from "@aws-sdk/client-s3";
 
-// DO NOT change your originals — use wrappers
+// Use wrappers so we DO NOT modify your existing files
 import Playlist from "../models/PlaylistWrapper.js";
 import isOwner from "../middlewares/isOwnerWrapper.js";
 
@@ -37,35 +37,11 @@ const s3 = new S3Client({
 const upload = multer({ storage: multer.memoryStorage() });
 const newId = () => Math.random().toString(36).slice(2, 10);
 
-// JSON, x-www-form-urlencoded, or query; blank → "Untitled"
+// Read from JSON, x-www-form-urlencoded, or query; if blank → "Untitled"
 const getName = (req) => {
-  const bodyName = req.body?.name || req.body?.playlistName || "";
+  const bodyName  = req.body?.name || req.body?.playlistName || "";
   const queryName = req.query?.name || req.query?.playlistName || "";
   return String(bodyName || queryName).trim() || "Untitled";
-};
-
-/**
- * preOwner: mark req.isOwner = true if OWNER_KEY matches any of:
- *  - header X-Owner-Key
- *  - header Authorization: Bearer <key>
- *  - body { key } or { owner }
- *  - query ?key= or ?owner=
- * We still pass through your original isOwner middleware.
- */
-const preOwner = (req, _res, next) => {
-  const expected = String(process.env.OWNER_KEY || "");
-  if (!expected) return next();
-
-  const headerKey = String(req.headers["x-owner-key"] || "");
-  const auth = String(req.headers.authorization || "");
-  const bearer = auth.startsWith("Bearer ") ? auth.slice(7) : "";
-  const bodyKey = String(req.body?.key || req.body?.owner || "");
-  const qKey = String(req.query?.key || req.query?.owner || "");
-
-  if ([headerKey, bearer, bodyKey, qKey].includes(expected)) {
-    req.isOwner = true;
-  }
-  next();
 };
 
 /* ---------------- Routes ---------------- */
@@ -73,10 +49,7 @@ const preOwner = (req, _res, next) => {
 // Public: list playlists
 router.get("/", async (_req, res) => {
   try {
-    const playlists = (await Playlist.find().lean()).map((p) => ({
-      ...p,
-      id: String(p._id || p.id),
-    }));
+    const playlists = await Playlist.find().lean();
     res.json({ playlists });
   } catch (err) {
     console.error("GET /podcasts failed:", err);
@@ -84,8 +57,8 @@ router.get("/", async (_req, res) => {
   }
 });
 
-// Admin: create playlist
-router.post("/playlists", preOwner, isOwner, async (req, res) => {
+// Admin: create playlist (tolerant name handling)
+router.post("/playlists", isOwner, async (req, res) => {
   try {
     const name = getName(req);
     const slug = name.toLowerCase().replace(/\s+/g, "-");
@@ -94,7 +67,7 @@ router.post("/playlists", preOwner, isOwner, async (req, res) => {
       success: true,
       playlist: {
         _id: doc._id,
-        id: String(doc._id),
+        id: String(doc._id), // your client accepts _id or id
         name: doc.name,
         items: doc.items || [],
       },
@@ -106,7 +79,7 @@ router.post("/playlists", preOwner, isOwner, async (req, res) => {
 });
 
 // Admin: delete playlist
-router.delete("/playlists/:pid", preOwner, isOwner, async (req, res) => {
+router.delete("/playlists/:pid", isOwner, async (req, res) => {
   try {
     await Playlist.findByIdAndDelete(req.params.pid);
     res.json({ success: true });
@@ -119,7 +92,6 @@ router.delete("/playlists/:pid", preOwner, isOwner, async (req, res) => {
 // Admin: add item (upload to R2 or use external URL)
 router.post(
   "/playlists/:pid/items",
-  preOwner,
   isOwner,
   upload.single("audio"),
   async (req, res) => {
@@ -159,10 +131,7 @@ router.post(
 
       playlist.items.push({ id: newId(), title, artist, url, locked });
       await playlist.save();
-      res.json({
-        success: true,
-        playlist: { ...playlist.toObject(), id: String(playlist._id) },
-      });
+      res.json({ success: true, playlist });
     } catch (err) {
       console.error("Upload item failed:", err);
       res.status(500).json({ success: false, message: "Server error" });
@@ -171,7 +140,7 @@ router.post(
 );
 
 // Admin: delete item (best-effort delete from R2)
-router.delete("/playlists/:pid/items/:iid", preOwner, isOwner, async (req, res) => {
+router.delete("/playlists/:pid/items/:iid", isOwner, async (req, res) => {
   try {
     const playlist = await Playlist.findById(req.params.pid);
     if (!playlist)
@@ -185,9 +154,7 @@ router.delete("/playlists/:pid/items/:iid", preOwner, isOwner, async (req, res) 
     if (r2Ready && fileUrl.startsWith(R2_PUBLIC_BASE + "/")) {
       try {
         const key = fileUrl.substring(R2_PUBLIC_BASE.length + 1);
-        if (key) {
-          await s3.send(new DeleteObjectCommand({ Bucket: R2_BUCKET, Key: key }));
-        }
+        if (key) await s3.send(new DeleteObjectCommand({ Bucket: R2_BUCKET, Key: key }));
       } catch (e) {
         console.warn("R2 delete warning:", e?.message || e);
       }
@@ -203,7 +170,7 @@ router.delete("/playlists/:pid/items/:iid", preOwner, isOwner, async (req, res) 
 });
 
 // Admin: lock/unlock item
-router.patch("/playlists/:pid/items/:iid/lock", preOwner, isOwner, async (req, res) => {
+router.patch("/playlists/:pid/items/:iid/lock", isOwner, async (req, res) => {
   try {
     const playlist = await Playlist.findById(req.params.pid);
     if (!playlist)
