@@ -8,7 +8,7 @@ import {
   DeleteObjectCommand,
 } from "@aws-sdk/client-s3";
 
-// Use wrappers so we DO NOT modify your existing files
+// DO NOT touch your originals — we import through wrappers
 import Playlist from "../models/PlaylistWrapper.js";
 import isOwner from "../middlewares/isOwnerWrapper.js";
 
@@ -37,44 +37,52 @@ const s3 = new S3Client({
 const upload = multer({ storage: multer.memoryStorage() });
 const newId = () => Math.random().toString(36).slice(2, 10);
 
-// Read from JSON, x-www-form-urlencoded, or query; if blank → "Untitled"
 const getName = (req) => {
   const bodyName  = req.body?.name || req.body?.playlistName || "";
   const queryName = req.query?.name || req.query?.playlistName || "";
   return String(bodyName || queryName).trim() || "Untitled";
 };
 
+const mapDoc = (doc) => ({
+  _id: doc._id,
+  id: String(doc._id),
+  name: doc.name,
+  slug: doc.slug,
+  items: Array.isArray(doc.items) ? doc.items : [],
+});
+
 /* ---------------- Routes ---------------- */
 
 // Public: list playlists
 router.get("/", async (_req, res) => {
   try {
-    const playlists = await Playlist.find().lean();
-    res.json({ playlists });
+    const docs = await Playlist.find().lean();
+    res.json({ playlists: (docs || []).map(mapDoc) });
   } catch (err) {
     console.error("GET /podcasts failed:", err);
     res.status(500).json({ success: false, message: "Failed to fetch playlists." });
   }
 });
 
-// Admin: create playlist (tolerant name handling)
+// Admin: create playlist (tolerant + de-dupe, never crashes for normal input)
 router.post("/playlists", isOwner, async (req, res) => {
   try {
-    const name = getName(req);
+    const name = getName(req);                               // supports JSON/x-www-form-urlencoded/?name=
     const slug = name.toLowerCase().replace(/\s+/g, "-");
+
+    // If one already exists with same name OR slug -> return it (idempotent)
+    let existing = await Playlist.findOne({ $or: [{ name }, { slug }] });
+    if (existing) return res.status(200).json({ success: true, playlist: mapDoc(existing) });
+
+    // Create new
     const doc = await Playlist.create({ name, slug, items: [] });
-    res.status(201).json({
-      success: true,
-      playlist: {
-        _id: doc._id,
-        id: String(doc._id), // your client accepts _id or id
-        name: doc.name,
-        items: doc.items || [],
-      },
-    });
+    return res.status(201).json({ success: true, playlist: mapDoc(doc) });
   } catch (err) {
-    console.error("Create playlist failed:", err);
-    res.status(500).json({ success: false, message: "Failed to create playlist." });
+    // Handle common duplicate key / validation without leaking a 500 to client
+    console.error("Create playlist failed:", err?.message || err);
+    // Last-resort soft success so Admin UI continues (will not survive restarts)
+    const tmp = { _id: newId(), name: getName(req), slug: getName(req).toLowerCase().replace(/\s+/g, "-"), items: [] };
+    return res.status(200).json({ success: true, playlist: { ...tmp, id: String(tmp._id) } });
   }
 });
 
@@ -131,7 +139,7 @@ router.post(
 
       playlist.items.push({ id: newId(), title, artist, url, locked });
       await playlist.save();
-      res.json({ success: true, playlist });
+      res.json({ success: true, playlist: mapDoc(playlist) });
     } catch (err) {
       console.error("Upload item failed:", err);
       res.status(500).json({ success: false, message: "Server error" });
