@@ -5,15 +5,18 @@ import ExamModule from "../models/ExamModule.js";
 import ExamProgress from "../models/ExamProgress.js";
 import { uploadToR2 } from "../utils/r2.js";
 import { ocrFileToText } from "../utils/ocr.js";
- import { isAdmin } from "./utils.js";
+import { isAdmin } from "./utils.js";   // <– only isAdmin
 import fs from "fs";
 
+// add our own local ensureDir
 function ensureDir(dir) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
+
 const router = express.Router();
 const TMP_DIR = path.join(process.cwd(), "server", "tmp");
 ensureDir(TMP_DIR);
+
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, TMP_DIR),
   filename: (_req, file, cb) =>
