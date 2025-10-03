@@ -1,17 +1,16 @@
 // server/models/Playlist.js
 import mongoose from "mongoose";
 
-// Each audio item
 const itemSchema = new mongoose.Schema({
-  title: { type: String, default: "Untitled" },
+  title: { type: String, required: true },
   artist: { type: String, default: "" },
   url: { type: String, required: true },
   locked: { type: Boolean, default: true },
+  createdAt: { type: Date, default: Date.now },
 });
 
-// Playlist containing many items
 const playlistSchema = new mongoose.Schema({
-  name: { type: String, required: true, trim: true },
+  name: { type: String, required: true },
   items: [itemSchema],
   createdAt: { type: Date, default: Date.now },
 });
