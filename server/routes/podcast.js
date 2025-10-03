@@ -10,16 +10,19 @@ import {
 
 const router = express.Router();
 
-/* ---------------- Cloudflare R2 ---------------- */
+/* ---------------- Cloudflare R2 (REQUIRED) ---------------- */
 const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID;
 const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID;
 const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY;
 const R2_BUCKET = process.env.R2_BUCKET || "lawprepx";
 const R2_PUBLIC_BASE = (process.env.R2_PUBLIC_BASE || "").replace(/\/+$/, "");
 
-if (!R2_ACCOUNT_ID || !R2_ACCESS_KEY_ID || !R2_SECRET_ACCESS_KEY) {
+const canUseR2 =
+  !!R2_ACCOUNT_ID && !!R2_ACCESS_KEY_ID && !!R2_SECRET_ACCESS_KEY && !!R2_PUBLIC_BASE;
+
+if (!canUseR2) {
   console.warn(
-    "⚠️ R2 credentials missing. Uploads will fail until env vars are set: R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY"
+    "⚠️  R2 is not fully configured. Set R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET, R2_PUBLIC_BASE."
   );
 }
 
@@ -32,17 +35,16 @@ const s3 = new S3Client({
   },
 });
 
-/* ---------------- Storage helpers ---------------- */
+/* ---------------- Upload (memory) ---------------- */
 const upload = multer({ storage: multer.memoryStorage() });
 
+/* ---------------- Helpers ---------------- */
 const newId = () => Math.random().toString(36).slice(2, 10);
-const normalizeName = (req) =>
-  String(req.body?.name || req.body?.playlistName || "").trim();
 
-/* ---------------- In-memory playlists ----------------
-   [{ _id, name, items:[{ id, title, artist, url, locked }] }]
-   (You can swap to Mongo later without changing the client)
------------------------------------------------------- */
+/* In-memory store:
+   [{ _id, id, name, items:[{ id, title, artist, url, locked }] }]
+   (Swap to Mongo later without changing the client)
+*/
 let playlists = [];
 
 /* ---------------- Routes ---------------- */
@@ -52,18 +54,22 @@ router.get("/", (_req, res) => {
   res.json({ playlists });
 });
 
-// Create playlist (accepts JSON or x-www-form-urlencoded)
+// Create playlist (accepts JSON, x-www-form-urlencoded, or ?name=...)
 router.post("/playlists", (req, res) => {
-  const name = normalizeName(req);
-  if (!name) {
-    return res
-      .status(400)
-      .json({ success: false, message: "Playlist name is required" });
-  }
-  const _id = newId();
-  const pl = { _id, name, items: [] };
+  const nameFromBody =
+    (req.body && (req.body.name || req.body.playlistName)) || "";
+  const nameFromQuery =
+    (req.query && (req.query.name || req.query.playlistName)) || "";
+  const name = String(nameFromBody || nameFromQuery).trim() || "Untitled";
+
+  const id = newId();
+  const pl = { _id: id, id, name, items: [] };
   playlists.push(pl);
-  res.json({ success: true, playlist: pl });
+
+  return res.json({
+    success: true,
+    playlist: { _id: pl._id, id: pl.id, name: pl.name, items: [] },
+  });
 });
 
 // Delete playlist
@@ -73,7 +79,7 @@ router.delete("/playlists/:pid", (req, res) => {
   res.json({ success: true });
 });
 
-// Add item (upload file to R2 OR use external URL)
+// Add item (upload file to R2 OR attach external URL)
 router.post(
   "/playlists/:pid/items",
   upload.single("audio"),
@@ -89,19 +95,19 @@ router.post(
       const title = String(req.body?.title || "Untitled").trim();
       const artist = String(req.body?.artist || "").trim();
       const locked = String(req.body?.locked) === "true";
-
       let url = (req.body?.url || "").trim();
 
+      // If a file was sent, upload to R2 (required)
       if (!url && req.file) {
-        if (!R2_PUBLIC_BASE) {
+        if (!canUseR2) {
           return res.status(500).json({
             success: false,
             message:
-              "R2_PUBLIC_BASE not set. Set it to your public base (e.g. https://pub-xxxxxx.r2.dev)",
+              "R2 not configured. Set R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_PUBLIC_BASE, R2_BUCKET.",
           });
         }
-        const ext = extname(req.file.originalname || "").toLowerCase() || ".mp3";
-        const key = `podcasts/${Date.now()}_${newId()}${ext}`;
+        const ext = (extname(req.file.originalname) || ".mp3").toLowerCase();
+        const key = `podcasts/${pid}/${Date.now()}_${newId()}${ext}`;
 
         await s3.send(
           new PutObjectCommand({
@@ -132,7 +138,7 @@ router.post(
   }
 );
 
-// Delete item (also tries to delete from R2 if URL matches your bucket)
+// Delete item (best-effort delete in R2 if it was uploaded there)
 router.delete("/playlists/:pid/items/:iid", async (req, res) => {
   const pid = String(req.params.pid);
   const iid = String(req.params.iid);
@@ -148,19 +154,12 @@ router.delete("/playlists/:pid/items/:iid", async (req, res) => {
       .status(404)
       .json({ success: false, message: "Item not found" });
 
-  // Best-effort delete from R2 (only if it’s your R2 public base)
   const url = pl.items[idx].url || "";
-  if (R2_PUBLIC_BASE && url.startsWith(R2_PUBLIC_BASE)) {
+  if (canUseR2 && url.startsWith(R2_PUBLIC_BASE + "/")) {
     try {
-      // derive object key from URL
       const key = url.substring(R2_PUBLIC_BASE.length + 1);
       if (key) {
-        await s3.send(
-          new DeleteObjectCommand({
-            Bucket: R2_BUCKET,
-            Key: key,
-          })
-        );
+        await s3.send(new DeleteObjectCommand({ Bucket: R2_BUCKET, Key: key }));
       }
     } catch (e) {
       console.warn("R2 delete warning:", e?.message || e);
@@ -175,7 +174,8 @@ router.delete("/playlists/:pid/items/:iid", async (req, res) => {
 router.patch("/playlists/:pid/items/:iid/lock", (req, res) => {
   const pid = String(req.params.pid);
   const iid = String(req.params.iid);
-  const locked = String(req.body?.locked) === "true" || req.body?.locked === true;
+  const locked =
+    String(req.body?.locked) === "true" || req.body?.locked === true;
 
   const pl = playlists.find((p) => String(p._id) === pid);
   if (!pl)
