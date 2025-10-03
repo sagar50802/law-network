@@ -45,7 +45,7 @@ app.options("*", cors(corsOptions));
 
 /* ---------- Body parsers (before routes) ---------- */
 app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ extended: true, limit: "10mb" })); // form posts
+app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
 /* ---------- Helpful headers for allowed origins ---------- */
 app.use((req, res, next) => {
@@ -84,7 +84,7 @@ app.use((req, _res, next) => {
   next();
 });
 
-/* ---------- Static uploads ---------- */
+/* ---------- Static uploads (for any legacy/local files) ---------- */
 [
   "uploads",
   "uploads/articles",
