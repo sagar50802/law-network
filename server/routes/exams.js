@@ -5,8 +5,8 @@ import ExamModule from "../models/ExamModule.js";
 import ExamProgress from "../models/ExamProgress.js";
 import { uploadToR2 } from "../utils/r2.js";
 import { ocrFileToText } from "../utils/ocr.js";
-import { isAdmin, ensureDir } from "./utils.js";
-
+ import { isAdmin } from "./utils.js";
+import fs from "fs";
 const router = express.Router();
 const TMP_DIR = path.join(process.cwd(), "server", "tmp");
 ensureDir(TMP_DIR);
