@@ -1,13 +1,13 @@
-// server/middlewares/isOwnerWrapper.js
-import { createRequire } from "module";
-const require = createRequire(import.meta.url);
-
-// Your existing CommonJS middleware is in the SAME folder:
-const cjs = require("./isOwner.js");
-
-// If the CJS module exports the function directly, use it; otherwise use .default
-const isOwner = typeof cjs === "function" ? cjs : (cjs && cjs.default);
-
+ // Minimal, stand-alone admin check used only by the ESM routes we added.
+// Does NOT import your legacy middlewares/isOwner.js (so deploy won't break).
 export default function isOwnerWrapper(req, res, next) {
-  return isOwner(req, res, next);
+  const headerKey = String(req.headers["x-owner-key"] || "");
+  const ownerKey = String(process.env.OWNER_KEY || "");
+
+  if (req.isOwner === true) return next();
+  if (ownerKey && headerKey === ownerKey) {
+    req.isOwner = true;
+    return next();
+  }
+  return res.status(403).json({ ok: false, error: "Forbidden: Admin only" });
 }
