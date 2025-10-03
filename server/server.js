@@ -29,13 +29,18 @@ const ALLOWED_ORIGINS = [
 
 const corsOptions = {
   origin(origin, cb) {
-    if (!origin) return cb(null, true); // allow server-to-server / curl
+    if (!origin) return cb(null, true);
     if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
     return cb(new Error("CORS not allowed: " + origin));
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Owner-Key", "x-owner-key"],
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "X-Owner-Key",
+    "x-owner-key",
+  ],
   optionsSuccessStatus: 204,
 };
 
@@ -43,11 +48,11 @@ app.set("trust proxy", 1);
 app.use(cors(corsOptions));
 app.options("*", cors(corsOptions));
 
-/* ---------- Body parsers (before routes) ---------- */
+/* ✅ body parsers (critical for your POST) */
 app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ extended: true, limit: "10mb" })); // ← enables form posts
+app.use(express.urlencoded({ extended: true, limit: "10mb" })); // <— this fixes req.body.name undefined
 
-/* ---------- Helpful headers for allowed origins ---------- */
+/* Always attach permissive headers */
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (origin && ALLOWED_ORIGINS.includes(origin)) {
@@ -68,13 +73,13 @@ app.use((req, res, next) => {
   next();
 });
 
-/* ---------- Tiny log ---------- */
+/* Tiny log */
 app.use((req, _res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
   next();
 });
 
-/* ---------- Fix accidental /api/api/* ---------- */
+/* Fix accidental /api/api/* */
 app.use((req, _res, next) => {
   if (req.url.startsWith("/api/api/")) {
     const before = req.url;
@@ -102,14 +107,8 @@ app.use((req, _res, next) => {
 app.use(
   "/uploads",
   express.static(path.join(__dirname, "uploads"), {
-    setHeaders: (res, _path, stat) => {
-      // allow client to fetch media
+    setHeaders: (res) => {
       res.setHeader("Access-Control-Allow-Origin", CLIENT_URL);
-      res.setHeader("Vary", "Origin");
-      // basic caching for static assets
-      if (stat && stat.mtime) {
-        res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
-      }
     },
   })
 );
@@ -120,7 +119,7 @@ import bannerRoutes from "./routes/banners.js";
 import consultancyRoutes from "./routes/consultancy.js";
 import newsRoutes from "./routes/news.js";
 import pdfRoutes from "./routes/pdfs.js";
-import podcastRoutes from "./routes/podcast.js"; // podcasts (R2-backed)
+import podcastRoutes from "./routes/podcast.js";
 import videoRoutes from "./routes/videos.js";
 import submissionsRoutes from "./routes/submissions.js";
 import qrRoutes from "./routes/qr.js";
@@ -135,24 +134,19 @@ app.use("/api/videos", videoRoutes);
 app.use("/api/submissions", submissionsRoutes);
 app.use("/api/qr", qrRoutes);
 
-/* ---------- Health/probes ---------- */
 app.get("/api/access/status", (_req, res) => res.json({ access: false }));
 app.get("/api/ping", (_req, res) => res.json({ ok: true, ts: Date.now() }));
 app.get("/", (_req, res) => res.json({ ok: true, root: true }));
 
-/* ---------- 404 ---------- */
 app.use((req, res) =>
   res
     .status(404)
     .json({ success: false, message: `Not Found: ${req.method} ${req.originalUrl}` })
 );
 
-/* ---------- Error handler ---------- */
 app.use((err, _req, res, _next) => {
   console.error("Server error:", err);
-  res
-    .status(err.status || 500)
-    .json({ success: false, message: err.message || "Server error" });
+  res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
 });
 
 /* ---------- Mongo ---------- */
@@ -171,5 +165,4 @@ if (!MONGO) {
     .catch((err) => console.error("✗ MongoDB connection failed:", err.message));
 }
 
-/* ---------- Start ---------- */
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
