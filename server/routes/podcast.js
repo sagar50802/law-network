@@ -8,7 +8,7 @@ import {
   DeleteObjectCommand,
 } from "@aws-sdk/client-s3";
 import Playlist from "../models/Playlist.js";      // <-- your Mongoose model
-import isOwner from "../middlewares/isOwner.js";   // <-- admin check
+import isOwner from "../middlewares/isOwnerWrapper.js";
 
 const router = express.Router();
 
