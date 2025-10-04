@@ -99,10 +99,17 @@ const UPLOADS_DIR_A = path.join(__dirname, "uploads");
 // B: cwd/server/uploads (some hosts run with cwd at repo root)
 const UPLOADS_DIR_B = path.join(process.cwd(), "server", "uploads");
 
+// UPDATED: add ACAO + Vary, keep CORP, use long-lived immutable cache when possible
 const staticHeaders = {
-  setHeaders(res) {
+  setHeaders(res, _p, stat) {
+    res.setHeader("Access-Control-Allow-Origin", CLIENT_URL);
+    res.setHeader("Vary", "Origin");
     res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
-    res.setHeader("Cache-Control", "public, max-age=86400");
+    if (stat && stat.mtime) {
+      res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+    } else {
+      res.setHeader("Cache-Control", "public, max-age=86400");
+    }
   },
 };
 
