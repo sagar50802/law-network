@@ -22,6 +22,7 @@ for (const p of [DATA_DIR, UP_DIR]) fs.mkdirSync(p, { recursive: true });
 const defaultConfig = {
   url: "",
   currency: "₹",
+  upi: "", // ✅ NEW
   plans: {
     weekly: { label: "Weekly", price: 200 },
     monthly: { label: "Monthly", price: 400 },
@@ -45,6 +46,7 @@ async function ensureConfig() {
   const merged = {
     ...defaultConfig,
     ...cur,
+    upi: typeof cur.upi === "string" ? cur.upi : "", // ✅ NEW
     plans: {
       weekly: { ...defaultConfig.plans.weekly, ...(cur.plans?.weekly || {}) },
       monthly: { ...defaultConfig.plans.monthly, ...(cur.plans?.monthly || {}) },
@@ -78,7 +80,7 @@ const upload = multer({ storage, limits: { fileSize: 20 * 1024 * 1024 } });
 // GET full config
 router.get("/", async (_req, res) => {
   const cfg = await ensureConfig();
-  res.json({ success: true, qr: cfg });
+  res.json({ success: true, qr: cfg }); // ✅ includes upi
 });
 
 // GET compact (for overlay)
@@ -88,6 +90,7 @@ router.get("/current", async (_req, res) => {
     success: true,
     url: cfg.url,
     currency: cfg.currency,
+    upi: cfg.upi,          // ✅ include upi
     plans: cfg.plans,
   });
 });
@@ -112,9 +115,16 @@ router.post("/", isAdmin, upload.single("image"), async (req, res) => {
     monthlyPrice,
     yearlyLabel,
     yearlyPrice,
+    upi,       // ✅ NEW (primary)
+    upiId,     // ✅ also accept common aliases
+    vpa,       // ✅ "
   } = req.body || {};
 
   if (currency) cfg.currency = currency;
+
+  // ✅ Save UPI / VPA if provided
+  const incomingUpi = (upi || upiId || vpa || "").toString().trim();
+  if (incomingUpi) cfg.upi = incomingUpi;
 
   const num = (v, fallback) => {
     const n = Number(v);
