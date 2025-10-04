@@ -1,12 +1,13 @@
+// server/routes/submissions.js
 import express from "express";
 import fs from "fs";
 import path from "path";
 import multer from "multer";
 import mongoose from "mongoose";
 
-// ✅ Local admin middleware (replaces import from utils.js)
+// ✅ simple local admin guard (matches your current approach)
 function isAdmin(req, res, next) {
-  const key = req.headers["x-owner-key"];
+  const key = req.headers["x-owner-key"] || req.headers["X-Owner-Key"];
   if (!key || key !== process.env.VITE_OWNER_KEY) {
     return res.status(401).json({ success: false, message: "Unauthorized" });
   }
@@ -21,7 +22,6 @@ const UP_DIR    = path.join(process.cwd(), "server", "uploads", "submissions");
 const DATA_FILE = path.join(DATA_DIR, "submissions.json");
 const AUTO_FILE = path.join(DATA_DIR, "submissions.auto.json");
 
-// ensure folders/files
 [DATA_DIR, UP_DIR].forEach(d => { if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true }); });
 if (!fs.existsSync(DATA_FILE)) fs.writeFileSync(DATA_FILE, "[]");
 if (!fs.existsSync(AUTO_FILE)) fs.writeFileSync(AUTO_FILE, JSON.stringify({ auto: false }, null, 2));
@@ -40,24 +40,20 @@ function setAutoMode(auto) { fs.writeFileSync(AUTO_FILE, JSON.stringify({ auto: 
 /* ------------------------- Access model (Mongo) -------------------------- */
 const AccessSchema = new mongoose.Schema({
   email:    { type: String, required: true },
-  feature:  { type: String, required: true },  // playlist, video, pdf, podcast, article
+  feature:  { type: String, required: true },   // playlist, video, pdf, podcast, article
   featureId:{ type: String, required: true },
   expiry:   { type: Date },
   message:  { type: String },
 }, { timestamps: true });
-
 const Access = mongoose.models.Access || mongoose.model("Access", AccessSchema);
 
 /* ------------------------- SSE: live grant/revoke ------------------------ */
 const clientsByEmail = new Map(); // email -> Set<res>
-
-function sseHeaders() {
-  return {
-    "Content-Type": "text/event-stream",
-    "Cache-Control": "no-cache, no-transform",
-    Connection: "keep-alive",
-  };
-}
+const sseHeaders = () => ({
+  "Content-Type": "text/event-stream",
+  "Cache-Control": "no-cache, no-transform",
+  Connection: "keep-alive",
+});
 function sendSse(res, event, data) {
   try {
     if (event) res.write(`event: ${event}\n`);
@@ -70,10 +66,7 @@ function addClient(email, res) {
 }
 function removeClient(email, res) {
   const set = clientsByEmail.get(email);
-  if (set) {
-    set.delete(res);
-    if (set.size === 0) clientsByEmail.delete(email);
-  }
+  if (set) { set.delete(res); if (set.size === 0) clientsByEmail.delete(email); }
 }
 function broadcastToEmail(email, event, data) {
   const set = clientsByEmail.get(email);
@@ -85,100 +78,106 @@ function broadcastToEmail(email, event, data) {
 router.get("/stream", (req, res) => {
   const email = String(req.query.email || "").trim();
   if (!email) return res.status(400).json({ success:false, message:"email required" });
-
   res.writeHead(200, sseHeaders());
   sendSse(res, "ping", { t: Date.now() });
-
   addClient(email, res);
-  const keepAlive = setInterval(() => sendSse(res, "ping", { t: Date.now() }), 25000);
-  req.on("close", () => { clearInterval(keepAlive); removeClient(email, res); });
+  const keep = setInterval(() => sendSse(res, "ping", { t: Date.now() }), 25000);
+  req.on("close", () => { clearInterval(keep); removeClient(email, res); });
 });
 
 /* ----------------------- Helpers for plan → seconds ---------------------- */
 function secondsFromPlanLabel(label = "") {
-  const plan = String(label || "").toLowerCase();
-  if (plan.includes("year"))  return 60 * 60 * 24 * 365;
-  if (plan.includes("month")) return 60 * 60 * 24 * 30;
-  if (plan.includes("week"))  return 60 * 60 * 24 * 7;
-  if (plan.includes("day"))   return 60 * 60 * 24;
-  return 60 * 60 * 24; // default 1 day
+  const p = String(label || "").toLowerCase();
+  if (p.includes("year"))  return 60 * 60 * 24 * 365;
+  if (p.includes("month")) return 60 * 60 * 24 * 30;
+  if (p.includes("week"))  return 60 * 60 * 24 * 7;
+  if (p.includes("day"))   return 60 * 60 * 24;
+  return 60 * 60 * 24;
 }
 
 /* --------------------------------- ROUTES -------------------------------- */
-// PUBLIC: submit (honors server-side Auto-Approval)
-router.post("/", upload.single("screenshot"), async (req, res) => {
-  const items = readAll();
-  const {
-    name = "",
-    number = "", phone = "",
-    gmail = "", email = "",
-    subject = "",
-    planKey = "", planLabel = "", planPrice = "",
-  } = req.body || {};
+// PUBLIC: submit (uses server auto-approval if enabled)
+router.post(
+  "/",
+  upload.fields([{ name: "screenshot", maxCount: 1 }, { name: "proof", maxCount: 1 }, { name: "file", maxCount: 1 }]),
+  async (req, res) => {
+    const items = readAll();
+    const {
+      name = "",
+      number = "", phone = "",
+      gmail = "", email = "",
+      subject = "",
+      planKey = "", planLabel = "", planPrice = "",
+    } = req.body || {};
 
-  const now = Date.now();
+    const file =
+      (req.files?.screenshot && req.files.screenshot[0]) ||
+      (req.files?.proof && req.files.proof[0]) ||
+      (req.files?.file && req.files.file[0]) ||
+      req.file ||
+      null;
 
-  const item = {
-    id: String(now),
-    name: String(name).trim(),
-    phone: String(phone || number || "").trim(),
-    email: String(email || gmail || "").trim(),
-    subject: String(subject).trim(),
-    plan: { 
-      key: String(planKey || "").trim(), 
-      label: String(planLabel || "").trim(), 
-      price: planPrice !== "" ? Number(planPrice) : undefined 
-    },
-    context: {
-      type: req.body.type || "",
-      id: req.body.id || "",
-      playlist: req.body.playlist || "",
-      subject: req.body.subjectLabel || subject || "",
-    },
-    proofUrl: req.file ? `/uploads/submissions/${req.file.filename}` : "",
-    status: "pending",
-    approved: false,
-    expiry: null,
-    message: "",
-    createdAt: now,
-  };
+    const now = Date.now();
+    const item = {
+      id: String(now),
+      name: String(name).trim(),
+      phone: String(phone || number || "").trim(),
+      email: String(email || gmail || "").trim(),
+      subject: String(subject).trim(),
+      plan: {
+        key: String(planKey || "").trim(),
+        label: String(planLabel || "").trim(),
+        price: planPrice !== "" ? Number(planPrice) : undefined,
+      },
+      context: {
+        type: req.body.type || "",
+        id: req.body.id || "",
+        playlist: req.body.playlist || "",
+        subject: req.body.subjectLabel || subject || "",
+      },
+      proofUrl: file ? `/uploads/submissions/${path.basename(file.filename || file.path || "")}` : "",
+      status: "pending",
+      approved: false,
+      expiry: null,
+      message: "",
+      createdAt: now,
+    };
 
-  const autoApprove = getAutoMode(); // admin-controlled
-  if (autoApprove) {
-    const secs = secondsFromPlanLabel(item.plan?.label);
-    item.status   = "approved";
-    item.approved = true;
-    item.expiry   = now + secs * 1000;
+    const autoApprove = getAutoMode();
+    if (autoApprove) {
+      const secs = secondsFromPlanLabel(item.plan?.label);
+      item.status = "approved";
+      item.approved = true;
+      item.expiry = now + secs * 1000;
 
-    const feature   = item.context.type || "playlist";
-    const featureId = item.context.id || item.context.playlist || item.context.subject;
+      const feature   = item.context.type || "playlist";
+      const featureId = item.context.id || item.context.playlist || item.context.subject;
 
-    if (item.email && featureId) {
-      await Access.findOneAndUpdate(
-        { email: item.email, feature, featureId },
-        { expiry: new Date(item.expiry), message: item.message },
-        { upsert: true, new: true }
-      );
-      broadcastToEmail(item.email, "grant", {
-        type: "grant",
-        feature,
-        featureId,
-        email: item.email,
-        expiry: item.expiry,
-        message: item.message || `🎉 Congratulations ${item.name || "User"}! Your plan is now active.`,
-      });
+      if (item.email && featureId) {
+        await Access.findOneAndUpdate(
+          { email: item.email, feature, featureId },
+          { expiry: new Date(item.expiry), message: item.message },
+          { upsert: true, new: true }
+        );
+        broadcastToEmail(item.email, "grant", {
+          type: "grant",
+          feature, featureId,
+          email: item.email,
+          expiry: item.expiry,
+          message: item.message || `🎉 Congratulations ${item.name || "User"}! Your plan is now active.`,
+        });
+      }
     }
+
+    items.unshift(item);
+    writeAll(items);
+    res.json({ success: true, id: item.id, expiry: item.expiry, proofUrl: item.proofUrl });
   }
-
-  items.unshift(item);
-  writeAll(items);
-
-  res.json({ success: true, id: item.id, expiry: item.expiry });
-});
+);
 
 // ADMIN: list
 router.get("/", isAdmin, (_req, res) => {
-  const items = readAll().sort((a,b)=>b.createdAt-a.createdAt);
+  const items = readAll().sort((a, b) => b.createdAt - a.createdAt);
   res.json({ success: true, items });
 });
 
@@ -219,10 +218,7 @@ router.post("/:id/approve", isAdmin, async (req, res) => {
       { upsert: true, new: true }
     );
     broadcastToEmail(email, "grant", {
-      type: "grant",
-      feature,
-      featureId,
-      email,
+      type: "grant", feature, featureId, email,
       expiry: items[i].expiry,
       message: items[i].message || `🎉 Congratulations ${items[i].name || "User"}! Your plan is now active.`,
     });
@@ -249,8 +245,7 @@ router.post("/:id/revoke", isAdmin, async (req, res) => {
 
   if (email && featureId) {
     await Access.deleteOne({ email, feature, featureId });
-    // 👇 explicit revoked flag so client flips immediately
-    broadcastToEmail(email, "revoke", { type: "revoke", feature, featureId, email, revoked: true });
+    broadcastToEmail(email, "revoke", { type: "revoke", feature, featureId, email });
   }
 
   res.json({ success: true, item: items[i] });
@@ -304,6 +299,16 @@ router.get("/my", (req, res) => {
 
   if (!match) return res.json({ success: true, found: false });
   res.json({ success: true, found: true, item: match });
+});
+
+/* ---- tiny fallback to fetch an image if you ever need it directly ---- */
+router.get("/proof/:name", (req, res) => {
+  const safe = path.basename(req.params.name || "");
+  const abs = path.join(UP_DIR, safe);
+  if (!fs.existsSync(abs)) return res.status(404).end("Not found");
+  res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+  res.setHeader("Cache-Control", "public, max-age=86400");
+  res.sendFile(abs);
 });
 
 /* ----------------------- Route-level error handler ----------------------- */
