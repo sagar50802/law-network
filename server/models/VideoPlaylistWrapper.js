@@ -2,20 +2,20 @@
 import { createRequire } from "module";
 const require = createRequire(import.meta.url);
 
-// Try a dedicated video model first (if you add one later), else fall back.
-let mod;
-try {
-  mod = require("./VideoPlaylist.js"); // optional dedicated model (see Option B)
-} catch { /* ignore */ }
+let cjs;
+try { cjs = require("./VideoPlaylist.js"); } catch {}
+try { if (!cjs) cjs = require("../models/VideoPlaylist.js"); } catch {}
+try { if (!cjs) cjs = require("../../models/VideoPlaylist.js"); } catch {}
 
-if (!mod) {
-  try {
-    mod = require("./Playlist.js"); // reuse your existing playlist model
-  } catch {
-    // Match the error style of your PlaylistWrapper
-    throw new Error("Cannot locate models/VideoPlaylist.js or models/Playlist.js next to this wrapper.");
-  }
+// Fallback: if you don't have a separate VideoPlaylist model yet,
+// this will gracefully reuse your Playlist model so Admin can add playlists today.
+try { if (!cjs) cjs = require("./Playlist.js"); } catch {}
+try { if (!cjs) cjs = require("../models/Playlist.js"); } catch {}
+try { if (!cjs) cjs = require("../../models/Playlist.js"); } catch {}
+
+if (!cjs) {
+  throw new Error("Cannot locate VideoPlaylist.js (or fallback Playlist.js). Place it next to this wrapper or under server/models/.");
 }
 
-const Model = mod?.default || mod;
+const Model = cjs?.default || cjs;
 export default Model;
