@@ -1,4 +1,3 @@
-// server/routes/consultancy.js  (ESM, R2 persistent + GridFS fallback)
 import express from "express";
 import multer from "multer";
 import mongoose from "mongoose";
@@ -10,7 +9,7 @@ import * as ConsultancyModel from "../models/Consultancy.js";
 const Consultancy = ConsultancyModel.default || ConsultancyModel;
 const router = express.Router();
 
-/* ---------------- Upload (image + optional QR) ---------------- */
+/* ---------------- Upload ---------------- */
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 25 * 1024 * 1024 },
@@ -18,7 +17,7 @@ const upload = multer({
 const safeName = (orig = "file") =>
   String(orig).replace(/\s+/g, "_").replace(/[^\w.\-]/g, "");
 
-/* ---------------- GridFS helpers (fallback) ---------------- */
+/* ---------------- GridFS helpers ---------------- */
 const grid = (bucketName) => {
   const db = mongoose.connection?.db;
   return db ? new mongoose.mongo.GridFSBucket(db, { bucketName }) : null;
@@ -46,10 +45,12 @@ async function gridPut(bucketName, file) {
 async function gridDel(bucketName, id) {
   const b = grid(bucketName);
   if (!b || !id) return;
-  try { await b.delete(new mongoose.Types.ObjectId(id)); } catch {}
+  try {
+    await b.delete(new mongoose.Types.ObjectId(id));
+  } catch {}
 }
 
-/* ---------------- Cloudflare R2 (persistent store) ---------------- */
+/* ---------------- Cloudflare R2 ---------------- */
 import {
   S3Client,
   PutObjectCommand,
@@ -90,12 +91,14 @@ const r2KeyFromUrl = (url) => {
       key = key.slice(base.pathname.length);
     }
     return key.replace(/^\/+/, "");
-  } catch { return ""; }
+  } catch {
+    return "";
+  }
 };
 
-async function r2Put(file, folder = "consultancy") {
+async function r2Put(file) {
   const ext = path.extname(file.originalname || "") || ".jpg";
-  const key = `${folder}/${Date.now()}_${crypto.randomBytes(6).toString("hex")}${ext}`;
+  const key = `consultancy/${Date.now()}_${crypto.randomBytes(6).toString("hex")}${ext}`;
   await s3.send(
     new PutObjectCommand({
       Bucket: R2_BUCKET,
@@ -108,15 +111,21 @@ async function r2Put(file, folder = "consultancy") {
   );
   return `${R2_PUBLIC_BASE}/${key}`;
 }
+
 async function r2DelByUrl(url) {
   if (!r2Ready) return;
   const key = r2KeyFromUrl(url);
   if (!key) return;
-  try { await s3.send(new DeleteObjectCommand({ Bucket: R2_BUCKET, Key: key })); } catch {}
+  try {
+    await s3.send(new DeleteObjectCommand({ Bucket: R2_BUCKET, Key: key }));
+  } catch {}
 }
 function isR2Url(url = "") {
-  try { return !!R2_PUBLIC_BASE && new URL(url).host === new URL(R2_PUBLIC_BASE).host; }
-  catch { return false; }
+  try {
+    return !!R2_PUBLIC_BASE && new URL(url).host === new URL(R2_PUBLIC_BASE).host;
+  } catch {
+    return false;
+  }
 }
 
 /* ---------------- ROUTES ---------------- */
@@ -133,123 +142,90 @@ router.get("/", async (_req, res) => {
   }
 });
 
-// Create (admin) – accepts image + optional waqr + links
-router.post(
-  "/",
-  isAdmin,
-  upload.fields([{ name: "image", maxCount: 1 }, { name: "waqr", maxCount: 1 }]),
-  async (req, res) => {
-    try {
-      const { title, subtitle = "", intro = "", order = 0 } = req.body;
-      if (!title) return res.status(400).json({ success: false, error: "Title required" });
+// Create (admin)
+router.post("/", isAdmin, upload.single("image"), async (req, res) => {
+  try {
+    const {
+      title,
+      subtitle = "",
+      intro = "",
+      order = 0,
+      whatsapp = "",
+      telegram = "",
+      instagram = "",
+      email = "",
+      website = "",
+    } = req.body;
 
-      const imageFile = req.files?.image?.[0] || null;
-      if (!imageFile?.buffer?.length)
-        return res.status(400).json({ success: false, error: "Image required" });
-
-      const qrFile = req.files?.waqr?.[0] || null;
-
-      // optional deep links
-      const links = {
-        whatsapp: (req.body.whatsapp || "").trim(),
-        telegram: (req.body.telegram || "").trim(),
-        instagram:(req.body.instagram || "").trim(),
-        email:    (req.body.email || "").trim(),
-        website:  (req.body.website || "").trim(),
-      };
-
-      const imageUrlStored = r2Ready
-        ? await r2Put(imageFile, "consultancy")
-        : fileUrl("consultancy", await gridPut("consultancy", imageFile));
-
-      let whatsappQr = "";
-      if (qrFile?.buffer?.length) {
-        whatsappQr = r2Ready
-          ? await r2Put(qrFile, "consultancy/qr")
-          : fileUrl("consultancy_qr", await gridPut("consultancy_qr", qrFile));
-      }
-
-      const item = await Consultancy.create({
-        title, subtitle, intro,
-        order: Number(order || 0),
-        image: imageUrlStored,
-        whatsappQr,
-        ...links,
-      });
-
-      res.json({ success: true, item });
-    } catch (e) {
-      res.status(e.status || 500).json({ success: false, error: e.message });
+    if (!title) return res.status(400).json({ success: false, error: "Title required" });
+    if (!req.file?.buffer?.length) {
+      return res.status(400).json({ success: false, error: "Image required" });
     }
+
+    const imageUrlStored = r2Ready
+      ? await r2Put(req.file)
+      : fileUrl("consultancy", await gridPut("consultancy", req.file));
+
+    const item = await Consultancy.create({
+      title,
+      subtitle,
+      intro,
+      order: Number(order || 0),
+      image: imageUrlStored,
+      // NEW fields
+      whatsapp, telegram, instagram, email, website,
+    });
+
+    res.json({ success: true, item });
+  } catch (e) {
+    res.status(e.status || 500).json({ success: false, error: e.message });
   }
-);
+});
 
-// Update (admin) – replace image/QR and/or update links
-router.patch(
-  "/:id",
-  isAdmin,
-  upload.fields([{ name: "image", maxCount: 1 }, { name: "waqr", maxCount: 1 }]),
-  async (req, res) => {
-    try {
-      const prev = await Consultancy.findById(req.params.id);
-      if (!prev) return res.status(404).json({ success: false, error: "Not found" });
+// Update (admin)
+router.patch("/:id", isAdmin, upload.single("image"), async (req, res) => {
+  try {
+    const prev = await Consultancy.findById(req.params.id);
+    if (!prev) return res.status(404).json({ success: false, error: "Not found" });
 
-      const patch = {
-        ...(req.body.title != null ? { title: req.body.title } : {}),
-        ...(req.body.subtitle != null ? { subtitle: req.body.subtitle } : {}),
-        ...(req.body.intro != null ? { intro: req.body.intro } : {}),
-        ...(req.body.order != null ? { order: Number(req.body.order) } : {}),
+    const patch = {
+      ...(req.body.title != null ? { title: req.body.title } : {}),
+      ...(req.body.subtitle != null ? { subtitle: req.body.subtitle } : {}),
+      ...(req.body.intro != null ? { intro: req.body.intro } : {}),
+      ...(req.body.order != null ? { order: Number(req.body.order) } : {}),
+    };
 
-        // links (all optional)
-        ...(req.body.whatsapp != null ? { whatsapp: String(req.body.whatsapp).trim() } : {}),
-        ...(req.body.telegram  != null ? { telegram: String(req.body.telegram).trim() }  : {}),
-        ...(req.body.instagram != null ? { instagram:String(req.body.instagram).trim() } : {}),
-        ...(req.body.email     != null ? { email: String(req.body.email).trim() }     : {}),
-        ...(req.body.website   != null ? { website: String(req.body.website).trim() }   : {}),
-      };
+    // NEW link fields (optional)
+    ["whatsapp", "telegram", "instagram", "email", "website"].forEach((k) => {
+      if (req.body[k] != null) patch[k] = String(req.body[k]);
+    });
 
-      const newImage = req.files?.image?.[0] || null;
-      const newQr    = req.files?.waqr?.[0] || null;
+    if (req.file?.buffer?.length) {
+      if (isR2Url(prev.image)) await r2DelByUrl(prev.image);
+      const oldId = idFromUrl(prev.image, "consultancy");
+      if (oldId) await gridDel("consultancy", oldId);
 
-      if (newImage?.buffer?.length) {
-        if (isR2Url(prev.image)) await r2DelByUrl(prev.image);
-        const oldId = idFromUrl(prev.image, "consultancy");
-        if (oldId) await gridDel("consultancy", oldId);
-
-        patch.image = r2Ready
-          ? await r2Put(newImage, "consultancy")
-          : fileUrl("consultancy", await gridPut("consultancy", newImage));
-      }
-
-      if (newQr?.buffer?.length) {
-        if (isR2Url(prev.whatsappQr)) await r2DelByUrl(prev.whatsappQr);
-        const oldQrId = idFromUrl(prev.whatsappQr, "consultancy_qr");
-        if (oldQrId) await gridDel("consultancy_qr", oldQrId);
-
-        patch.whatsappQr = r2Ready
-          ? await r2Put(newQr, "consultancy/qr")
-          : fileUrl("consultancy_qr", await gridPut("consultancy_qr", newQr));
-      }
-
-      const updated = await Consultancy.findByIdAndUpdate(req.params.id, patch, { new: true });
-      res.json({ success: true, item: updated });
-    } catch (e) {
-      res.status(e.status || 500).json({ success: false, error: e.message });
+      patch.image = r2Ready
+        ? await r2Put(req.file)
+        : fileUrl("consultancy", await gridPut("consultancy", req.file));
     }
-  }
-);
 
-// Delete (admin) – also remove stored image/qr
+    const updated = await Consultancy.findByIdAndUpdate(req.params.id, patch, { new: true });
+    res.json({ success: true, item: updated });
+  } catch (e) {
+    res.status(e.status || 500).json({ success: false, error: e.message });
+  }
+});
+
+// Delete (admin)
 router.delete("/:id", isAdmin, async (req, res) => {
   try {
     const doc = await Consultancy.findByIdAndDelete(req.params.id);
     if (!doc) return res.status(404).json({ success: false, error: "Not found" });
 
     if (isR2Url(doc.image)) await r2DelByUrl(doc.image);
-    const fid = idFromUrl(doc.image, "consultancy"); if (fid) await gridDel("consultancy", fid);
-
-    if (isR2Url(doc.whatsappQr)) await r2DelByUrl(doc.whatsappQr);
-    const qid = idFromUrl(doc.whatsappQr, "consultancy_qr"); if (qid) await gridDel("consultancy_qr", qid);
+    const fid = idFromUrl(doc.image, "consultancy");
+    if (fid) await gridDel("consultancy", fid);
 
     res.json({ success: true, removed: doc });
   } catch (e) {
