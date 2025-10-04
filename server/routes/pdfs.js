@@ -73,6 +73,7 @@ const s3 = new S3Client({
 
 /* ------------ Multer (memory) ------------ */
 const upload = multer({ storage: multer.memoryStorage() });
+// accept either "pdf" or "file"
 const pickUploaded = (req) =>
   req.files?.pdf?.[0] || req.files?.file?.[0] || req.file || null;
 
@@ -262,68 +263,32 @@ router.patch(
   }
 );
 
-/* ------------ Strong /pdfs/stream with local + R2 fallback ------------ */
+/* ------------ Strong /pdfs/stream with strict CT & R2 fallback ------------ */
 router.get("/stream", async (req, res) => {
   try {
     const src = String(req.query.src || "").trim();
     if (!src) return res.status(400).send("Missing src");
 
     const range = req.headers.range;
-
-    // A) Serve local files (/uploads/...) directly
-    if (!/^https?:\/\//i.test(src)) {
-      const rel = src.replace(/^\/+/, "");
-      const abs = path.join(ROOT, rel);
-      try {
-        await fsp.access(abs);
-        const stat = await fsp.stat(abs);
-
-        const baseHeaders = {
-          "Content-Type": "application/pdf",
-          "Accept-Ranges": "bytes",
-          "Access-Control-Expose-Headers": "Content-Length,Content-Range,Accept-Ranges",
-          "Cross-Origin-Resource-Policy": "cross-origin",
-          "Access-Control-Allow-Origin": "*",
-          "X-Content-Type-Options": "nosniff",
-          "Content-Disposition": 'inline; filename="document.pdf"',
-          Vary: "Range",
-        };
-
-        if (range) {
-          const m = /bytes=(\d+)-(\d*)/.exec(range) || [];
-          const start = Number(m[1] || 0);
-          const end = m[2] ? Number(m[2]) : stat.size - 1;
-          res.writeHead(206, {
-            ...baseHeaders,
-            "Content-Range": `bytes ${start}-${end}/${stat.size}`,
-            "Content-Length": String(end - start + 1),
-          });
-          return fsp.createReadStream(abs, { start, end }).pipe(res);
-        }
-
-        res.writeHead(200, { ...baseHeaders, "Content-Length": String(stat.size) });
-        return fsp.createReadStream(abs).pipe(res);
-      } catch {
-        // fall through to remote fetch / R2
-      }
-    }
-
-    // B) Try remote fetch first
     const fetchHeaders = range ? { Range: range } : {};
     let upstream = await fetch(src, { headers: fetchHeaders });
+
     const ct = upstream.headers?.get("content-type") || "";
     const ok = upstream.status === 200 || upstream.status === 206;
-    const looksPdf =
-      /\bapplication\/pdf\b/i.test(ct) ||
-      /\.pdf(\?|$)/i.test(new URL(src).pathname);
 
-    // helper: R2 fallback even if base has a path prefix
+    // ✅ Only trust Content-Type, not the .pdf extension
+    const looksPdf = /\b(application\/pdf|application\/octet-stream|binary\/octet-stream|application\/x-pdf)\b/i.test(
+      ct
+    );
+
+    // Helper: read directly from R2 via SDK (auth) when the public site serves HTML/redirects
     const tryR2 = async () => {
       if (!r2Ready) return false;
       const base = new URL(R2_PUBLIC_BASE);
       const u = new URL(src);
       if (u.host !== base.host) return false;
 
+      // derive bucket key relative to base path
       let key = u.pathname;
       if (base.pathname !== "/" && key.startsWith(base.pathname)) {
         key = key.slice(base.pathname.length);
@@ -346,21 +311,20 @@ router.get("/stream", async (req, res) => {
         "Cache-Control": obj.CacheControl || "no-transform, public, max-age=86400",
         "Access-Control-Expose-Headers": "Content-Length,Content-Range,Accept-Ranges",
         "Cross-Origin-Resource-Policy": "cross-origin",
-        "Access-Control-Allow-Origin": "*",
-        "X-Content-Type-Options": "nosniff",
         "Content-Disposition": obj.ContentDisposition || 'inline; filename="document.pdf"',
         Vary: "Range",
       };
-      if (obj.ContentLength != null)
-        headers["Content-Length"] = String(obj.ContentLength);
+      if (obj.ContentLength != null) headers["Content-Length"] = String(obj.ContentLength);
       if (obj.ContentRange) headers["Content-Range"] = obj.ContentRange;
 
       res.writeHead(status, headers);
-      obj.Body.on("error", () => { try { res.end(); } catch {} }).pipe(res);
+      obj.Body.on("error", () => {
+        try { res.end(); } catch {}
+      }).pipe(res);
       return true;
     };
 
-    // 1) Good upstream → stream
+    // 1) If upstream is really a PDF, stream it through.
     if (ok && looksPdf) {
       const headers = {
         "Content-Type": ct || "application/pdf",
@@ -368,8 +332,6 @@ router.get("/stream", async (req, res) => {
         "Cache-Control": "no-transform, public, max-age=86400",
         "Access-Control-Expose-Headers": "Content-Length,Content-Range,Accept-Ranges",
         "Cross-Origin-Resource-Policy": "cross-origin",
-        "Access-Control-Allow-Origin": "*",
-        "X-Content-Type-Options": "nosniff",
         "Content-Disposition": 'inline; filename="document.pdf"',
         Vary: "Range",
       };
@@ -387,7 +349,7 @@ router.get("/stream", async (req, res) => {
       return;
     }
 
-    // 2) R2 fallback
+    // 2) Otherwise, try R2 (gets the *actual* object bytes even if the public site returned HTML).
     try {
       const handled = await tryR2();
       if (handled) return;
@@ -395,27 +357,18 @@ router.get("/stream", async (req, res) => {
       console.warn("R2 fallback failed:", e?.message || e);
     }
 
-    // 3) Forward error as plain text so pdf.js doesn't choke on HTML
+    // 3) Forward plain text error so pdf.js doesn't choke on HTML.
     const text = await upstream.text().catch(() => "Upstream error");
     res.set({
       "Content-Type": "text/plain; charset=utf-8",
       "Access-Control-Expose-Headers": "Content-Length,Content-Range,Accept-Ranges",
       "Cross-Origin-Resource-Policy": "cross-origin",
-      "Access-Control-Allow-Origin": "*",
-      "X-Content-Type-Options": "nosniff",
     });
     res.status(upstream.status || 502).send(text);
   } catch (e) {
     console.error("pdf stream proxy failed:", e);
-    if (!res.headersSent) {
-      res.set({
-        "Access-Control-Allow-Origin": "*",
-        "X-Content-Type-Options": "nosniff",
-      });
-      res.status(502).send("Upstream error");
-    } else {
-      try { res.end(); } catch {}
-    }
+    if (!res.headersSent) res.status(502).send("Upstream error");
+    else try { res.end(); } catch {}
   }
 });
 
