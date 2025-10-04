@@ -1,164 +1,141 @@
+// server/routes/banners.js  — GridFS (no multer-gridfs-storage)
 import express from "express";
 import multer from "multer";
 import mongoose from "mongoose";
 
 const router = express.Router();
 
-/* ---------- tiny utility: wait for Mongo ---------- */
-const MONGO_URI = process.env.MONGO_URI || "";
+/* ---------------- helpers ---------------- */
 
-async function ensureMongoReady(timeoutMs = 10000) {
-  // 0 = disconnected, 1 = connected, 2 = connecting, 3 = disconnecting
-  const start = Date.now();
-  if (!MONGO_URI) return false;
-
-  while (mongoose.connection.readyState !== 1) {
-    try {
-      if (mongoose.connection.readyState === 0) {
-        await mongoose.connect(MONGO_URI, {
-          serverSelectionTimeoutMS: 2000,
-        });
-      } else {
-        // connecting/disconnecting; small pause
-        await new Promise((r) => setTimeout(r, 150));
-      }
-    } catch {
-      // swallow & retry until timeout
-    }
-    if (Date.now() - start > timeoutMs) break;
-  }
-  return mongoose.connection.readyState === 1;
+function bucket(name = "banners") {
+  // 1 = connected, 2 = connecting (we allow when db exists)
+  if (mongoose.connection.readyState !== 1 && !mongoose.connection.db) return null;
+  return new mongoose.mongo.GridFSBucket(mongoose.connection.db, { bucketName: name });
 }
 
-function requireMongoMw(timeoutMs = 10000) {
-  return async (_req, res, next) => {
-    const ok = await ensureMongoReady(timeoutMs);
-    if (!ok) {
-      res.set("Retry-After", "2");
-      return res
-        .status(503)
-        .json({ success: false, error: "DB not connected yet" });
-    }
-    next();
-  };
-}
+const upload = multer({ storage: multer.memoryStorage() });
 
-/* ---------- helpers (safe) ---------- */
-async function makeStorage(bucket) {
-  const { GridFsStorage } = await import("multer-gridfs-storage");
-  return new GridFsStorage({
-    url: MONGO_URI,
-    file: (req, file) => {
-      const safe = (file.originalname || "file")
-        .replace(/\s+/g, "_")
-        .replace(/[^\w.\-]/g, "");
-      return {
-        filename: `${Date.now()}-${safe}`,
-        bucketName: bucket,
-        metadata: {
-          mime: file.mimetype || "application/octet-stream",
-          title: req.body?.title || "",
-          link: req.body?.link || "",
-        },
-      };
-    },
-  });
-}
+const safeName = (s = "file") =>
+  String(s)
+    .normalize("NFKD")
+    .replace(/[^\w.\-]+/g, "_")
+    .slice(0, 120);
 
-function grid(bucket) {
-  const db = mongoose.connection?.db;
-  if (!db) return null;
-  return new mongoose.mongo.GridFSBucket(db, { bucketName: bucket });
-}
+/* ---------------- routes ---------------- */
 
-/* ---------- multer storage ---------- */
-// create storage once; it uses its own connection string internally
-const storage = await makeStorage("banners");
-const upload = multer({ storage });
-
-/* ---------- routes ---------- */
-
-// List all banners (from GridFS 'banners' bucket)
-router.get("/", requireMongoMw(), async (_req, res) => {
+// List all banners
+router.get("/", async (_req, res) => {
   try {
-    const db = mongoose.connection?.db;
-    const files = await db
+    if (!mongoose.connection.db) {
+      return res.status(503).json({ success: false, message: "DB not connected" });
+    }
+    const files = await mongoose.connection.db
       .collection("banners.files")
       .find({})
       .sort({ uploadDate: -1 })
       .toArray();
 
     const banners = files.map((f) => ({
-      id: f._id.toString(),
-      url: `/api/files/banners/${f._id.toString()}`,
-      type: f.metadata?.mime || f.contentType || "image/*",
+      id: String(f._id),
+      // keep the same URL your client already uses:
+      url: `/api/files/banners/${String(f._id)}`,
+      type: f.contentType || f.metadata?.mime || "image/*",
       title: f.metadata?.title || "",
       link: f.metadata?.link || "",
+      uploadedAt: f.uploadDate,
     }));
 
     res.json({ success: true, banners });
   } catch (e) {
-    res.status(500).json({ success: false, error: e.message });
+    console.error("List banners error:", e);
+    res.status(500).json({ success: false, message: e.message || "Server error" });
   }
 });
 
-// Upload one banner (image/video)
-router.post(
-  "/",
-  requireMongoMw(),           // <- wait for DB
-  upload.single("file"),
-  async (req, res) => {
-    try {
-      if (!req.file)
-        return res.status(400).json({ success: false, error: "file required" });
-      const item = {
-        id: String(req.file.id),
-        url: `/api/files/banners/${String(req.file.id)}`,
-        type: req.file.mimetype || req.file.metadata?.mime || "image/*",
-        title: req.body?.title || "",
-        link: req.body?.link || "",
-      };
-      res.json({ success: true, item });
-    } catch (e) {
-      res.status(500).json({ success: false, error: e.message });
+// Upload one banner (image/video) — memory → GridFS
+router.post("/", upload.single("file"), async (req, res) => {
+  try {
+    if (!req.file || !req.file.buffer?.length) {
+      return res.status(400).json({ success: false, message: "file required" });
     }
+    const b = bucket("banners");
+    if (!b) return res.status(503).json({ success: false, message: "DB not connected" });
+
+    const filename = `${Date.now()}-${safeName(req.file.originalname || "banner")}`;
+    const metadata = {
+      mime: req.file.mimetype || "application/octet-stream",
+      title: req.body?.title || "",
+      link: req.body?.link || "",
+    };
+
+    // Write to GridFS
+    const uploadStream = b.openUploadStream(filename, {
+      contentType: req.file.mimetype || "application/octet-stream",
+      metadata,
+    });
+    // end() writes the whole buffer and closes stream
+    uploadStream.end(req.file.buffer);
+
+    await new Promise((resolve, reject) => {
+      uploadStream.on("finish", resolve);
+      uploadStream.on("error", reject);
+    });
+
+    const id = String(uploadStream.id);
+    res.json({
+      success: true,
+      item: {
+        id,
+        url: `/api/files/banners/${id}`,
+        type: req.file.mimetype || "image/*",
+        title: metadata.title,
+        link: metadata.link,
+      },
+    });
+  } catch (e) {
+    console.error("Upload banner error:", e);
+    res.status(500).json({ success: false, message: e.message || "Server error" });
   }
-);
+});
 
 // Delete by GridFS id
-router.delete("/:id", requireMongoMw(), async (req, res) => {
+router.delete("/:id", async (req, res) => {
   try {
-    const b = grid("banners");
+    const b = bucket("banners");
+    if (!b) return res.status(503).json({ success: false, message: "DB not connected" });
     await b.delete(new mongoose.Types.ObjectId(req.params.id));
     res.json({ success: true, removed: req.params.id });
   } catch (e) {
-    res.status(500).json({ success: false, error: e.message });
+    console.error("Delete banner error:", e);
+    res.status(500).json({ success: false, message: e.message || "Server error" });
   }
 });
 
-/* ---------- OPTIONAL: file stream alias (if you don't already have /api/files/banners/:id elsewhere) ---------- */
-// Uncomment if needed:
-// router.get("/file/:id", requireMongoMw(), async (req, res) => {
+/** OPTIONAL fallback streamer
+ * Only add this if you DON'T already have /api/files/banners/:id elsewhere.
+ * If you add it, mount THIS router at "/api" (not "/api/banners"), or change the path.
+ */
+// router.get("/files/banners/:id", async (req, res) => {
 //   try {
-//     const b = grid("banners");
+//     const b = bucket("banners");
+//     if (!b) return res.status(503).send("DB not connected");
 //     const id = new mongoose.Types.ObjectId(req.params.id);
 //     res.set({
-//       "Cache-Control": "public, max-age=86400",
 //       "Content-Type": "application/octet-stream",
-//       "Content-Disposition": 'inline; filename="banner"'
+//       "Cache-Control": "public, max-age=86400, immutable",
 //     });
 //     b.openDownloadStream(id)
-//       .on("error", () => res.sendStatus(404))
+//       .on("error", () => res.status(404).end())
 //       .pipe(res);
 //   } catch {
-//     res.sendStatus(404);
+//     res.status(400).end();
 //   }
 // });
 
-/* ---------- error handler ---------- */
+/* --------------- error handler --------------- */
 router.use((err, _req, res, _next) => {
   console.error("Banners route error:", err);
-  res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
+  res.status(err?.status || 500).json({ success: false, message: err?.message || "Server error" });
 });
 
 export default router;
