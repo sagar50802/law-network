@@ -2,21 +2,18 @@ import mongoose from "mongoose";
 
 const ConsultancySchema = new mongoose.Schema(
   {
-    title: String,
-    subtitle: String,
-    intro: String,
+    title: { type: String, required: true },
+    subtitle: { type: String, default: "" },
+    intro: { type: String, default: "" },
     order: { type: Number, default: 0 },
-    image: String,             // main card image (R2 or GridFS URL)
+    image: { type: String, default: "" },
 
-    // NEW: per-card deep links (all optional)
-    whatsapp: { type: String, default: "" },   // e.g. https://wa.me/91999...?text=...
-    telegram: { type: String, default: "" },   // e.g. https://t.me/username
-    instagram:{ type: String, default: "" },   // e.g. https://instagram.com/handle
-    email:    { type: String, default: "" },   // mailto:hi@example.com
-    website:  { type: String, default: "" },   // e.g. https://example.com
-
-    // NEW: optional QR image for internal use (NOT rendered publicly)
-    whatsappQr: { type: String, default: "" }, // stored URL (R2 or GridFS)
+    // NEW optional deep-link fields
+    whatsapp:  { type: String, default: "" },
+    telegram:  { type: String, default: "" },
+    instagram: { type: String, default: "" },
+    email:     { type: String, default: "" },   // allow "mailto:..." or plain email
+    website:   { type: String, default: "" },
   },
   { timestamps: true }
 );
