@@ -1,52 +1,28 @@
 // server/routes/pdfs.js
 import express from "express";
 import multer from "multer";
-import { GridFsStorage } from "multer-gridfs-storage";
-import mongoose from "mongoose";
-import { ObjectId } from "mongodb";
+import path from "path";
 import fsp from "fs/promises";
-import path, { extname } from "path";
-import dotenv from "dotenv";
+import { fileURLToPath } from "url";
+import {
+  S3Client,
+  PutObjectCommand,
+  DeleteObjectCommand,
+  GetObjectCommand,
+} from "@aws-sdk/client-s3";
 import isOwner from "../middlewares/isOwnerWrapper.js";
 
-// ---- R2 (same style as podcasts/videos) ----
-import { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
-
-dotenv.config();
 const router = express.Router();
 
-/* ---------------- Cloudflare R2 env ---------------- */
-const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID;
-const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID;
-const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY;
-const R2_BUCKET = process.env.R2_BUCKET || "lawprepx";
-const R2_PUBLIC_BASE = (process.env.R2_PUBLIC_BASE || "").replace(/\/+$/, "");
-const r2Ready =
-  !!R2_ACCOUNT_ID &&
-  !!R2_ACCESS_KEY_ID &&
-  !!R2_SECRET_ACCESS_KEY &&
-  !!R2_PUBLIC_BASE;
+/* ---------------- Paths & helpers ---------------- */
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-const s3 = r2Ready
-  ? new S3Client({
-      region: "auto",
-      endpoint: `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-      credentials: {
-        accessKeyId: R2_ACCESS_KEY_ID,
-        secretAccessKey: R2_SECRET_ACCESS_KEY,
-      },
-    })
-  : null;
-
-/* ---------------- Local/DB config ---------------- */
-const mongoURI = process.env.MONGO_URI || "";
-
+// JSON “db” on disk for subjects/chapters
 const ROOT = path.join(process.cwd(), "server");
 const DATA_DIR = path.join(ROOT, "data");
-const UPLOAD_DIR = path.join(ROOT, "uploads", "pdfs");
 const DB_FILE = path.join(DATA_DIR, "pdfs.json");
 await fsp.mkdir(DATA_DIR, { recursive: true }).catch(() => {});
-await fsp.mkdir(UPLOAD_DIR, { recursive: true }).catch(() => {});
 
 async function readDB() {
   try {
@@ -61,69 +37,55 @@ async function readDB() {
 async function writeDB(db) {
   await fsp.writeFile(DB_FILE, JSON.stringify(db, null, 2), "utf8");
 }
-const uid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
 
-/* ---------------- Multer storages ---------------- */
-// If R2 is configured, take uploads into memory (we'll push to R2)
-// else if Mongo is configured, use GridFS
-// else save to disk folder
-let gridFsStorage = null;
-if (!r2Ready && mongoURI) {
-  gridFsStorage = new GridFsStorage({
-    url: mongoURI,
-    file: (_req, file) => {
-      if (!file.mimetype || !file.mimetype.includes("pdf")) {
-        return Promise.reject(new Error("Only PDF files allowed"));
-      }
-      return {
-        _id: new ObjectId(),
-        filename: `${Date.now()}-${(file.originalname || "file.pdf").replace(/\s+/g, "_")}`,
-        bucketName: "pdfs",
-      };
-    },
-  });
-  gridFsStorage.on("connection", () => console.log("✓ GridFS storage ready (pdfs)"));
-  gridFsStorage.on("connectionFailed", (e) =>
-    console.error("✗ GridFS storage error:", e?.message)
-  );
-}
+// local uploads fallback
+const LOCAL_DIR = path.join(ROOT, "uploads", "pdfs");
+await fsp.mkdir(LOCAL_DIR, { recursive: true }).catch(() => {});
 
-const upload = (() => {
-  if (r2Ready) return multer({ storage: multer.memoryStorage() });
-  if (gridFsStorage) return multer({ storage: gridFsStorage });
-  return multer({ dest: UPLOAD_DIR });
-})();
+const newId = () =>
+  Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 
-function multerSafe(mw) {
-  return (req, res, next) => {
-    mw(req, res, (err) => {
-      if (err) {
-        console.error("⚠️ Multer upload error:", err);
-        return res
-          .status(400)
-          .json({ success: false, message: err.message || "Upload error" });
-      }
-      next();
-    });
-  };
-}
+const safeName = (s) =>
+  String(s || "")
+    .normalize("NFKD")
+    .replace(/[^\w.-]+/g, "_")
+    .slice(0, 120);
 
-const uploadChapter = multerSafe(
-  upload.fields([
-    { name: "pdf", maxCount: 1 },
-    { name: "file", maxCount: 1 },
-  ])
-);
+/* ---------------- Cloudflare R2 ---------------- */
+const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID || "";
+const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID || "";
+const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY || "";
+const R2_BUCKET = process.env.R2_BUCKET || "lawprepx";
+const R2_PUBLIC_BASE = (process.env.R2_PUBLIC_BASE || "").replace(/\/+$/, "");
+
+const r2Ready =
+  !!R2_ACCOUNT_ID &&
+  !!R2_ACCESS_KEY_ID &&
+  !!R2_SECRET_ACCESS_KEY &&
+  !!R2_PUBLIC_BASE;
+
+const s3 = new S3Client({
+  region: "auto",
+  endpoint: `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+  credentials: {
+    accessKeyId: R2_ACCESS_KEY_ID,
+    secretAccessKey: R2_SECRET_ACCESS_KEY,
+  },
+});
+
+/* ---------------- Multer (memory) ---------------- */
+const upload = multer({ storage: multer.memoryStorage() });
 
 /* ---------------- Routes ---------------- */
 
-// List (public)
+// List all subjects (public)
 router.get("/", async (_req, res) => {
   const db = await readDB();
   res.json({ success: true, subjects: db.subjects });
 });
 
 // Create subject (admin)
+// Accept name from body or query; id is a slug of the name
 router.post("/subjects", isOwner, express.json(), async (req, res) => {
   const name = String(
     req.body?.name ||
@@ -133,15 +95,23 @@ router.post("/subjects", isOwner, express.json(), async (req, res) => {
       ""
   ).trim();
 
-  if (!name) return res.status(400).json({ success: false, message: "Name required" });
+  if (!name) {
+    return res.status(400).json({ success: false, message: "Name required" });
+  }
 
   const db = await readDB();
-  const id = name.toLowerCase().replace(/\s+/g, "-") || uid();
+  const id = name.toLowerCase().replace(/\s+/g, "-") || newId();
 
-  const existing = db.subjects.find(
-    (s) => s.id === id || s.name.toLowerCase() === name.toLowerCase()
-  );
-  if (existing) return res.status(200).json({ success: true, subject: existing });
+  const existing =
+    db.subjects.find(
+      (s) =>
+        s.id === id || String(s.name).toLowerCase() === name.toLowerCase()
+    ) || null;
+
+  if (existing) {
+    // idempotent: return existing
+    return res.status(200).json({ success: true, subject: existing });
+  }
 
   const subject = { id, name, chapters: [] };
   db.subjects.push(subject);
@@ -149,143 +119,158 @@ router.post("/subjects", isOwner, express.json(), async (req, res) => {
   res.json({ success: true, subject });
 });
 
-// Add chapter (admin) — accepts file OR url
-router.post("/subjects/:sid/chapters", isOwner, uploadChapter, async (req, res) => {
-  try {
+// Add chapter (admin)
+// Accept uploaded file ("pdf") OR direct URL ("url"/"pdfUrl")
+router.post(
+  "/subjects/:sid/chapters",
+  isOwner,
+  upload.single("pdf"),
+  async (req, res) => {
+    try {
+      const db = await readDB();
+      const sub = db.subjects.find((s) => s.id === req.params.sid);
+      if (!sub)
+        return res
+          .status(404)
+          .json({ success: false, message: "Subject not found" });
+
+      const title = String(req.body?.title || "Untitled").slice(0, 200);
+      const locked =
+        String(req.body?.locked) === "true" || req.body?.locked === true;
+
+      const urlFromBody = String(
+        req.body?.url || req.body?.pdfUrl || req.query?.url || ""
+      ).trim();
+
+      let finalUrl = "";
+
+      if (req.file && req.file.buffer) {
+        // file upload path/key
+        const ext = path.extname(req.file.originalname || ".pdf") || ".pdf";
+        const key = `pdfs/${sub.id}/${Date.now()}_${newId()}${ext}`;
+
+        if (r2Ready) {
+          await s3.send(
+            new PutObjectCommand({
+              Bucket: R2_BUCKET,
+              Key: key,
+              Body: req.file.buffer,
+              ContentType: "application/pdf",
+            })
+          );
+          finalUrl = `${R2_PUBLIC_BASE}/${key}`;
+        } else {
+          // local fallback
+          const dir = path.join(LOCAL_DIR, sub.id);
+          await fsp.mkdir(dir, { recursive: true });
+          const localName = safeName(`${Date.now()}_${newId()}${ext}`);
+          const abs = path.join(dir, localName);
+          await fsp.writeFile(abs, req.file.buffer);
+          finalUrl = `/uploads/pdfs/${sub.id}/${localName}`;
+        }
+      } else if (urlFromBody) {
+        finalUrl = urlFromBody;
+      } else {
+        return res
+          .status(400)
+          .json({ success: false, message: "PDF file or URL required" });
+      }
+
+      const chapter = {
+        id: newId(),
+        title,
+        url: finalUrl,
+        locked,
+        createdAt: new Date().toISOString(),
+      };
+
+      sub.chapters.push(chapter);
+      await writeDB(db);
+      res.json({ success: true, chapter });
+    } catch (err) {
+      console.error("PDF chapter upload failed:", err);
+      res
+        .status(500)
+        .json({ success: false, message: err?.message || "Server error" });
+    }
+  }
+);
+
+// Delete chapter (admin) + best-effort file removal
+router.delete(
+  "/subjects/:sid/chapters/:cid",
+  isOwner,
+  async (req, res) => {
     const db = await readDB();
     const sub = db.subjects.find((s) => s.id === req.params.sid);
-    if (!sub) return res.status(404).json({ success: false, message: "Subject not found" });
+    if (!sub)
+      return res
+        .status(404)
+        .json({ success: false, message: "Subject not found" });
 
-    const file = req.files?.pdf?.[0] || req.files?.file?.[0] || null;
-    const urlFromBody = String(req.body?.url || req.body?.pdfUrl || req.query?.url || "").trim();
-    if (!file && !urlFromBody) {
-      return res.status(400).json({ success: false, message: "PDF file or URL required" });
-    }
+    const idx = sub.chapters.findIndex((c) => c.id === req.params.cid);
+    if (idx < 0)
+      return res
+        .status(404)
+        .json({ success: false, message: "Chapter not found" });
 
-    const title = String(req.body?.title || "Untitled").slice(0, 200);
-    const locked =
-      String(req.body?.locked) === "true" || req.body?.locked === true;
+    const removed = sub.chapters.splice(idx, 1)[0];
 
-    let url = urlFromBody;
-
-    // If a file was uploaded, persist it to R2 / GridFS / disk and produce a URL
-    if (file) {
-      if (r2Ready) {
-        const ext = (extname(file.originalname || "") || ".pdf").toLowerCase() || ".pdf";
-        const key = `pdfs/${req.params.sid}/${Date.now()}_${uid()}${ext}`;
+    // delete from R2 if it was an R2 object
+    if (r2Ready && removed?.url?.startsWith(R2_PUBLIC_BASE + "/")) {
+      const key = removed.url.substring(R2_PUBLIC_BASE.length + 1);
+      try {
         await s3.send(
-          new PutObjectCommand({
+          new DeleteObjectCommand({
             Bucket: R2_BUCKET,
             Key: key,
-            Body: file.buffer, // memory storage
-            ContentType: "application/pdf",
           })
         );
-        url = `${R2_PUBLIC_BASE}/${key}`;
-      } else if (mongoURI) {
-        // GridFS filename is already set by the storage
-        const filename = file.filename;
-        url = `/api/gridfs/pdf/${filename}`;
-      } else {
-        // Disk — ensure path is within our uploads/pdfs folder
-        const base = path.basename(file.filename || file.path);
-        url = `/uploads/pdfs/${base}`;
+      } catch (e) {
+        console.warn("R2 delete warning:", e?.message || e);
       }
     }
 
-    const ch = {
-      id: uid(),
-      title,
-      url,
-      locked,
-      createdAt: new Date().toISOString(),
-    };
-    sub.chapters.push(ch);
+    // local delete if it was in /uploads
+    if (removed?.url?.startsWith("/uploads/")) {
+      const abs = path.join(ROOT, removed.url.replace(/^\/+/, ""));
+      fsp.unlink(abs).catch(() => {});
+    }
+
     await writeDB(db);
-    res.json({ success: true, chapter: ch });
-  } catch (err) {
-    console.error("⚠️ Chapter upload error:", err);
-    res.status(500).json({ success: false, message: err.message || "Server error" });
+    res.json({ success: true, removed });
   }
-});
+);
 
-// Delete one chapter (admin)
-router.delete("/subjects/:sid/chapters/:cid", isOwner, async (req, res) => {
-  const db = await readDB();
-  const sub = db.subjects.find((s) => s.id === req.params.sid);
-  if (!sub) return res.status(404).json({ success: false, message: "Subject not found" });
-
-  const idx = sub.chapters.findIndex((c) => c.id === req.params.cid);
-  if (idx < 0) return res.status(404).json({ success: false, message: "Chapter not found" });
-
-  const removed = sub.chapters.splice(idx, 1)[0];
-
-  // Clean up storage if possible
-  try {
-    if (removed?.url) {
-      if (r2Ready && removed.url.startsWith(R2_PUBLIC_BASE + "/")) {
-        const key = removed.url.substring(R2_PUBLIC_BASE.length + 1);
-        if (key) await s3.send(new DeleteObjectCommand({ Bucket: R2_BUCKET, Key: key }));
-      } else if (mongoURI && removed.url.includes("/api/gridfs/pdf/")) {
-        // best-effort GridFS delete
-        const filename = removed.url.split("/").pop();
-        if (mongoose.connection.readyState === 1) {
-          const bucket = new mongoose.mongo.GridFSBucket(mongoose.connection.db, {
-            bucketName: "pdfs",
-          });
-          const files = await mongoose.connection.db
-            .collection("pdfs.files")
-            .find({ filename })
-            .toArray();
-          if (files.length) await bucket.delete(files[0]._id);
-        }
-      } else if (removed.url.startsWith("/uploads/pdfs/")) {
-        const filePath = path.join(ROOT, removed.url);
-        fsp.unlink(filePath).catch(() => {});
-      }
-    }
-  } catch (e) {
-    console.warn("PDF delete warning:", e?.message || e);
-  }
-
-  await writeDB(db);
-  res.json({ success: true, removed });
-});
-
-// Delete subject (admin)
+// Delete an entire subject (admin) + cleanup files
 router.delete("/subjects/:sid", isOwner, async (req, res) => {
   const db = await readDB();
   const idx = db.subjects.findIndex((s) => s.id === req.params.sid);
-  if (idx < 0) return res.status(404).json({ success: false, message: "Subject not found" });
+  if (idx < 0)
+    return res
+      .status(404)
+      .json({ success: false, message: "Subject not found" });
 
   const sub = db.subjects[idx];
 
-  // Clean up all chapters
+  // cleanup all chapter files
   for (const ch of sub.chapters || []) {
-    try {
-      if (ch?.url) {
-        if (r2Ready && ch.url.startsWith(R2_PUBLIC_BASE + "/")) {
-          const key = ch.url.substring(R2_PUBLIC_BASE.length + 1);
-          if (key) await s3.send(new DeleteObjectCommand({ Bucket: R2_BUCKET, Key: key }));
-        } else if (mongoURI && ch.url.includes("/api/gridfs/pdf/")) {
-          const filename = ch.url.split("/").pop();
-          if (mongoose.connection.readyState === 1) {
-            const bucket = new mongoose.mongo.GridFSBucket(mongoose.connection.db, {
-              bucketName: "pdfs",
-            });
-            const files = await mongoose.connection.db
-              .collection("pdfs.files")
-              .find({ filename })
-              .toArray();
-            if (files.length) await bucket.delete(files[0]._id);
-          }
-        } else if (ch.url.startsWith("/uploads/pdfs/")) {
-          const filePath = path.join(ROOT, ch.url);
-          fsp.unlink(filePath).catch(() => {});
-        }
+    if (r2Ready && ch?.url?.startsWith(R2_PUBLIC_BASE + "/")) {
+      const key = ch.url.substring(R2_PUBLIC_BASE.length + 1);
+      try {
+        await s3.send(
+          new DeleteObjectCommand({
+            Bucket: R2_BUCKET,
+            Key: key,
+          })
+        );
+      } catch (e) {
+        console.warn("R2 delete warning:", e?.message || e);
       }
-    } catch (e) {
-      console.warn("Subject cleanup warning:", e?.message || e);
+    }
+    if (ch?.url?.startsWith("/uploads/")) {
+      const abs = path.join(ROOT, ch.url.replace(/^\/+/, ""));
+      fsp.unlink(abs).catch(() => {});
     }
   }
 
@@ -294,63 +279,89 @@ router.delete("/subjects/:sid", isOwner, async (req, res) => {
   res.json({ success: true });
 });
 
-/* ---------------- PDF stream proxy (CORS/ORB-safe, with R2 fallback) ---------------- */
+// Toggle lock/unlock (admin)
+router.patch(
+  "/subjects/:sid/chapters/:cid/lock",
+  isOwner,
+  express.json({ limit: "2mb" }),
+  async (req, res) => {
+    const db = await readDB();
+    const sub = db.subjects.find((s) => s.id === req.params.sid);
+    const ch = sub?.chapters.find((c) => c.id === req.params.cid);
+    if (!ch)
+      return res
+        .status(404)
+        .json({ success: false, message: "Chapter not found" });
+    ch.locked = !!req.body.locked;
+    await writeDB(db);
+    res.json({ success: true, chapter: ch });
+  }
+);
+
+/* ---------------- CORS/ORB-safe PDF proxy with R2 fallback ---------------- */
 router.get("/stream", async (req, res) => {
   try {
     const src = String(req.query.src || "").trim();
     if (!src) return res.status(400).send("Missing src");
 
     const range = req.headers.range;
-    let upstream = await fetch(src, { headers: range ? { Range: range } : {} });
+    const fetchHeaders = range ? { Range: range } : {};
+    let upstream = await fetch(src, { headers: fetchHeaders });
 
-    // Upstream failed but URL looks like our R2 public link → try authenticated R2 read
-    if (
-      (!upstream.ok || (upstream.status !== 200 && upstream.status !== 206)) &&
-      r2Ready &&
-      src.startsWith(R2_PUBLIC_BASE + "/")
-    ) {
+    const ct = (upstream.headers && upstream.headers.get("content-type")) || "";
+    const ok = upstream.status === 200 || upstream.status === 206;
+    const looksPdf = /\bapplication\/pdf\b/i.test(ct);
+
+    const tryR2 = async () => {
+      if (!r2Ready) return null;
+      if (!src.startsWith(R2_PUBLIC_BASE + "/")) return null;
       const key = src.substring(R2_PUBLIC_BASE.length + 1);
-      try {
-        const obj = await s3.send(
-          new GetObjectCommand({
-            Bucket: R2_BUCKET,
-            Key: key,
-            Range: range,
-          })
-        );
 
-        const status = obj.ContentRange ? 206 : 200;
-        const headers = {
-          "Content-Type": obj.ContentType || "application/pdf",
-          "Accept-Ranges": "bytes",
-          "Cache-Control": obj.CacheControl || "no-transform, public, max-age=86400",
-          "Access-Control-Expose-Headers": "Content-Length,Content-Range,Accept-Ranges",
-          "Cross-Origin-Resource-Policy": "cross-origin",
-          "Content-Disposition": obj.ContentDisposition || 'inline; filename="document.pdf"',
-        };
-        if (obj.ContentLength != null) headers["Content-Length"] = String(obj.ContentLength);
-        if (obj.ContentRange) headers["Content-Range"] = obj.ContentRange;
+      const obj = await s3.send(
+        new GetObjectCommand({
+          Bucket: R2_BUCKET,
+          Key: key,
+          Range: range,
+        })
+      );
 
-        res.writeHead(status, headers);
-        obj.Body.on("error", () => {
-          try { res.end(); } catch {}
-        }).pipe(res);
-        return;
-      } catch (e) {
-        console.warn("R2 fallback GetObject failed:", e?.message || e);
-        // fall through to return upstream’s error text
-      }
-    }
-
-    // If upstream is good, stream it through as-is
-    if (upstream.ok && (upstream.status === 200 || upstream.status === 206)) {
+      const status = obj.ContentRange ? 206 : 200;
       const headers = {
-        "Content-Type": upstream.headers.get("content-type") || "application/pdf",
+        "Content-Type": obj.ContentType || "application/pdf",
+        "Accept-Ranges": "bytes",
+        "Cache-Control":
+          obj.CacheControl || "no-transform, public, max-age=86400",
+        "Access-Control-Expose-Headers":
+          "Content-Length,Content-Range,Accept-Ranges",
+        "Cross-Origin-Resource-Policy": "cross-origin",
+        "Content-Disposition":
+          obj.ContentDisposition || 'inline; filename="document.pdf"',
+        Vary: "Range",
+      };
+      if (obj.ContentLength != null)
+        headers["Content-Length"] = String(obj.ContentLength);
+      if (obj.ContentRange) headers["Content-Range"] = obj.ContentRange;
+
+      res.writeHead(status, headers);
+      obj.Body.on("error", () => {
+        try {
+          res.end();
+        } catch {}
+      }).pipe(res);
+      return true;
+    };
+
+    // 1) If upstream looks like a proper PDF stream, proxy it
+    if (ok && looksPdf) {
+      const headers = {
+        "Content-Type": ct || "application/pdf",
         "Accept-Ranges": "bytes",
         "Cache-Control": "no-transform, public, max-age=86400",
-        "Access-Control-Expose-Headers": "Content-Length,Content-Range,Accept-Ranges",
+        "Access-Control-Expose-Headers":
+          "Content-Length,Content-Range,Accept-Ranges",
         "Cross-Origin-Resource-Policy": "cross-origin",
         "Content-Disposition": 'inline; filename="document.pdf"',
+        Vary: "Range",
       };
       const len = upstream.headers.get("content-length");
       if (len) headers["Content-Length"] = len;
@@ -361,23 +372,38 @@ router.get("/stream", async (req, res) => {
       if (!upstream.body) return res.end();
       const { Readable } = await import("node:stream");
       Readable.fromWeb(upstream.body)
-        .on("error", () => { try { res.end(); } catch {} })
+        .on("error", () => {
+          try {
+            res.end();
+          } catch {}
+        })
         .pipe(res);
       return;
     }
 
-    // Error path: forward real status as text so pdf.js won't try to parse XML/HTML as PDF
+    // 2) If upstream not OK, or it's HTML/text, try authenticated R2
+    try {
+      const handled = await tryR2();
+      if (handled) return;
+    } catch (e) {
+      console.warn("R2 fallback failed:", e?.message || e);
+    }
+
+    // 3) Forward upstream error (as text) so pdf.js doesn't try to parse HTML as PDF
     const text = await upstream.text().catch(() => "Upstream error");
     res.set({
       "Content-Type": "text/plain; charset=utf-8",
-      "Access-Control-Expose-Headers": "Content-Length,Content-Range,Accept-Ranges",
+      "Access-Control-Expose-Headers":
+        "Content-Length,Content-Range,Accept-Ranges",
       "Cross-Origin-Resource-Policy": "cross-origin",
     });
     res.status(upstream.status || 502).send(text);
   } catch (e) {
     console.error("pdf stream proxy failed:", e);
     if (!res.headersSent) res.status(502).send("Upstream error");
-    else try { res.end(); } catch {}
+    else try {
+      res.end();
+    } catch {}
   }
 });
 
