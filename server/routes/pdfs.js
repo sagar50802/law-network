@@ -35,26 +35,16 @@ const safeName = (s) =>
     .replace(/[^\w.-]+/g, "_")
     .slice(0, 120);
 
-async function readDB() {
-  try {
-    const raw = await fsp.readFile(DB_FILE, "utf8");
-    const json = JSON.parse(raw || "{}");
-    json.subjects ||= [];
-    return json;
-  } catch {
-    return { subjects: [] };
-  }
-}
-async function writeDB(db) {
-  await fsp.writeFile(DB_FILE, JSON.stringify(db, null, 2), "utf8");
-}
-
 /* ------------ Cloudflare R2 ------------ */
 const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID || "";
 const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID || "";
 const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY || "";
 const R2_BUCKET = process.env.R2_BUCKET || "lawprepx";
 const R2_PUBLIC_BASE = (process.env.R2_PUBLIC_BASE || "").replace(/\/+$/, "");
+const REQUIRE_R2 = String(process.env.PDFS_REQUIRE_R2 || "false").toLowerCase() === "true";
+
+// we’ll keep the index alongside your objects in R2
+const R2_DB_KEY = process.env.R2_PDFS_INDEX_KEY || "data/pdfs.json";
 
 const r2Ready =
   !!R2_ACCOUNT_ID &&
@@ -70,6 +60,68 @@ const s3 = new S3Client({
     secretAccessKey: R2_SECRET_ACCESS_KEY,
   },
 });
+
+/* ------------ helpers for index persistence ------------ */
+async function bodyToString(body) {
+  // AWS SDK v3 in Node returns a Readable. Some runtimes support transformToString.
+  if (body && typeof body.transformToString === "function") {
+    return await body.transformToString();
+  }
+  return await new Promise((resolve, reject) => {
+    const chunks = [];
+    body.on("data", (c) => chunks.push(Buffer.from(c)));
+    body.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    body.on("error", reject);
+  });
+}
+
+async function readDB() {
+  // Prefer R2 copy (persistent), fall back to local file, else empty
+  if (r2Ready) {
+    try {
+      const obj = await s3.send(
+        new GetObjectCommand({ Bucket: R2_BUCKET, Key: R2_DB_KEY })
+      );
+      const raw = await bodyToString(obj.Body);
+      const json = JSON.parse(raw || "{}");
+      json.subjects ||= [];
+      // also hydrate local copy for quick reads
+      await fsp.writeFile(DB_FILE, JSON.stringify(json, null, 2), "utf8");
+      return json;
+    } catch {
+      // ignore and fall through to local
+    }
+  }
+  try {
+    const raw = await fsp.readFile(DB_FILE, "utf8");
+    const json = JSON.parse(raw || "{}");
+    json.subjects ||= [];
+    return json;
+  } catch {
+    return { subjects: [] };
+  }
+}
+
+async function writeDB(db) {
+  const str = JSON.stringify(db, null, 2);
+  await fsp.writeFile(DB_FILE, str, "utf8"); // local (in case R2 temporarily down)
+  if (r2Ready) {
+    try {
+      await s3.send(
+        new PutObjectCommand({
+          Bucket: R2_BUCKET,
+          Key: R2_DB_KEY,
+          Body: str,
+          ContentType: "application/json",
+          CacheControl: "no-cache",
+          ContentDisposition: 'inline; filename="pdfs.json"',
+        })
+      );
+    } catch (e) {
+      console.warn("⚠️ Failed to persist pdfs.json to R2:", e?.message || e);
+    }
+  }
+}
 
 /* ------------ Multer (memory) ------------ */
 const upload = multer({ storage: multer.memoryStorage() });
@@ -121,6 +173,12 @@ router.post(
   ]),
   async (req, res) => {
     try {
+      if (!r2Ready && REQUIRE_R2) {
+        return res
+          .status(503)
+          .json({ success: false, message: "Storage is not configured (R2 required)" });
+      }
+
       const db = await readDB();
       const sub = db.subjects.find((s) => s.id === req.params.sid);
       if (!sub)
@@ -134,7 +192,6 @@ router.post(
       const file = pickUploaded(req);
 
       if (file && file.buffer) {
-        // very small guard to avoid empty/corrupt objects
         if (!file.buffer.length || file.buffer.length < 100) {
           return res.status(400).json({ success: false, message: "PDF looks empty/corrupt" });
         }
@@ -147,7 +204,6 @@ router.post(
               Bucket: R2_BUCKET,
               Key: key,
               Body: file.buffer,
-              // force correct headers so R2 serves bytes as PDF
               ContentType: "application/pdf",
               CacheControl: "public, max-age=31536000, immutable",
               ContentDisposition: `inline; filename="${safeName(file.originalname || "document.pdf")}"`,
@@ -265,7 +321,6 @@ router.patch(
 /* ------------ Strong /pdfs/stream (always via server) ------------ */
 router.get("/stream", async (req, res) => {
   try {
-    // support absolute and relative src
     let src = String(req.query.src || "").trim();
     if (!src) return res.status(400).send("Missing src");
     if (!/^https?:\/\//i.test(src)) {
@@ -276,7 +331,7 @@ router.get("/stream", async (req, res) => {
     const range = req.headers.range;
     const sendPdfHeaders = (status, extra = {}) => {
       res.writeHead(status, {
-        "Content-Type": "application/pdf",       // <— FORCE PDF
+        "Content-Type": "application/pdf",
         "Accept-Ranges": "bytes",
         "Cache-Control": "no-transform, public, max-age=86400",
         "Access-Control-Expose-Headers": "Content-Length,Content-Range,Accept-Ranges",
@@ -287,7 +342,6 @@ router.get("/stream", async (req, res) => {
       });
     };
 
-    // If src is under our public R2 base, bypass public HTTP and read with S3 (always reliable)
     const tryR2Direct = async () => {
       if (!r2Ready || !R2_PUBLIC_BASE) return false;
       const base = new URL(R2_PUBLIC_BASE);
@@ -317,10 +371,8 @@ router.get("/stream", async (req, res) => {
       return true;
     };
 
-    // Prefer R2 credentialed read when possible
     if (await tryR2Direct()) return;
 
-    // Else, proxy fetch (for local /uploads or truly external absolute URLs)
     const headers = range ? { Range: range } : {};
     const upstream = await fetch(src, { headers });
     const status = upstream.status === 206 ? 206 : upstream.status;
@@ -341,7 +393,6 @@ router.get("/stream", async (req, res) => {
       return;
     }
 
-    // Upstream error → text
     const text = await upstream.text().catch(() => "Upstream error");
     res.set({
       "Content-Type": "text/plain; charset=utf-8",
