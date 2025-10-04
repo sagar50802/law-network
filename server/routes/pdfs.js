@@ -7,20 +7,26 @@ import { ObjectId } from "mongodb";
 import fsp from "fs/promises";
 import path from "path";
 import dotenv from "dotenv";
-// ⬇️ use the same wrapper you used for podcasts/videos
 import isOwner from "../middlewares/isOwnerWrapper.js";
 
 dotenv.config();
 
 const router = express.Router();
 
-// ── Config ───────────────────────────────
+/* ---------------- Config ---------------- */
 const mongoURI = process.env.MONGO_URI || "";
+
+// optional allow-list for proxy streaming (use the same base as your public PDFs store)
+const PDF_PUBLIC_BASE = (process.env.PDF_PUBLIC_BASE || process.env.R2_PUBLIC_BASE || "")
+  .replace(/\/+$/, "");
 
 const ROOT = path.join(process.cwd(), "server");
 const DATA_DIR = path.join(ROOT, "data");
+const UPLOAD_DIR = path.join(ROOT, "uploads", "pdfs");
+await fsp.mkdir(DATA_DIR, { recursive: true }).catch(() => {});
+await fsp.mkdir(UPLOAD_DIR, { recursive: true }).catch(() => {});
+
 const DB_FILE = path.join(DATA_DIR, "pdfs.json");
-fsp.mkdir(DATA_DIR, { recursive: true }).catch(() => {});
 
 async function readDB() {
   try {
@@ -35,15 +41,21 @@ async function readDB() {
 async function writeDB(db) {
   await fsp.writeFile(DB_FILE, JSON.stringify(db, null, 2), "utf8");
 }
-const uid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
 
-// ── GridFS storage ───────────────────────
+const uid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
+const slugify = (s) => String(s || "")
+  .trim()
+  .toLowerCase()
+  .replace(/[^a-z0-9]+/g, "-")
+  .replace(/^-+|-+$/g, "") || uid();
+
+/* ---------------- Storage ---------------- */
 let storage;
 if (mongoURI) {
   storage = new GridFsStorage({
     url: mongoURI,
     file: (_req, file) => {
-      if (!file.mimetype || !file.mimetype.includes("pdf")) {
+      if (!file.mimetype || !/pdf/i.test(file.mimetype)) {
         return Promise.reject(new Error("Only PDF files allowed"));
       }
       return {
@@ -54,10 +66,14 @@ if (mongoURI) {
     },
   });
   storage.on("connection", () => console.log("✓ GridFS storage ready (pdfs)"));
-  storage.on("connectionFailed", (e) => console.error("✗ GridFS storage error:", e?.message));
+  storage.on("connectionFailed", (e) =>
+    console.error("✗ GridFS storage error:", e?.message)
+  );
 }
 
-const upload = storage ? multer({ storage }) : multer({ dest: path.join(ROOT, "uploads", "pdfs") });
+const upload = storage
+  ? multer({ storage })
+  : multer({ dest: UPLOAD_DIR });
 
 function multerSafe(mw) {
   return (req, res, next) => {
@@ -78,7 +94,7 @@ const uploadChapter = multerSafe(
   ])
 );
 
-// ── Routes ───────────────────────────────
+/* ---------------- Routes ---------------- */
 
 // List (public)
 router.get("/", async (_req, res) => {
@@ -86,24 +102,28 @@ router.get("/", async (_req, res) => {
   res.json({ success: true, subjects: db.subjects });
 });
 
-// Create subject (admin/owner)
-// Accept name from BODY *or* QUERY (your client sometimes sends ?name=...)
+// Create subject (admin/owner) – accepts name in body OR query
 router.post("/subjects", isOwner, express.json(), async (req, res) => {
-  const name =
-    String(
-      req.body?.name ||
-      req.body?.subjectName ||
-      req.query?.name ||
-      req.query?.subjectName ||
-      ""
-    ).trim();
+  const name = String(
+    req.body?.name ||
+    req.body?.subjectName ||
+    req.query?.name ||
+    req.query?.subjectName ||
+    ""
+  ).trim();
 
   if (!name) return res.status(400).json({ success: false, message: "Name required" });
 
   const db = await readDB();
-  const id = name.toLowerCase().replace(/\s+/g, "-") || uid();
+  let id = slugify(name);
 
-  const existing = db.subjects.find((s) => s.id === id || s.name.toLowerCase() === name.toLowerCase());
+  // avoid slug collision
+  if (db.subjects.some((s) => s.id === id)) {
+    id = `${id}-${uid().slice(0, 4)}`;
+  }
+
+  // if same name already exists, just return it (idempotent UX)
+  const existing = db.subjects.find((s) => s.name.toLowerCase() === name.toLowerCase());
   if (existing) return res.status(200).json({ success: true, subject: existing });
 
   const subject = { id, name, chapters: [] };
@@ -112,8 +132,7 @@ router.post("/subjects", isOwner, express.json(), async (req, res) => {
   res.json({ success: true, subject });
 });
 
-// Add chapter (admin/owner)
-// Accept either an uploaded PDF (pdf/file) OR a direct URL in body/query
+// Add chapter – file upload OR direct URL
 router.post("/subjects/:sid/chapters", isOwner, uploadChapter, async (req, res) => {
   try {
     const db = await readDB();
@@ -121,9 +140,7 @@ router.post("/subjects/:sid/chapters", isOwner, uploadChapter, async (req, res) 
     if (!sub) return res.status(404).json({ success: false, message: "Subject not found" });
 
     const file = req.files?.pdf?.[0] || req.files?.file?.[0] || null;
-
-    const urlFromBody =
-      String(req.body?.url || req.body?.pdfUrl || req.query?.url || "").trim();
+    const urlFromBody = String(req.body?.url || req.body?.pdfUrl || req.query?.url || "").trim();
 
     if (!file && !urlFromBody) {
       return res.status(400).json({ success: false, message: "PDF file or URL required" });
@@ -206,22 +223,33 @@ router.delete("/subjects/:sid", isOwner, async (req, res) => {
 });
 
 // Toggle lock/unlock
-router.patch("/subjects/:sid/chapters/:cid/lock", isOwner, express.json({ limit: "5mb" }), async (req, res) => {
-  const db = await readDB();
-  const sub = db.subjects.find((s) => s.id === req.params.sid);
-  const ch = sub?.chapters.find((c) => c.id === req.params.cid);
-  if (!ch) return res.status(404).json({ success: false, message: "Chapter not found" });
+router.patch(
+  "/subjects/:sid/chapters/:cid/lock",
+  isOwner,
+  express.json({ limit: "5mb" }),
+  async (req, res) => {
+    const db = await readDB();
+    const sub = db.subjects.find((s) => s.id === req.params.sid);
+    const ch = sub?.chapters.find((c) => c.id === req.params.cid);
+    if (!ch) return res.status(404).json({ success: false, message: "Chapter not found" });
 
-  ch.locked = !!req.body.locked;
-  await writeDB(db);
-  res.json({ success: true, chapter: ch });
-});
+    ch.locked = !!req.body.locked;
+    await writeDB(db);
+    res.json({ success: true, chapter: ch });
+  }
+);
 
-// CORS/ORB-safe PDF proxy (optional but handy)
+/* ---------------- CORS/ORB-safe PDF proxy ---------------- */
 router.get("/stream", async (req, res) => {
   try {
     const src = String(req.query.src || "").trim();
     if (!src) return res.status(400).send("Missing src");
+
+    // Optional allow-list (recommended)
+    if (PDF_PUBLIC_BASE && !src.startsWith(PDF_PUBLIC_BASE + "/")) {
+      return res.status(400).send("Blocked src");
+    }
+
     const range = req.headers.range;
     const upstream = await fetch(src, { headers: range ? { Range: range } : {} });
 
@@ -238,16 +266,27 @@ router.get("/stream", async (req, res) => {
     const cr = upstream.headers.get("content-range");
     if (cr) headers["Content-Range"] = cr;
 
+    // HEAD probe support
+    if (req.method === "HEAD") {
+      res.writeHead(upstream.status === 206 ? 206 : 200, headers);
+      return res.end();
+    }
+
     res.writeHead(upstream.status === 206 ? 206 : 200, headers);
     if (!upstream.body) return res.end();
+
     const { Readable } = await import("node:stream");
-    Readable.fromWeb(upstream.body).on("error", () => { try { res.end(); } catch {} }).pipe(res);
+    Readable.fromWeb(upstream.body)
+      .on("error", () => { try { res.end(); } catch {} })
+      .pipe(res);
   } catch (e) {
     console.error("pdf proxy failed:", e);
-    if (!res.headersSent) res.status(502).send("Upstream error"); else try { res.end(); } catch {}
+    if (!res.headersSent) res.status(502).send("Upstream error");
+    else { try { res.end(); } catch {} }
   }
 });
 
+/* ---------------- Error handler ---------------- */
 router.use((err, _req, res, _next) => {
   console.error("PDFs route error:", err);
   res.status(err.status || 500).json({ success: false, message: err.message || "Server error" });
