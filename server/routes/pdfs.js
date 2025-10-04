@@ -1,8 +1,8 @@
+// server/routes/pdfs.js
 import express from "express";
 import multer from "multer";
 import path from "path";
 import fsp from "fs/promises";
-import fs from "fs";
 import { fileURLToPath } from "url";
 import {
   S3Client,
@@ -64,18 +64,15 @@ const r2Ready =
 
 const s3 = new S3Client({
   region: "auto",
-  endpoint: R2_ACCOUNT_ID
-    ? `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`
-    : undefined,
-  credentials:
-    R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY
-      ? { accessKeyId: R2_ACCESS_KEY_ID, secretAccessKey: R2_SECRET_ACCESS_KEY }
-      : undefined,
+  endpoint: `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+  credentials: {
+    accessKeyId: R2_ACCESS_KEY_ID,
+    secretAccessKey: R2_SECRET_ACCESS_KEY,
+  },
 });
 
 /* ------------ Multer (memory) ------------ */
 const upload = multer({ storage: multer.memoryStorage() });
-// accept either "pdf" or "file"
 const pickUploaded = (req) =>
   req.files?.pdf?.[0] || req.files?.file?.[0] || req.file || null;
 
@@ -193,21 +190,21 @@ router.delete("/subjects/:sid/chapters/:cid", isOwner, async (req, res) => {
 
   const removed = sub.chapters.splice(idx, 1)[0];
 
-  // R2 cleanup
   if (r2Ready && removed?.url?.startsWith(R2_PUBLIC_BASE + "/")) {
-    try {
-      const u = new URL(removed.url);
-      const base = new URL(R2_PUBLIC_BASE);
-      let key = u.pathname;
-      if (base.pathname !== "/" && key.startsWith(base.pathname)) key = key.slice(base.pathname.length);
-      key = key.replace(/^\/+/, "");
-      if (key) await s3.send(new DeleteObjectCommand({ Bucket: R2_BUCKET, Key: key }));
-    } catch (e) {
-      console.warn("R2 delete warning:", e?.message || e);
+    const u = new URL(removed.url);
+    const base = new URL(R2_PUBLIC_BASE);
+    let key = u.pathname;
+    if (base.pathname !== "/" && key.startsWith(base.pathname)) key = key.slice(base.pathname.length);
+    key = key.replace(/^\/+/, "");
+    if (key) {
+      try {
+        await s3.send(new DeleteObjectCommand({ Bucket: R2_BUCKET, Key: key }));
+      } catch (e) {
+        console.warn("R2 delete warning:", e?.message || e);
+      }
     }
   }
 
-  // local cleanup
   if (removed?.url?.startsWith("/uploads/")) {
     const abs = path.join(ROOT, removed.url.replace(/^\/+/, ""));
     fsp.unlink(abs).catch(() => {});
@@ -265,105 +262,69 @@ router.patch(
   }
 );
 
-/* ------------ /pdfs/stream with local + R2 fallback + ranges ------------ */
-
-function sendPlainError(res, status, msg) {
-  res.set({
-    "Content-Type": "text/plain; charset=utf-8",
-    "Access-Control-Expose-Headers": "Content-Length,Content-Range,Accept-Ranges",
-    "Cross-Origin-Resource-Policy": "cross-origin",
-  });
-  res.status(status).send(msg);
-}
-
-// Local file streaming with Range support
-async function streamLocalFile(req, res, absPath) {
-  let stat;
-  try {
-    stat = await fsp.stat(absPath);
-    if (!stat.isFile()) return sendPlainError(res, 404, "Not found");
-  } catch {
-    return sendPlainError(res, 404, "Not found");
-  }
-
-  const fileSize = stat.size;
-  const range = req.headers.range;
-  const headers = {
-    "Content-Type": "application/pdf",
-    "Accept-Ranges": "bytes",
-    "Cache-Control": "no-transform, public, max-age=86400",
-    "Access-Control-Expose-Headers": "Content-Length,Content-Range,Accept-Ranges",
-    "Cross-Origin-Resource-Policy": "cross-origin",
-    "Content-Disposition": 'inline; filename="document.pdf"',
-    Vary: "Range",
-  };
-
-  if (!range) {
-    headers["Content-Length"] = fileSize;
-    res.writeHead(200, headers);
-    fs.createReadStream(absPath)
-      .on("error", () => { try { res.end(); } catch {} })
-      .pipe(res);
-    return;
-  }
-
-  // Parse "bytes=start-end"
-  const match = /bytes=(\d+)-(\d*)/i.exec(range);
-  if (!match) {
-    headers["Content-Length"] = fileSize;
-    res.writeHead(200, headers);
-    fs.createReadStream(absPath)
-      .on("error", () => { try { res.end(); } catch {} })
-      .pipe(res);
-    return;
-  }
-  const start = parseInt(match[1], 10);
-  const end = match[2] ? Math.min(fileSize - 1, parseInt(match[2], 10)) : fileSize - 1;
-  if (isNaN(start) || start >= fileSize) return sendPlainError(res, 416, "Range Not Satisfiable");
-  const chunkSize = end - start + 1;
-
-  headers["Content-Range"] = `bytes ${start}-${end}/${fileSize}`;
-  headers["Content-Length"] = chunkSize;
-  res.writeHead(206, headers);
-
-  fs.createReadStream(absPath, { start, end })
-    .on("error", () => { try { res.end(); } catch {} })
-    .pipe(res);
-}
-
+/* ------------ Strong /pdfs/stream with local + R2 fallback ------------ */
 router.get("/stream", async (req, res) => {
   try {
     const src = String(req.query.src || "").trim();
-    if (!src) return sendPlainError(res, 400, "Missing src");
+    if (!src) return res.status(400).send("Missing src");
 
     const range = req.headers.range;
 
-    // 1) Relative local uploads: "/uploads/..."
-    if (src.startsWith("/uploads/")) {
-      const absPath = path.join(ROOT, src.replace(/^\/+/, ""));
-      return await streamLocalFile(req, res, absPath);
-    }
+    // A) Serve local files (/uploads/...) directly
+    if (!/^https?:\/\//i.test(src)) {
+      const rel = src.replace(/^\/+/, "");
+      const abs = path.join(ROOT, rel);
+      try {
+        await fsp.access(abs);
+        const stat = await fsp.stat(abs);
 
-    // 2) Absolute URL — check if it's pointing to our local /uploads/
-    let urlObj;
-    try {
-      urlObj = new URL(src);
-      if (urlObj.pathname.startsWith("/uploads/")) {
-        const absPath = path.join(ROOT, urlObj.pathname.replace(/^\/+/, ""));
-        return await streamLocalFile(req, res, absPath);
+        const baseHeaders = {
+          "Content-Type": "application/pdf",
+          "Accept-Ranges": "bytes",
+          "Access-Control-Expose-Headers": "Content-Length,Content-Range,Accept-Ranges",
+          "Cross-Origin-Resource-Policy": "cross-origin",
+          "Access-Control-Allow-Origin": "*",
+          "X-Content-Type-Options": "nosniff",
+          "Content-Disposition": 'inline; filename="document.pdf"',
+          Vary: "Range",
+        };
+
+        if (range) {
+          const m = /bytes=(\d+)-(\d*)/.exec(range) || [];
+          const start = Number(m[1] || 0);
+          const end = m[2] ? Number(m[2]) : stat.size - 1;
+          res.writeHead(206, {
+            ...baseHeaders,
+            "Content-Range": `bytes ${start}-${end}/${stat.size}`,
+            "Content-Length": String(end - start + 1),
+          });
+          return fsp.createReadStream(abs, { start, end }).pipe(res);
+        }
+
+        res.writeHead(200, { ...baseHeaders, "Content-Length": String(stat.size) });
+        return fsp.createReadStream(abs).pipe(res);
+      } catch {
+        // fall through to remote fetch / R2
       }
-    } catch {
-      // not a valid absolute URL, fall through (will error below)
     }
 
-    // Helper: try authenticated R2 if host matches R2 public base
+    // B) Try remote fetch first
+    const fetchHeaders = range ? { Range: range } : {};
+    let upstream = await fetch(src, { headers: fetchHeaders });
+    const ct = upstream.headers?.get("content-type") || "";
+    const ok = upstream.status === 200 || upstream.status === 206;
+    const looksPdf =
+      /\bapplication\/pdf\b/i.test(ct) ||
+      /\.pdf(\?|$)/i.test(new URL(src).pathname);
+
+    // helper: R2 fallback even if base has a path prefix
     const tryR2 = async () => {
       if (!r2Ready) return false;
-      if (!urlObj) return false;
       const base = new URL(R2_PUBLIC_BASE);
-      if (urlObj.host !== base.host) return false;
+      const u = new URL(src);
+      if (u.host !== base.host) return false;
 
-      let key = urlObj.pathname;
+      let key = u.pathname;
       if (base.pathname !== "/" && key.startsWith(base.pathname)) {
         key = key.slice(base.pathname.length);
       }
@@ -385,31 +346,21 @@ router.get("/stream", async (req, res) => {
         "Cache-Control": obj.CacheControl || "no-transform, public, max-age=86400",
         "Access-Control-Expose-Headers": "Content-Length,Content-Range,Accept-Ranges",
         "Cross-Origin-Resource-Policy": "cross-origin",
+        "Access-Control-Allow-Origin": "*",
+        "X-Content-Type-Options": "nosniff",
         "Content-Disposition": obj.ContentDisposition || 'inline; filename="document.pdf"',
         Vary: "Range",
       };
-      if (obj.ContentLength != null) headers["Content-Length"] = String(obj.ContentLength);
+      if (obj.ContentLength != null)
+        headers["Content-Length"] = String(obj.ContentLength);
       if (obj.ContentRange) headers["Content-Range"] = obj.ContentRange;
 
       res.writeHead(status, headers);
-      obj.Body.on("error", () => {
-        try { res.end(); } catch {}
-      }).pipe(res);
+      obj.Body.on("error", () => { try { res.end(); } catch {} }).pipe(res);
       return true;
     };
 
-    // 3) Proxy any http(s) URL
-    if (!urlObj) {
-      try { urlObj = new URL(src); } catch { return sendPlainError(res, 400, "Invalid src"); }
-    }
-
-    const fetchHeaders = range ? { Range: range } : {};
-    const upstream = await fetch(urlObj, { headers: fetchHeaders });
-
-    const ct = upstream.headers?.get("content-type") || "";
-    const ok = upstream.status === 200 || upstream.status === 206;
-    const looksPdf = /\bapplication\/pdf\b/i.test(ct) || /\.pdf(\?|$)/i.test(urlObj.pathname);
-
+    // 1) Good upstream → stream
     if (ok && looksPdf) {
       const headers = {
         "Content-Type": ct || "application/pdf",
@@ -417,6 +368,8 @@ router.get("/stream", async (req, res) => {
         "Cache-Control": "no-transform, public, max-age=86400",
         "Access-Control-Expose-Headers": "Content-Length,Content-Range,Accept-Ranges",
         "Cross-Origin-Resource-Policy": "cross-origin",
+        "Access-Control-Allow-Origin": "*",
+        "X-Content-Type-Options": "nosniff",
         "Content-Disposition": 'inline; filename="document.pdf"',
         Vary: "Range",
       };
@@ -434,7 +387,7 @@ router.get("/stream", async (req, res) => {
       return;
     }
 
-    // 4) If the public R2 URL served HTML/403, try authenticated R2
+    // 2) R2 fallback
     try {
       const handled = await tryR2();
       if (handled) return;
@@ -442,13 +395,27 @@ router.get("/stream", async (req, res) => {
       console.warn("R2 fallback failed:", e?.message || e);
     }
 
-    // 5) Plain error (avoid HTML for pdf.js)
+    // 3) Forward error as plain text so pdf.js doesn't choke on HTML
     const text = await upstream.text().catch(() => "Upstream error");
-    return sendPlainError(res, upstream.status || 502, text || "Upstream error");
+    res.set({
+      "Content-Type": "text/plain; charset=utf-8",
+      "Access-Control-Expose-Headers": "Content-Length,Content-Range,Accept-Ranges",
+      "Cross-Origin-Resource-Policy": "cross-origin",
+      "Access-Control-Allow-Origin": "*",
+      "X-Content-Type-Options": "nosniff",
+    });
+    res.status(upstream.status || 502).send(text);
   } catch (e) {
     console.error("pdf stream proxy failed:", e);
-    if (!res.headersSent) return sendPlainError(res, 502, "Upstream error");
-    try { res.end(); } catch {}
+    if (!res.headersSent) {
+      res.set({
+        "Access-Control-Allow-Origin": "*",
+        "X-Content-Type-Options": "nosniff",
+      });
+      res.status(502).send("Upstream error");
+    } else {
+      try { res.end(); } catch {}
+    }
   }
 });
 
