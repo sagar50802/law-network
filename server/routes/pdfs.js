@@ -73,11 +73,10 @@ const s3 = new S3Client({
 
 /* ------------ Multer (memory) ------------ */
 const upload = multer({ storage: multer.memoryStorage() });
-// accept either "pdf" or "file"
 const pickUploaded = (req) =>
   req.files?.pdf?.[0] || req.files?.file?.[0] || req.file || null;
 
-/* ------------ Routes ------------ */
+/* ------------ DB routes ------------ */
 
 // List (public)
 router.get("/", async (_req, res) => {
@@ -85,7 +84,7 @@ router.get("/", async (_req, res) => {
   res.json({ success: true, subjects: db.subjects });
 });
 
-// Create subject (admin; name via body or query)
+// Create subject
 router.post("/subjects", isOwner, express.json(), async (req, res) => {
   const name = String(
     req.body?.name ||
@@ -112,7 +111,7 @@ router.post("/subjects", isOwner, express.json(), async (req, res) => {
   res.json({ success: true, subject });
 });
 
-// Add chapter (admin) — file or URL
+// Add chapter (file or URL)
 router.post(
   "/subjects/:sid/chapters",
   isOwner,
@@ -135,6 +134,10 @@ router.post(
       const file = pickUploaded(req);
 
       if (file && file.buffer) {
+        // very small guard to avoid empty/corrupt objects
+        if (!file.buffer.length || file.buffer.length < 100) {
+          return res.status(400).json({ success: false, message: "PDF looks empty/corrupt" });
+        }
         const ext = path.extname(file.originalname || ".pdf") || ".pdf";
         const key = `pdfs/${sub.id}/${Date.now()}_${newId()}${ext}`;
 
@@ -144,7 +147,8 @@ router.post(
               Bucket: R2_BUCKET,
               Key: key,
               Body: file.buffer,
-              ContentType: file.mimetype || "application/pdf",
+              // force correct headers so R2 serves bytes as PDF
+              ContentType: "application/pdf",
               CacheControl: "public, max-age=31536000, immutable",
               ContentDisposition: `inline; filename="${safeName(file.originalname || "document.pdf")}"`,
             })
@@ -180,7 +184,7 @@ router.post(
   }
 );
 
-// Delete chapter (admin) + best-effort storage cleanup
+// Delete chapter
 router.delete("/subjects/:sid/chapters/:cid", isOwner, async (req, res) => {
   const db = await readDB();
   const sub = db.subjects.find((s) => s.id === req.params.sid);
@@ -192,20 +196,17 @@ router.delete("/subjects/:sid/chapters/:cid", isOwner, async (req, res) => {
   const removed = sub.chapters.splice(idx, 1)[0];
 
   if (r2Ready && removed?.url?.startsWith(R2_PUBLIC_BASE + "/")) {
-    const u = new URL(removed.url);
-    const base = new URL(R2_PUBLIC_BASE);
-    let key = u.pathname;
-    if (base.pathname !== "/" && key.startsWith(base.pathname)) key = key.slice(base.pathname.length);
-    key = key.replace(/^\/+/, "");
-    if (key) {
-      try {
-        await s3.send(new DeleteObjectCommand({ Bucket: R2_BUCKET, Key: key }));
-      } catch (e) {
-        console.warn("R2 delete warning:", e?.message || e);
-      }
+    try {
+      const base = new URL(R2_PUBLIC_BASE);
+      const u = new URL(removed.url);
+      let key = u.pathname;
+      if (base.pathname !== "/" && key.startsWith(base.pathname)) key = key.slice(base.pathname.length);
+      key = key.replace(/^\/+/, "");
+      if (key) await s3.send(new DeleteObjectCommand({ Bucket: R2_BUCKET, Key: key }));
+    } catch (e) {
+      console.warn("R2 delete warning:", e?.message || e);
     }
   }
-
   if (removed?.url?.startsWith("/uploads/")) {
     const abs = path.join(ROOT, removed.url.replace(/^\/+/, ""));
     fsp.unlink(abs).catch(() => {});
@@ -215,19 +216,18 @@ router.delete("/subjects/:sid/chapters/:cid", isOwner, async (req, res) => {
   res.json({ success: true, removed });
 });
 
-// Delete subject (admin) + cleanup
+// Delete subject
 router.delete("/subjects/:sid", isOwner, async (req, res) => {
   const db = await readDB();
   const idx = db.subjects.findIndex((s) => s.id === req.params.sid);
   if (idx < 0) return res.status(404).json({ success: false, message: "Subject not found" });
 
   const sub = db.subjects[idx];
-
   for (const ch of sub.chapters || []) {
     if (r2Ready && ch?.url?.startsWith(R2_PUBLIC_BASE + "/")) {
       try {
-        const u = new URL(ch.url);
         const base = new URL(R2_PUBLIC_BASE);
+        const u = new URL(ch.url);
         let key = u.pathname;
         if (base.pathname !== "/" && key.startsWith(base.pathname)) key = key.slice(base.pathname.length);
         key = key.replace(/^\/+/, "");
@@ -241,13 +241,12 @@ router.delete("/subjects/:sid", isOwner, async (req, res) => {
       fsp.unlink(abs).catch(() => {});
     }
   }
-
   db.subjects.splice(idx, 1);
   await writeDB(db);
   res.json({ success: true });
 });
 
-// Toggle lock (admin)
+// Toggle lock
 router.patch(
   "/subjects/:sid/chapters/:cid/lock",
   isOwner,
@@ -263,36 +262,40 @@ router.patch(
   }
 );
 
-/* ------------ Strong /pdfs/stream with strict CT & R2 fallback ------------ */
+/* ------------ Strong /pdfs/stream (always via server) ------------ */
 router.get("/stream", async (req, res) => {
   try {
-    const src = String(req.query.src || "").trim();
+    // support absolute and relative src
+    let src = String(req.query.src || "").trim();
     if (!src) return res.status(400).send("Missing src");
+    if (!/^https?:\/\//i.test(src)) {
+      const origin = `${req.protocol}://${req.get("host")}`;
+      src = new URL(src, origin).toString();
+    }
 
     const range = req.headers.range;
-    const fetchHeaders = range ? { Range: range } : {};
-    let upstream = await fetch(src, { headers: fetchHeaders });
+    const sendPdfHeaders = (status, extra = {}) => {
+      res.writeHead(status, {
+        "Content-Type": "application/pdf",       // <— FORCE PDF
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "no-transform, public, max-age=86400",
+        "Access-Control-Expose-Headers": "Content-Length,Content-Range,Accept-Ranges",
+        "Cross-Origin-Resource-Policy": "cross-origin",
+        "Content-Disposition": 'inline; filename="document.pdf"',
+        Vary: "Range",
+        ...extra,
+      });
+    };
 
-    const ct = upstream.headers?.get("content-type") || "";
-    const ok = upstream.status === 200 || upstream.status === 206;
-
-    // ✅ Only trust Content-Type, not the .pdf extension
-    const looksPdf = /\b(application\/pdf|application\/octet-stream|binary\/octet-stream|application\/x-pdf)\b/i.test(
-      ct
-    );
-
-    // Helper: read directly from R2 via SDK (auth) when the public site serves HTML/redirects
-    const tryR2 = async () => {
-      if (!r2Ready) return false;
+    // If src is under our public R2 base, bypass public HTTP and read with S3 (always reliable)
+    const tryR2Direct = async () => {
+      if (!r2Ready || !R2_PUBLIC_BASE) return false;
       const base = new URL(R2_PUBLIC_BASE);
       const u = new URL(src);
       if (u.host !== base.host) return false;
 
-      // derive bucket key relative to base path
       let key = u.pathname;
-      if (base.pathname !== "/" && key.startsWith(base.pathname)) {
-        key = key.slice(base.pathname.length);
-      }
+      if (base.pathname !== "/" && key.startsWith(base.pathname)) key = key.slice(base.pathname.length);
       key = key.replace(/^\/+/, "");
       if (!key) return false;
 
@@ -305,42 +308,31 @@ router.get("/stream", async (req, res) => {
       );
 
       const status = obj.ContentRange ? 206 : 200;
-      const headers = {
-        "Content-Type": obj.ContentType || "application/pdf",
-        "Accept-Ranges": "bytes",
-        "Cache-Control": obj.CacheControl || "no-transform, public, max-age=86400",
-        "Access-Control-Expose-Headers": "Content-Length,Content-Range,Accept-Ranges",
-        "Cross-Origin-Resource-Policy": "cross-origin",
-        "Content-Disposition": obj.ContentDisposition || 'inline; filename="document.pdf"',
-        Vary: "Range",
-      };
-      if (obj.ContentLength != null) headers["Content-Length"] = String(obj.ContentLength);
-      if (obj.ContentRange) headers["Content-Range"] = obj.ContentRange;
+      const extra = {};
+      if (obj.ContentLength != null) extra["Content-Length"] = String(obj.ContentLength);
+      if (obj.ContentRange) extra["Content-Range"] = obj.ContentRange;
 
-      res.writeHead(status, headers);
-      obj.Body.on("error", () => {
-        try { res.end(); } catch {}
-      }).pipe(res);
+      sendPdfHeaders(status, extra);
+      obj.Body.on("error", () => { try { res.end(); } catch {} }).pipe(res);
       return true;
     };
 
-    // 1) If upstream is really a PDF, stream it through.
-    if (ok && looksPdf) {
-      const headers = {
-        "Content-Type": ct || "application/pdf",
-        "Accept-Ranges": "bytes",
-        "Cache-Control": "no-transform, public, max-age=86400",
-        "Access-Control-Expose-Headers": "Content-Length,Content-Range,Accept-Ranges",
-        "Cross-Origin-Resource-Policy": "cross-origin",
-        "Content-Disposition": 'inline; filename="document.pdf"',
-        Vary: "Range",
-      };
-      const len = upstream.headers.get("content-length");
-      if (len) headers["Content-Length"] = len;
-      const cr = upstream.headers.get("content-range");
-      if (cr) headers["Content-Range"] = cr;
+    // Prefer R2 credentialed read when possible
+    if (await tryR2Direct()) return;
 
-      res.writeHead(upstream.status, headers);
+    // Else, proxy fetch (for local /uploads or truly external absolute URLs)
+    const headers = range ? { Range: range } : {};
+    const upstream = await fetch(src, { headers });
+    const status = upstream.status === 206 ? 206 : upstream.status;
+
+    if (status === 200 || status === 206) {
+      const extra = {};
+      const len = upstream.headers.get("content-length");
+      const cr = upstream.headers.get("content-range");
+      if (len) extra["Content-Length"] = len;
+      if (cr) extra["Content-Range"] = cr;
+      sendPdfHeaders(status, extra);
+
       if (!upstream.body) return res.end();
       const { Readable } = await import("node:stream");
       Readable.fromWeb(upstream.body)
@@ -349,15 +341,7 @@ router.get("/stream", async (req, res) => {
       return;
     }
 
-    // 2) Otherwise, try R2 (gets the *actual* object bytes even if the public site returned HTML).
-    try {
-      const handled = await tryR2();
-      if (handled) return;
-    } catch (e) {
-      console.warn("R2 fallback failed:", e?.message || e);
-    }
-
-    // 3) Forward plain text error so pdf.js doesn't choke on HTML.
+    // Upstream error → text
     const text = await upstream.text().catch(() => "Upstream error");
     res.set({
       "Content-Type": "text/plain; charset=utf-8",
