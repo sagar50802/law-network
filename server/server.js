@@ -99,12 +99,29 @@ app.use((req, _res, next) => {
   if (!fs.existsSync(full)) fs.mkdirSync(full, { recursive: true });
 });
 
+// Primary mount at /uploads
 app.use(
   "/uploads",
   express.static(path.join(__dirname, "uploads"), {
     setHeaders: (res, _path, stat) => {
       res.setHeader("Access-Control-Allow-Origin", CLIENT_URL);
       res.setHeader("Vary", "Origin");
+      res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+      if (stat && stat.mtime) {
+        res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+      }
+    },
+  })
+);
+
+// 🔁 Alias so absUrl('/uploads/...') that resolves to /api/uploads/... also works
+app.use(
+  "/api/uploads",
+  express.static(path.join(__dirname, "uploads"), {
+    setHeaders: (res, _path, stat) => {
+      res.setHeader("Access-Control-Allow-Origin", CLIENT_URL);
+      res.setHeader("Vary", "Origin");
+      res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
       if (stat && stat.mtime) {
         res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
       }
@@ -123,7 +140,7 @@ import videoRoutes from "./routes/videos.js";
 import submissionsRoutes from "./routes/submissions.js";
 import qrRoutes from "./routes/qr.js";
 
-// ✅ new exams route
+// ✅ exams route
 import examRoutes from "./routes/exams.js";
 
 app.use("/api/articles", articleRoutes);
@@ -135,8 +152,6 @@ app.use("/api/podcasts", podcastRoutes);
 app.use("/api/videos", videoRoutes);
 app.use("/api/submissions", submissionsRoutes);
 app.use("/api/qr", qrRoutes);
-
-// ✅ mount the new exams endpoint
 app.use("/api/exams", examRoutes);
 
 /* ---------- Health/probes ---------- */
