@@ -10,7 +10,7 @@ import { fileURLToPath } from "url";
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// __dirname in ESM
+// __dirname for ESM
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -43,25 +43,19 @@ app.set("trust proxy", 1);
 app.use(cors(corsOptions));
 app.options("*", cors(corsOptions));
 
-/* ---------- Body parsers (before routes) ---------- */
+/* ---------- Body parsers ---------- */
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
-/* ---------- Helpful headers for allowed origins ---------- */
+/* ---------- Helpful headers ---------- */
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (origin && ALLOWED_ORIGINS.includes(origin)) {
     res.header("Access-Control-Allow-Origin", origin);
     res.header("Vary", "Origin");
     res.header("Access-Control-Allow-Credentials", "true");
-    res.header(
-      "Access-Control-Allow-Headers",
-      "Content-Type, Authorization, X-Owner-Key, x-owner-key"
-    );
-    res.header(
-      "Access-Control-Allow-Methods",
-      "GET,POST,PUT,PATCH,DELETE,OPTIONS"
-    );
+    res.header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Owner-Key, x-owner-key");
+    res.header("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
     res.header("Cross-Origin-Resource-Policy", "cross-origin");
   }
   if (req.method === "OPTIONS") return res.sendStatus(204);
@@ -84,7 +78,7 @@ app.use((req, _res, next) => {
   next();
 });
 
-/* ---------- Static uploads (for any legacy/local files) ---------- */
+/* ---------- Ensure upload folders exist ---------- */
 [
   "uploads",
   "uploads/articles",
@@ -99,35 +93,21 @@ app.use((req, _res, next) => {
   if (!fs.existsSync(full)) fs.mkdirSync(full, { recursive: true });
 });
 
-// Primary mount at /uploads
-app.use(
-  "/uploads",
-  express.static(path.join(__dirname, "uploads"), {
-    setHeaders: (res, _path, stat) => {
-      res.setHeader("Access-Control-Allow-Origin", CLIENT_URL);
-      res.setHeader("Vary", "Origin");
-      res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
-      if (stat && stat.mtime) {
-        res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
-      }
-    },
-  })
-);
+/* ---------- Static /uploads (robust, two roots) ---------- */
+// A: server-relative
+const UPLOADS_DIR_A = path.join(__dirname, "uploads");
+// B: cwd/server/uploads (some hosts run with cwd at repo root)
+const UPLOADS_DIR_B = path.join(process.cwd(), "server", "uploads");
 
-// 🔁 Alias so absUrl('/uploads/...') that resolves to /api/uploads/... also works
-app.use(
-  "/api/uploads",
-  express.static(path.join(__dirname, "uploads"), {
-    setHeaders: (res, _path, stat) => {
-      res.setHeader("Access-Control-Allow-Origin", CLIENT_URL);
-      res.setHeader("Vary", "Origin");
-      res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
-      if (stat && stat.mtime) {
-        res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
-      }
-    },
-  })
-);
+const staticHeaders = {
+  setHeaders(res) {
+    res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+    res.setHeader("Cache-Control", "public, max-age=86400");
+  },
+};
+
+app.use("/uploads", express.static(UPLOADS_DIR_A, staticHeaders));
+app.use("/uploads", express.static(UPLOADS_DIR_B, staticHeaders));
 
 /* ---------- Routes ---------- */
 import articleRoutes from "./routes/articles.js";
@@ -139,8 +119,6 @@ import podcastRoutes from "./routes/podcast.js";
 import videoRoutes from "./routes/videos.js";
 import submissionsRoutes from "./routes/submissions.js";
 import qrRoutes from "./routes/qr.js";
-
-// ✅ exams route
 import examRoutes from "./routes/exams.js";
 
 app.use("/api/articles", articleRoutes);
