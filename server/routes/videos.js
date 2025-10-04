@@ -1,20 +1,21 @@
-// src/routes/video.js
+// server/routes/videos.js
 import express from "express";
 import multer from "multer";
 import { extname } from "path";
+import { Readable } from "node:stream";
 import {
   S3Client,
   PutObjectCommand,
   DeleteObjectCommand,
 } from "@aws-sdk/client-s3";
-import { Readable } from "node:stream";
 
-import VideoPlaylist from "../models/VideoPlaylistWrapper.js"; // make sure this schema matches your podcast one
+// Reuse the same safe ESM wrappers you used for podcasts
+import VideoPlaylist from "../models/VideoPlaylistWrapper.js";
 import isOwner from "../middlewares/isOwnerWrapper.js";
 
 const router = express.Router();
 
-/* ---------------- Cloudflare R2 env ---------------- */
+/* ---------------- Cloudflare R2 ---------------- */
 const R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID;
 const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID;
 const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY;
@@ -51,21 +52,33 @@ const mapDoc = (doc) => ({
   id: String(doc._id),
   name: doc.name,
   slug: doc.slug,
-  items: doc.items || [], // [{ id,title,author,url,locked }]
+  items: doc.items || [],
 });
 
-/* ---------------- Routes: public list ---------------- */
+/* Guess video mime from extension */
+function guessVideoMime(pathname = "") {
+  const lc = pathname.toLowerCase();
+  if (lc.endsWith(".mp4") || lc.endsWith(".m4v")) return "video/mp4";
+  if (lc.endsWith(".webm")) return "video/webm";
+  if (lc.endsWith(".ogv") || lc.endsWith(".ogg")) return "video/ogg";
+  if (lc.endsWith(".mov")) return "video/quicktime";
+  return "video/mp4";
+}
+
+/* ---------------- Routes ---------------- */
+
+// Public: list playlists
 router.get("/", async (_req, res) => {
   try {
     const docs = await VideoPlaylist.find().lean();
     res.json({ playlists: (docs || []).map(mapDoc) });
   } catch (err) {
     console.error("GET /videos failed:", err);
-    res.status(500).json({ success: false, message: "Failed to fetch playlists." });
+    res.status(500).json({ success: false, message: "Failed to fetch video playlists." });
   }
 });
 
-/* ---------------- Admin: create/delete ---------------- */
+// Admin: create playlist (accepts JSON { name })
 router.post("/playlists", isOwner, async (req, res) => {
   try {
     const name = getName(req);
@@ -78,21 +91,16 @@ router.post("/playlists", isOwner, async (req, res) => {
     res.status(201).json({ success: true, playlist: mapDoc(doc) });
   } catch (err) {
     console.error("Create video playlist failed:", err?.message || err);
-    // defensive fallback to keep admin UX unblocked
     const tmpId = newId();
-    return res.status(200).json({
+    // Defensive fallback so Admin UI doesn’t block
+    res.status(200).json({
       success: true,
-      playlist: {
-        _id: tmpId,
-        id: tmpId,
-        name: getName(req),
-        slug: getName(req).toLowerCase().replace(/\s+/g, "-"),
-        items: [],
-      },
+      playlist: { _id: tmpId, id: tmpId, name: getName(req), slug: getName(req).toLowerCase().replace(/\s+/g, "-"), items: [] },
     });
   }
 });
 
+// Admin: delete playlist
 router.delete("/playlists/:pid", isOwner, async (req, res) => {
   try {
     await VideoPlaylist.findByIdAndDelete(req.params.pid);
@@ -103,14 +111,15 @@ router.delete("/playlists/:pid", isOwner, async (req, res) => {
   }
 });
 
-/* ---------------- Admin: add / remove items ---------------- */
+// Admin: add item (upload to R2 or use external URL)
+// Accepts multipart with field "video" or JSON with { url }
 router.post("/playlists/:pid/items", isOwner, upload.single("video"), async (req, res) => {
   try {
     const playlist = await VideoPlaylist.findById(req.params.pid);
     if (!playlist) return res.status(404).json({ success: false, message: "Playlist not found" });
 
     const title = String(req.body?.title || "Untitled").trim();
-    const author = String(req.body?.author || "").trim();
+    const artist = String(req.body?.artist || "").trim();
     const locked = String(req.body?.locked) === "true";
     let url = (req.body?.url || "").trim();
 
@@ -134,15 +143,16 @@ router.post("/playlists/:pid/items", isOwner, upload.single("video"), async (req
 
     if (!url) return res.status(400).json({ success: false, message: "No file or URL provided" });
 
-    playlist.items.push({ id: newId(), title, author, url, locked });
+    playlist.items.push({ id: newId(), title, artist, url, locked });
     await playlist.save();
     res.json({ success: true, playlist: mapDoc(playlist) });
   } catch (err) {
-    console.error("Upload video failed:", err);
+    console.error("Upload video item failed:", err);
     res.status(500).json({ success: false, message: "Server error" });
   }
 });
 
+// Admin: delete item (best-effort delete from R2)
 router.delete("/playlists/:pid/items/:iid", isOwner, async (req, res) => {
   try {
     const playlist = await VideoPlaylist.findById(req.params.pid);
@@ -157,7 +167,7 @@ router.delete("/playlists/:pid/items/:iid", isOwner, async (req, res) => {
         const key = fileUrl.substring(R2_PUBLIC_BASE.length + 1);
         if (key) await s3.send(new DeleteObjectCommand({ Bucket: R2_BUCKET, Key: key }));
       } catch (w) {
-        console.warn("R2 delete warning (video):", w?.message || w);
+        console.warn("R2 delete warning:", w?.message || w);
       }
     }
 
@@ -170,6 +180,7 @@ router.delete("/playlists/:pid/items/:iid", isOwner, async (req, res) => {
   }
 });
 
+// Admin: lock/unlock item
 router.patch("/playlists/:pid/items/:iid/lock", isOwner, async (req, res) => {
   try {
     const playlist = await VideoPlaylist.findById(req.params.pid);
@@ -187,93 +198,47 @@ router.patch("/playlists/:pid/items/:iid/lock", isOwner, async (req, res) => {
   }
 });
 
-/* ---------------- Video streaming proxy (ORB-safe) ---------------- */
-/**
- * GET /api/videos/stream?src=<absolute-R2-public-url>
- *  - Only allows URLs under R2_PUBLIC_BASE to avoid SSRF.
- *  - Forwards Range requests for smooth seeking.
- *  - Mirrors upstream headers (CT/CR/AR/CL) browsers expect.
- *  - Stable defaults so Firefox/Chromium won’t trigger ORB.
- */
+/* ---------------- Video streaming proxy (CORS-safe) ---------------- */
 router.get("/stream", async (req, res) => {
   try {
     const src = String(req.query.src || "").trim();
     if (!src) return res.status(400).send("Missing src");
 
     let url;
-    try {
-      url = new URL(src);
-    } catch {
-      return res.status(400).send("Invalid src");
-    }
+    try { url = new URL(src); } catch { return res.status(400).send("Invalid src"); }
 
-    // Security: only permit your R2 public base
     if (!R2_PUBLIC_BASE || !src.startsWith(R2_PUBLIC_BASE + "/")) {
       return res.status(400).send("Blocked src");
     }
 
-    const range = req.headers.range; // ex: "bytes=0-"
-    const upstreamHeaders = {};
-    if (range) upstreamHeaders.Range = range;
+    const range = req.headers.range;
+    const upstream = await fetch(url, { headers: range ? { Range: range } : {} });
+    const status = upstream.status;
 
-    const upstream = await fetch(url, { headers: upstreamHeaders });
-    const status = upstream.status; // 200 or 206 expected
-
-    // Decide content-type
-    const upstreamCT = upstream.headers.get("content-type");
-    let contentType = upstreamCT || guessVideoMime(url.pathname);
-
-    // Prepare response headers
+    const ct = upstream.headers.get("content-type") || guessVideoMime(url.pathname);
     const headers = {
-      "Content-Type": contentType,
+      "Content-Type": ct,
       "Accept-Ranges": "bytes",
       "Cache-Control": "no-transform, public, max-age=86400",
       "Access-Control-Expose-Headers": "Content-Length,Content-Range,Accept-Ranges",
       "Cross-Origin-Resource-Policy": "cross-origin",
       "Content-Disposition": 'inline; filename="video"',
     };
-
-    const contentLength = upstream.headers.get("content-length");
-    if (contentLength) headers["Content-Length"] = contentLength;
-
-    const contentRange = upstream.headers.get("content-range");
-    if (contentRange) headers["Content-Range"] = contentRange;
-
-    // HEAD probe: headers only
-    if (req.method === "HEAD") {
-      res.writeHead(status === 206 ? 206 : 200, headers);
-      return res.end();
-    }
+    const cl = upstream.headers.get("content-length");
+    if (cl) headers["Content-Length"] = cl;
+    const cr = upstream.headers.get("content-range");
+    if (cr) headers["Content-Range"] = cr;
 
     res.writeHead(status === 206 ? 206 : 200, headers);
-
     if (!upstream.body) return res.end();
 
-    // Pipe WebReadableStream -> Node response
-    const nodeStream = Readable.fromWeb(upstream.body);
-    nodeStream.on("error", (e) => {
-      console.warn("video stream proxy error:", e?.message || e);
+    Readable.fromWeb(upstream.body).on("error", () => {
       try { res.end(); } catch {}
-    });
-    nodeStream.pipe(res);
+    }).pipe(res);
   } catch (err) {
     console.error("video stream proxy failed:", err);
-    if (!res.headersSent) {
-      res.status(502).send("Upstream error");
-    } else {
-      try { res.end(); } catch {}
-    }
+    if (!res.headersSent) res.status(502).send("Upstream error");
   }
 });
-
-function guessVideoMime(pathname = "") {
-  const lc = pathname.toLowerCase();
-  if (lc.endsWith(".mp4") || lc.endsWith(".m4v")) return "video/mp4";
-  if (lc.endsWith(".webm")) return "video/webm";
-  if (lc.endsWith(".ogv") || lc.endsWith(".ogg")) return "video/ogg";
-  if (lc.endsWith(".mov")) return "video/quicktime"; // some iOS uploads
-  if (lc.endsWith(".mkv")) return "video/x-matroska"; // browsers may still play H.264/AAC tracks
-  return "video/mp4";
-}
 
 export default router;
