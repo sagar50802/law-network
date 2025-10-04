@@ -4,7 +4,7 @@ import path from "path";
 import multer from "multer";
 import mongoose from "mongoose";
 
-// ✅ Local admin middleware (same behavior as before)
+// ✅ Local admin middleware (replaces import from utils.js)
 function isAdmin(req, res, next) {
   const key = req.headers["x-owner-key"];
   if (!key || key !== process.env.VITE_OWNER_KEY) {
@@ -26,30 +26,18 @@ const AUTO_FILE = path.join(DATA_DIR, "submissions.auto.json");
 if (!fs.existsSync(DATA_FILE)) fs.writeFileSync(DATA_FILE, "[]");
 if (!fs.existsSync(AUTO_FILE)) fs.writeFileSync(AUTO_FILE, JSON.stringify({ auto: false }, null, 2));
 
-/* ---------------------- Multer ---------------------- */
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, UP_DIR),
   filename: (_req, file, cb) => cb(null, `${Date.now()}${path.extname(file.originalname || "")}`),
 });
-// Accept ANY of these field names from the client UI
-const upload = multer({ storage }).fields([
-  { name: "screenshot", maxCount: 1 },
-  { name: "proof",      maxCount: 1 },
-  { name: "image",      maxCount: 1 },
-  { name: "file",       maxCount: 1 },
-]);
-function pickUploaded(req) {
-  const f = (name) => req.files?.[name]?.[0];
-  return f("screenshot") || f("proof") || f("image") || f("file") || null;
-}
+const upload = multer({ storage });
 
-/* ------------------------- JSON helpers ------------------------- */
 function readAll() { try { return JSON.parse(fs.readFileSync(DATA_FILE, "utf8")) || []; } catch { return []; } }
 function writeAll(arr) { fs.writeFileSync(DATA_FILE, JSON.stringify(arr, null, 2)); }
 function getAutoMode() { try { return !!(JSON.parse(fs.readFileSync(AUTO_FILE, "utf8")) || {}).auto; } catch { return false; } }
 function setAutoMode(auto) { fs.writeFileSync(AUTO_FILE, JSON.stringify({ auto: !!auto }, null, 2)); }
 
-/* ------------------------- Access (Mongo) -------------------------- */
+/* ------------------------- Access model (Mongo) -------------------------- */
 const AccessSchema = new mongoose.Schema({
   email:    { type: String, required: true },
   feature:  { type: String, required: true },  // playlist, video, pdf, podcast, article
@@ -118,23 +106,17 @@ function secondsFromPlanLabel(label = "") {
 
 /* --------------------------------- ROUTES -------------------------------- */
 // PUBLIC: submit (honors server-side Auto-Approval)
-router.post("/", upload, async (req, res) => {
+router.post("/", upload.single("screenshot"), async (req, res) => {
   const items = readAll();
-
-  // tolerate multiple client field names
   const {
     name = "",
     number = "", phone = "",
     gmail = "", email = "",
     subject = "",
     planKey = "", planLabel = "", planPrice = "",
-    type = "", id = "", playlist = "", subjectLabel = ""
   } = req.body || {};
 
   const now = Date.now();
-
-  const file = pickUploaded(req);
-  const proofUrl = file ? `/uploads/submissions/${file.filename}` : ""; // static served by app.use("/uploads", ...)
 
   const item = {
     id: String(now),
@@ -148,12 +130,12 @@ router.post("/", upload, async (req, res) => {
       price: planPrice !== "" ? Number(planPrice) : undefined 
     },
     context: {
-      type: type || "",
-      id: id || "",
-      playlist: playlist || "",
-      subject: subjectLabel || subject || "",
+      type: req.body.type || "",
+      id: req.body.id || "",
+      playlist: req.body.playlist || "",
+      subject: req.body.subjectLabel || subject || "",
     },
-    proofUrl, // ✅ always the same key the Admin UI expects
+    proofUrl: req.file ? `/uploads/submissions/${req.file.filename}` : "",
     status: "pending",
     approved: false,
     expiry: null,
@@ -177,7 +159,6 @@ router.post("/", upload, async (req, res) => {
         { expiry: new Date(item.expiry), message: item.message },
         { upsert: true, new: true }
       );
-      // grant event
       broadcastToEmail(item.email, "grant", {
         type: "grant",
         feature,
@@ -268,7 +249,7 @@ router.post("/:id/revoke", isAdmin, async (req, res) => {
 
   if (email && featureId) {
     await Access.deleteOne({ email, feature, featureId });
-    // 🔑 include revoked:true so the client immediately clears local access
+    // 👇 explicit revoked flag so client flips immediately
     broadcastToEmail(email, "revoke", { type: "revoke", feature, featureId, email, revoked: true });
   }
 
