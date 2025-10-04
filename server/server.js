@@ -54,8 +54,14 @@ app.use((req, res, next) => {
     res.header("Access-Control-Allow-Origin", origin);
     res.header("Vary", "Origin");
     res.header("Access-Control-Allow-Credentials", "true");
-    res.header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Owner-Key, x-owner-key");
-    res.header("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
+    res.header(
+      "Access-Control-Allow-Headers",
+      "Content-Type, Authorization, X-Owner-Key, x-owner-key"
+    );
+    res.header(
+      "Access-Control-Allow-Methods",
+      "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+    );
     res.header("Cross-Origin-Resource-Policy", "cross-origin");
   }
   if (req.method === "OPTIONS") return res.sendStatus(204);
@@ -93,19 +99,20 @@ app.use((req, _res, next) => {
   if (!fs.existsSync(full)) fs.mkdirSync(full, { recursive: true });
 });
 
-/* ---------- Static /uploads (robust, two roots) ---------- */
+/* ---------- Static /uploads (two roots, robust) ---------- */
 // A: server-relative
 const UPLOADS_DIR_A = path.join(__dirname, "uploads");
 // B: cwd/server/uploads (some hosts run with cwd at repo root)
 const UPLOADS_DIR_B = path.join(process.cwd(), "server", "uploads");
 
-// UPDATED: add ACAO + Vary, keep CORP, use long-lived immutable cache when possible
+// Only change here: strong caching + CORS/CORP for images
 const staticHeaders = {
   setHeaders(res, _p, stat) {
     res.setHeader("Access-Control-Allow-Origin", CLIENT_URL);
     res.setHeader("Vary", "Origin");
     res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
     if (stat && stat.mtime) {
+      // long-lived cache for uploaded files (cache-busted with ?t=)
       res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
     } else {
       res.setHeader("Cache-Control", "public, max-age=86400");
