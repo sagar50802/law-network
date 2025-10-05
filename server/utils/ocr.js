@@ -1,14 +1,15 @@
-// server/utils/ocr.js
-// Lightweight, on-demand OCR using tesseract.js (open-source). If not installed, it fails safe.
-export async function extractOCRFromBuffer(buf, { lang = "eng" } = {}) {
+import { createWorker } from "tesseract.js";
+
+/**
+ * Run OCR once; caller decides when (e.g., on first attach or re-ocr).
+ * Keep language configurable later; default to English + Hindi common packs.
+ */
+export async function runOCR(buffer, lang = "eng+hin") {
+  const worker = await createWorker(lang);
   try {
-    const { createWorker } = await import("tesseract.js");
-    const worker = await createWorker(lang);
-    const { data: { text } } = await worker.recognize(buf);
+    const { data } = await worker.recognize(buffer);
+    return (data?.text || "").trim();
+  } finally {
     await worker.terminate();
-    return String(text || "").trim();
-  } catch (e) {
-    console.warn("OCR unavailable, returning empty text:", e?.message || e);
-    return "";
   }
 }
