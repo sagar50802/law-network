@@ -1,3 +1,4 @@
+// server/server.js
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
@@ -136,6 +137,8 @@ import examRoutes from "./routes/exams.js";
 
 /* ✅ NEW: Prep API (minimal, non-invasive) */
 import prepRoutes from "./routes/prep.js";
+/* ✅ NEW: Files (GridFS) API */
+import filesRoutes from "./routes/files.js";
 
 app.use("/api/articles", articleRoutes);
 app.use("/api/banners", bannerRoutes);
@@ -150,6 +153,8 @@ app.use("/api/exams", examRoutes);
 
 /* ✅ Mount new prep routes */
 app.use("/api/prep", prepRoutes);
+/* ✅ Mount GridFS files routes */
+app.use("/api/files", filesRoutes);
 
 /* ---------- Health/probes ---------- */
 app.get("/api/access/status", (_req, res) => res.json({ access: false }));
