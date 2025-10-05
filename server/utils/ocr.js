@@ -1,17 +1,14 @@
-import { createWorker } from "tesseract.js";
-import sanitizeHtml from "sanitize-html";
-import fs from "fs";
-
-let worker;
-async function getWorker() {
-  if (!worker) worker = await createWorker();
-  return worker;
-}
-
-export async function ocrFileToText(filePath) {
-  if (!filePath || !fs.existsSync(filePath)) return "";
-  const w = await getWorker();
-  const { data } = await w.recognize(filePath);
-  const text = (data?.text || "").trim();
-  return sanitizeHtml(text, { allowedTags: [], allowedAttributes: {} });
+// server/utils/ocr.js
+// Lightweight, on-demand OCR using tesseract.js (open-source). If not installed, it fails safe.
+export async function extractOCRFromBuffer(buf, { lang = "eng" } = {}) {
+  try {
+    const { createWorker } = await import("tesseract.js");
+    const worker = await createWorker(lang);
+    const { data: { text } } = await worker.recognize(buf);
+    await worker.terminate();
+    return String(text || "").trim();
+  } catch (e) {
+    console.warn("OCR unavailable, returning empty text:", e?.message || e);
+    return "";
+  }
 }
