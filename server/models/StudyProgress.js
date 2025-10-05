@@ -1,11 +1,12 @@
-// server/models/StudyProgress.js
 import mongoose from "mongoose";
+
 const StudyProgressSchema = new mongoose.Schema({
-  userEmail:     { type: String, required: true, index: true },
-  examId:        { type: String, required: true, index: true },
-  completedDays: { type: [Number], default: [] }, // [1,2,3...]
+  userEmail:     { type: String, index: true, required: true },
+  examId:        { type: String, index: true, required: true },
+  completedDays: { type: [Number], default: [] },
 }, { timestamps: true });
 
-StudyProgressSchema.index({ userEmail: 1, examId: 1 }, { unique: true });
+StudyProgressSchema.index({ userEmail:1, examId:1 }, { unique: true });
 
-export default mongoose.models.StudyProgress || mongoose.model("StudyProgress", StudyProgressSchema);
+export default mongoose.models.StudyProgress ||
+  mongoose.model("StudyProgress", StudyProgressSchema);
