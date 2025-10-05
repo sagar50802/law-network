@@ -1,114 +1,174 @@
-// server/utils/ocr.js
-// OCR utilities for Exam Prep. Works with tesseract.js. Safe fallbacks included.
-//
-// Exports:
-//  - extractOCRFromBuffer(buffer, lang)
-//  - extractOCRFromUrl(url, lang)
-//  - normalizeOcrText(text)
-//  - runOCR(buffer, lang)            // alias (uses worker/recognize under the hood)
-//  - terminateOcrWorker()            // optional cleanup
-//
-// Set PREP_OCR_DISABLED=1 to skip OCR without breaking the app.
+// server/utils/r2.js
+// Cloudflare R2 helper utils (ESM). Also supports a local fallback when R2 envs are missing.
+// Exports used across routes: putR2, uploadBuffer, deleteByUrl, r2GetObjectStreamByUrl, r2Enabled.
 
-let _tess = null;
-let _worker = null;
-let _workerLang = null;
+import path from "node:path";
+import fsp from "node:fs/promises";
+import { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
 
-async function getTesseract() {
-  if (_tess) return _tess;
+const R2_ACCOUNT_ID        = process.env.R2_ACCOUNT_ID || "";
+const R2_ACCESS_KEY_ID     = process.env.R2_ACCESS_KEY_ID || "";
+const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY || "";
+const R2_BUCKET            = process.env.R2_BUCKET || "";
+// no trailing slash
+export const R2_PUBLIC_BASE = (process.env.R2_PUBLIC_BASE || "").replace(/\/+$/, "");
+
+export const r2Enabled =
+  !!R2_ACCOUNT_ID &&
+  !!R2_ACCESS_KEY_ID &&
+  !!R2_SECRET_ACCESS_KEY &&
+  !!R2_BUCKET &&
+  !!R2_PUBLIC_BASE;
+
+const s3 = r2Enabled
+  ? new S3Client({
+      region: "auto",
+      endpoint: `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+      credentials: {
+        accessKeyId: R2_ACCESS_KEY_ID,
+        secretAccessKey: R2_SECRET_ACCESS_KEY,
+      },
+    })
+  : null;
+
+/* -------------------- helpers -------------------- */
+
+// Turn a public R2 URL into a bucket key, even if PUBLIC_BASE has a path prefix
+function keyFromPublicUrl(url) {
   try {
-    _tess = await import("tesseract.js");
-  } catch (e) {
-    console.warn("[ocr] tesseract.js not available:", e?.message || e);
-    _tess = null;
-  }
-  return _tess;
-}
-
-function clean(text = "") {
-  return String(text)
-    .replace(/\r/g, "\n")
-    .replace(/\t/g, " ")
-    .replace(/[ \u00A0]{2,}/g, " ")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-}
-
-// Reuse a single worker to avoid high startup cost.
-async function ensureWorker(tess, lang) {
-  if (!tess?.createWorker) return null;
-  if (_worker && _workerLang !== lang) {
-    try { await _worker.terminate(); } catch {}
-    _worker = null;
-    _workerLang = null;
-  }
-  if (!_worker) {
-    _worker = await tess.createWorker(lang);
-    _workerLang = lang;
-  }
-  return _worker;
-}
-
-/**
- * Main OCR helper. Accepts Buffer (image/PDF). Returns cleaned text or "".
- */
-export async function extractOCRFromBuffer(buffer, lang = "eng+hin") {
-  try {
-    if (!buffer || !buffer.length) return "";
-    if (String(process.env.PREP_OCR_DISABLED || "") === "1") return "";
-
-    const tess = await getTesseract();
-    if (!tess) return "";
-
-    // Fast path: Tesseract.recognize is available
-    if (typeof tess.recognize === "function") {
-      const { data } = await tess.recognize(buffer, lang, { logger: () => {} });
-      return clean(data?.text || "");
+    const base = new URL(R2_PUBLIC_BASE);
+    const u = new URL(url);
+    if (u.host !== base.host) return null;
+    let key = u.pathname;
+    if (base.pathname !== "/" && key.startsWith(base.pathname)) {
+      key = key.slice(base.pathname.length);
     }
-
-    // Worker path (createWorker API)
-    const worker = await ensureWorker(tess, lang);
-    if (!worker) return "";
-    const { data } = await worker.recognize(buffer);
-    return clean(data?.text || "");
-  } catch (e) {
-    console.warn("[ocr] extractOCRFromBuffer failed:", e?.message || e);
-    return "";
+    return key.replace(/^\/+/, "");
+  } catch {
+    return null;
   }
 }
 
+function safeName(s = "file") {
+  return String(s).normalize("NFKD").replace(/[^\w.\-]+/g, "_").slice(0, 140);
+}
+
+/* -------------------- R2: put/delete/get -------------------- */
+
 /**
- * Convenience: fetch by URL and OCR.
+ * Low-level upload to R2 by explicit key.
+ * @param {Buffer|Uint8Array} buffer
+ * @param {{ key:string, contentType?:string, cacheControl?:string, filename?:string, contentDisposition?:string }} opts
+ * @returns {Promise<string>} publicUrl
  */
-export async function extractOCRFromUrl(url, lang = "eng+hin") {
+export async function putR2(buffer, opts = {}) {
+  const {
+    key,
+    contentType = "application/octet-stream",
+    cacheControl = "public, max-age=31536000, immutable",
+    filename = "file.bin",
+    contentDisposition, // if not provided, we set inline; filename="..."
+  } = opts;
+
+  if (!buffer || !buffer.length) throw new Error("putR2: empty buffer");
+  if (!key) throw new Error("putR2: key required");
+
+  if (!r2Enabled) {
+    // Local fallback: write under /server/uploads/r2-fallback/[key]
+    const ROOT = path.join(process.cwd(), "server", "uploads", "r2-fallback");
+    const abs = path.join(ROOT, key);
+    await fsp.mkdir(path.dirname(abs), { recursive: true });
+    await fsp.writeFile(abs, buffer);
+    return `/uploads/r2-fallback/${key}`;
+  }
+
+  await s3.send(
+    new PutObjectCommand({
+      Bucket: R2_BUCKET,
+      Key: key,
+      Body: buffer,
+      ContentType: contentType,
+      CacheControl: cacheControl,
+      ContentDisposition:
+        contentDisposition || `inline; filename="${safeName(filename)}"`,
+    })
+  );
+  return `${R2_PUBLIC_BASE}/${key}`;
+}
+
+/**
+ * Convenience wrapper used in routes: builds a key from folder + filename.
+ * @param {Buffer} buffer
+ * @param {{ folder?:string, filename?:string, contentType?:string, cacheControl?:string }} opts
+ * @returns {Promise<string>} publicUrl
+ */
+export async function uploadBuffer(buffer, opts = {}) {
+  const {
+    folder = "misc",
+    filename = `${Date.now()}.bin`,
+    contentType = "application/octet-stream",
+    cacheControl = "public, max-age=31536000, immutable",
+  } = opts;
+
+  const cleanFolder = String(folder || "misc").replace(/^\/+|\/+$/g, "");
+  const key = `${cleanFolder}/${Date.now()}_${Math.random().toString(36).slice(2, 10)}_${safeName(filename)}`;
+
+  return putR2(buffer, {
+    key,
+    contentType,
+    cacheControl,
+    filename,
+  });
+}
+
+/**
+ * Delete an object by its public URL (no-op if not R2 or URL not under PUBLIC_BASE).
+ * @param {string} url
+ */
+export async function deleteByUrl(url) {
   try {
-    if (!url) return "";
-    const res = await fetch(url);
-    if (!res.ok) return "";
-    const ab = await res.arrayBuffer();
-    return extractOCRFromBuffer(Buffer.from(ab), lang);
+    if (!r2Enabled || !url) return;
+    const key = keyFromPublicUrl(url);
+    if (!key) return;
+    await s3.send(new DeleteObjectCommand({ Bucket: R2_BUCKET, Key: key }));
   } catch (e) {
-    console.warn("[ocr] extractOCRFromUrl failed:", e?.message || e);
-    return "";
+    console.warn("[r2] deleteByUrl warn:", e?.message || e);
   }
 }
 
-/** Minor normalizer for any pre-extracted text. */
-export function normalizeOcrText(text) {
-  return clean(text);
-}
-
 /**
- * Alias kept for compatibility with your previous code.
- * Uses the same internal implementation.
+ * Get object stream + headers by its public URL (used by stream proxies).
+ * Returns null if the URL isn’t under PUBLIC_BASE or R2 disabled.
+ * @param {string} url
+ * @param {{ range?: string }} opts
+ * @returns {Promise<null|{ status:number, headers:Record<string,string>, body:any }>}
  */
-export async function runOCR(buffer, lang = "eng+hin") {
-  return extractOCRFromBuffer(buffer, lang);
-}
+export async function r2GetObjectStreamByUrl(url, opts = {}) {
+  if (!r2Enabled) return null;
+  const key = keyFromPublicUrl(url);
+  if (!key) return null;
 
-/** Optional: terminate the shared worker (e.g., during shutdown/tests). */
-export async function terminateOcrWorker() {
-  try { if (_worker) await _worker.terminate(); } catch {}
-  _worker = null;
-  _workerLang = null;
+  const { range } = opts;
+  const obj = await s3.send(
+    new GetObjectCommand({
+      Bucket: R2_BUCKET,
+      Key: key,
+      Range: range,
+    })
+  );
+
+  const status = obj.ContentRange ? 206 : 200;
+  const headers = {
+    "Content-Type": obj.ContentType || "application/octet-stream",
+    "Accept-Ranges": "bytes",
+    "Cache-Control": obj.CacheControl || "no-transform, public, max-age=86400",
+    "Access-Control-Expose-Headers": "Content-Length,Content-Range,Accept-Ranges",
+    "Cross-Origin-Resource-Policy": "cross-origin",
+    "Content-Disposition": obj.ContentDisposition || 'inline; filename="file"',
+    Vary: "Range",
+  };
+  if (obj.ContentLength != null) headers["Content-Length"] = String(obj.ContentLength);
+  if (obj.ContentRange) headers["Content-Range"] = obj.ContentRange;
+
+  return { status, headers, body: obj.Body };
 }
