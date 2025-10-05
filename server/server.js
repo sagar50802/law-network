@@ -135,6 +135,9 @@ import submissionsRoutes from "./routes/submissions.js";
 import qrRoutes from "./routes/qr.js";
 import examRoutes from "./routes/exams.js";
 
+/* ✅ NEW: Prep API (minimal, non-invasive) */
+import prepRoutes from "./routes/prep.js";
+
 app.use("/api/articles", articleRoutes);
 app.use("/api/banners", bannerRoutes);
 app.use("/api/consultancy", consultancyRoutes);
@@ -145,6 +148,9 @@ app.use("/api/videos", videoRoutes);
 app.use("/api/submissions", submissionsRoutes);
 app.use("/api/qr", qrRoutes);
 app.use("/api/exams", examRoutes);
+
+/* ✅ Mount new prep routes */
+app.use("/api/prep", prepRoutes);
 
 /* ---------- Health/probes ---------- */
 app.get("/api/access/status", (_req, res) => res.json({ access: false }));
