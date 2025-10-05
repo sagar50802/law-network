@@ -1,9 +1,20 @@
 // server/utils/ocr.js
-// Lightweight OCR utility for Exam Prep. ESM compatible, Node 18+.
-// Exports: extractOCRFromBuffer, extractOCRFromUrl, normalizeOcrText
+// Lightweight OCR helpers for the Exam Prep feature.
+// Safe: dynamic-imports tesseract.js only when called, never at startup.
 
-let _tesseract = null;
-let _recognizeFn = null; // cached best recognizer
+let _tesseractMod = null;
+async function loadTesseract() {
+  if (_tesseractMod) return _tesseractMod;
+  try {
+    const mod = await import("tesseract.js"); // ESM dynamic import
+    // Some builds expose functions on the module object, some on default:
+    _tesseractMod = mod?.default && Object.keys(mod).length === 1 ? mod.default : mod;
+  } catch (e) {
+    console.warn("[ocr] tesseract.js not available:", e?.message || e);
+    _tesseractMod = null;
+  }
+  return _tesseractMod;
+}
 
 function clean(text = "") {
   return String(text)
@@ -14,104 +25,70 @@ function clean(text = "") {
     .trim();
 }
 
-async function loadTesseract() {
-  if (_tesseract) return _tesseract;
-  try {
-    _tesseract = await import("tesseract.js"); // dynamic import
-  } catch (e) {
-    console.warn("[ocr] tesseract.js not installed or failed to load:", e?.message || e);
-    _tesseract = null;
-  }
-  return _tesseract;
-}
-
 /**
- * Pick the fastest available recognizer:
- * 1) Tesseract.recognize (v2/v3 style)
- * 2) createWorker fallback (slower, but works if recognize isn’t exposed)
+ * Core OCR. Prefer Tesseract.recognize; fall back to createWorker if needed.
+ * Returns cleaned text or "" on failure. Never throws due to tesseract.
  */
-async function getRecognizer() {
-  if (_recognizeFn) return _recognizeFn;
-
-  const T = await loadTesseract();
-  if (!T) {
-    _recognizeFn = async () => "";
-    return _recognizeFn;
-  }
-
-  // shape A: module has recognize directly
-  const direct = T.recognize || T.default?.recognize;
-  if (typeof direct === "function") {
-    _recognizeFn = async (buffer, lang) => {
-      try {
-        const { data } = await direct(buffer, lang, { logger: () => {} });
-        return clean(data?.text || "");
-      } catch (e) {
-        console.warn("[ocr] direct recognize failed:", e?.message || e);
-        return "";
-      }
-    };
-    return _recognizeFn;
-  }
-
-  // shape B: use createWorker
-  const createWorker =
-    T.createWorker ||
-    T.default?.createWorker;
-
-  if (typeof createWorker === "function") {
-    _recognizeFn = async (buffer, lang) => {
-      let worker;
-      try {
-        worker = await createWorker(lang || "eng", 1, { logger: () => {} });
-        const { data } = await worker.recognize(buffer);
-        return clean(data?.text || "");
-      } catch (e) {
-        console.warn("[ocr] worker recognize failed:", e?.message || e);
-        return "";
-      } finally {
-        try { await worker?.terminate?.(); } catch {}
-      }
-    };
-    return _recognizeFn;
-  }
-
-  // nothing usable
-  _recognizeFn = async () => "";
-  return _recognizeFn;
-}
-
-/**
- * Extract OCR text from a Buffer (PDF/Image). Returns a cleaned string.
- * Set PREP_OCR_DISABLED=1 to skip OCR on the server.
- */
-export async function extractOCRFromBuffer(buffer, lang = "eng") {
+export async function runOCR(buffer, lang = "eng") {
   try {
     if (!buffer || !buffer.length) return "";
     if (String(process.env.PREP_OCR_DISABLED || "") === "1") return "";
-    const recognize = await getRecognizer();
-    return await recognize(buffer, lang);
+
+    const T = await loadTesseract();
+    if (!T) return "";
+
+    // Preferred simple API:
+    if (typeof T.recognize === "function") {
+      const { data } = await T.recognize(buffer, lang, { logger: () => {} });
+      return clean(data?.text || "");
+    }
+
+    // Fallback worker API:
+    if (typeof T.createWorker === "function") {
+      const worker = await T.createWorker(lang);
+      try {
+        const { data } = await worker.recognize(buffer);
+        return clean(data?.text || "");
+      } finally {
+        try { await worker.terminate(); } catch {}
+      }
+    }
+
+    return "";
   } catch (e) {
-    console.warn("[ocr] extractOCRFromBuffer error:", e?.message || e);
+    console.warn("[ocr] runOCR failed:", e?.message || e);
     return "";
   }
 }
 
-/** Fetch a file by URL and OCR it. */
+/** Alias kept for older code */
+export async function extractOCRFromBuffer(buffer, lang = "eng") {
+  return runOCR(buffer, lang);
+}
+
+/** Convenience: fetch a file by URL and OCR it. */
 export async function extractOCRFromUrl(url, lang = "eng") {
   try {
     if (!url) return "";
     const res = await fetch(url);
     if (!res.ok) return "";
     const ab = await res.arrayBuffer();
-    return extractOCRFromBuffer(Buffer.from(ab), lang);
+    return runOCR(Buffer.from(ab), lang);
   } catch (e) {
-    console.warn("[ocr] extractOCRFromUrl error:", e?.message || e);
+    console.warn("[ocr] extractOCRFromUrl failed:", e?.message || e);
     return "";
   }
 }
 
-/** Optional helper to re-clean any stored OCR text. */
+/** Optional text normalizer export */
 export function normalizeOcrText(text) {
   return clean(text);
 }
+
+// Optional default export (harmless if someone does `import ocr from ...`)
+export default {
+  runOCR,
+  extractOCRFromBuffer,
+  extractOCRFromUrl,
+  normalizeOcrText,
+};
