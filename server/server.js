@@ -14,28 +14,41 @@ const PORT = process.env.PORT || 5000;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-/* ---------- CORS ---------- */
+/* ---------- CORS (updated) ---------- */
 const CLIENT_URL =
   process.env.CLIENT_URL ||
   process.env.VITE_BACKEND_URL ||
   "https://law-network-client.onrender.com";
 
-const ALLOWED_ORIGINS = [
+// allow both client + api + local dev; also optionally any *.onrender.com
+const ALLOWED = new Set([
   CLIENT_URL,
+  "https://law-network-client.onrender.com",
   "https://law-network.onrender.com",
   "http://localhost:5173",
   "http://localhost:3000",
-];
+]);
 
 const corsOptions = {
   origin(origin, cb) {
+    // same-origin/curl/server-to-server (no Origin header)
     if (!origin) return cb(null, true);
-    if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
+    if (ALLOWED.has(origin)) return cb(null, true);
+    try {
+      const host = new URL(origin).hostname;
+      if (/\.onrender\.com$/.test(host)) return cb(null, true);
+    } catch {}
     return cb(new Error("CORS not allowed: " + origin));
   },
   credentials: true,
-  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Owner-Key", "x-owner-key"],
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "X-Owner-Key",
+    "x-owner-key",
+  ],
+  exposedHeaders: ["Content-Type", "Content-Length"],
   optionsSuccessStatus: 204,
 };
 
@@ -43,14 +56,20 @@ app.set("trust proxy", 1);
 app.use(cors(corsOptions));
 app.options("*", cors(corsOptions));
 
-/* ---------- Body parsers ---------- */
-app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ extended: true, limit: "10mb" }));
-
-/* ---------- Helpful headers ---------- */
+/* Always attach CORS headers for allowed origins */
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-  if (origin && ALLOWED_ORIGINS.includes(origin)) {
+  let ok = false;
+  if (origin) {
+    if (ALLOWED.has(origin)) ok = true;
+    else {
+      try {
+        const host = new URL(origin).hostname;
+        if (/\.onrender\.com$/.test(host)) ok = true;
+      } catch {}
+    }
+  }
+  if (ok) {
     res.header("Access-Control-Allow-Origin", origin);
     res.header("Vary", "Origin");
     res.header("Access-Control-Allow-Credentials", "true");
@@ -60,13 +79,17 @@ app.use((req, res, next) => {
     );
     res.header(
       "Access-Control-Allow-Methods",
-      "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+      "GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD"
     );
     res.header("Cross-Origin-Resource-Policy", "cross-origin");
   }
   if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
 });
+
+/* ---------- Body parsers ---------- */
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
 /* ---------- Tiny log ---------- */
 app.use((req, _res, next) => {
@@ -105,7 +128,7 @@ const UPLOADS_DIR_A = path.join(__dirname, "uploads");
 // B: cwd/server/uploads (some hosts run with cwd at repo root)
 const UPLOADS_DIR_B = path.join(process.cwd(), "server", "uploads");
 
-// Only change here: strong caching + CORS/CORP for images
+// Strong caching + CORS/CORP for images (fixed to your client origin)
 const staticHeaders = {
   setHeaders(res, _p, stat) {
     res.setHeader("Access-Control-Allow-Origin", CLIENT_URL);
