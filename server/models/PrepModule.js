@@ -1,10 +1,11 @@
+// server/models/PrepModule.js
 import mongoose from "mongoose";
 
 const FileSchema = new mongoose.Schema(
   {
-    kind: { type: String, enum: ["image", "pdf", "audio", "video"], required: true },
-    url: { type: String, required: true },
-    mime: { type: String, default: "" },
+    kind: { type: String, enum: ["image", "pdf", "audio", "video", "other"], default: "other" },
+    url: String,
+    mime: String,
   },
   { _id: false }
 );
@@ -16,27 +17,34 @@ const FlagsSchema = new mongoose.Schema(
     allowDownload: { type: Boolean, default: false },
     highlight: { type: Boolean, default: false },
     background: { type: String, default: "" },
+    // optional: run OCR only when it actually releases
+    deferOCRUntilRelease: { type: Boolean, default: false },
   },
   { _id: false }
 );
 
 const PrepModuleSchema = new mongoose.Schema(
   {
-    examId: { type: String, index: true, required: true },
-    dayIndex: { type: Number, index: true, required: true }, // 1..N (cohort)
-    slotMin: { type: Number, default: 0 }, // minutes from midnight (0..1439)
+    examId: { type: String, index: true },
+    dayIndex: { type: Number, required: true },
+    slotMin: { type: Number, default: 0 }, // for ordering within the day
     title: { type: String, default: "" },
     description: { type: String, default: "" },
 
-    files: [FileSchema],
-    ocrText: { type: String, default: "" },
-    flags: { type: FlagsSchema, default: () => ({}) },
+    // NEW: manual text admin pastes (shown to users first if non-empty)
+    text: { type: String, default: "" },
 
-    status: { type: String, enum: ["draft", "scheduled", "released"], default: "released" }, // cohort doesn’t need schedule, keep 'released'
+    // OCR text (filled only when Extract OCR is true and we process a file)
+    ocrText: { type: String, default: "" },
+
+    files: [FileSchema],
+    flags: FlagsSchema,
+
+    // NEW: schedule
+    releaseAt: { type: Date },                    // optional (UTC)
+    status: { type: String, enum: ["released", "scheduled", "draft"], default: "released" },
   },
   { timestamps: true }
 );
 
-PrepModuleSchema.index({ examId: 1, dayIndex: 1, slotMin: 1 });
-
-export default mongoose.models.PrepModule || mongoose.model("PrepModule", PrepModuleSchema);
+export default mongoose.model("PrepModule", PrepModuleSchema);
