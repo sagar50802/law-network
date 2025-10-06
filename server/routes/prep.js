@@ -2,6 +2,7 @@
 import express from "express";
 import multer from "multer";
 import mongoose from "mongoose";
+import cron from "node-cron";
 import { isAdmin } from "./utils.js";
 import PrepExam from "../models/PrepExam.js";
 import PrepModule from "../models/PrepModule.js";
@@ -10,21 +11,13 @@ import PrepProgress from "../models/PrepProgress.js";
 
 const router = express.Router();
 
-// ---------- helpers ----------
-function truthy(v) {
-  return ["true", "1", "on", "yes"].includes(String(v).trim().toLowerCase());
-}
-function safeName(filename = "file") {
-  return String(filename).replace(/\s+/g, "_").replace(/[^\w.\-]/g, "");
-}
-
 // 40 MB per file, memory storage
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 40 * 1024 * 1024 },
 });
 
-// -------- Optional R2 + GridFS fallback ----------
+// -------- R2 (optional) + GridFS fallback ----------
 let R2 = null;
 try { R2 = await import("../utils/r2.js"); } catch { R2 = null; }
 
@@ -34,7 +27,16 @@ function grid(bucket) {
   return new mongoose.mongo.GridFSBucket(db, { bucketName: bucket });
 }
 
-/** Store a buffer: try R2 first; fallback to GridFS. */
+function safeName(filename = "file") {
+  return String(filename).replace(/\s+/g, "_").replace(/[^\w.\-]/g, "");
+}
+
+/** browser checkbox helper */
+function truthy(v) {
+  return ["true", "1", "on", "yes"].includes(String(v).trim().toLowerCase());
+}
+
+/** Store a buffer, prefer R2, fallback to GridFS */
 async function storeBuffer({ buffer, filename, mime, bucket = "prep" }) {
   const safefn = safeName(filename || "file");
   const contentType = mime || "application/octet-stream";
@@ -42,7 +44,7 @@ async function storeBuffer({ buffer, filename, mime, bucket = "prep" }) {
   if (R2?.r2Enabled?.() && R2?.uploadBuffer) {
     try {
       const url = await R2.uploadBuffer(buffer, safefn, contentType);
-      return { url, via: "r2" };
+      return { url, via: "r2", mimetype: contentType };
     } catch (e) {
       console.warn("[prep] R2 upload failed, falling back to GridFS:", e?.message || e);
     }
@@ -58,13 +60,12 @@ async function storeBuffer({ buffer, filename, mime, bucket = "prep" }) {
     ws.end(buffer);
   });
 
-  return { url: `/api/files/${bucket}/${String(id)}`, via: "gridfs" };
+  return { url: `/api/files/${bucket}/${String(id)}`, via: "gridfs", mimetype: contentType };
 }
 
 // -------- OCR helper (graceful) ----------
 let OCR = null;
 try { OCR = await import("../utils/ocr.js"); } catch { OCR = null; }
-
 async function runOcrSafe(buffer) {
   try {
     if (!buffer) return "";
@@ -77,15 +78,49 @@ async function runOcrSafe(buffer) {
   }
 }
 
-/* ==================== Exams ==================== */
+/** Re-read a stored file into a Buffer for scheduled OCR */
+async function fetchBufferForFile(file) {
+  if (!file?.url) return null;
 
-// List exams (public)
+  // A) GridFS path: /api/files/<bucket>/<id>
+  const m = String(file.url).match(/^\/api\/files\/([^/]+)\/([a-f0-9]{24,})/i);
+  if (m) {
+    const [_, bucket, objId] = m;
+    const g = grid(bucket);
+    if (!g) return null;
+    const id = new mongoose.Types.ObjectId(objId);
+    const chunks = [];
+    return await new Promise((res, rej) => {
+      g.openDownloadStream(id)
+        .on("data", (d) => chunks.push(d))
+        .on("error", rej)
+        .on("end", () => res(Buffer.concat(chunks)));
+    });
+  }
+
+  // B) R2/public URL
+  const absolute = /^https?:\/\//i.test(file.url)
+    ? file.url
+    : ((process.env.PUBLIC_FILE_BASE || process.env.VITE_API_URL || process.env.CLIENT_URL || "").replace(/\/+$/, "") + file.url);
+
+  try {
+    const nf = (await import("node-fetch")).default;
+    const r = await nf(absolute);
+    if (!r.ok) return null;
+    const arr = new Uint8Array(await r.arrayBuffer());
+    return Buffer.from(arr);
+  } catch {
+    return null;
+  }
+}
+
+// ==================== Exams ====================
+
 router.get("/exams", async (_req, res) => {
   const exams = await PrepExam.find({}).sort({ name: 1 }).lean();
   res.json({ success: true, exams });
 });
 
-// Create exam (admin)
 router.post("/exams", isAdmin, async (req, res) => {
   const { examId, name, scheduleMode = "cohort" } = req.body || {};
   if (!examId || !name) {
@@ -99,22 +134,32 @@ router.post("/exams", isAdmin, async (req, res) => {
   res.json({ success: true, exam: doc });
 });
 
-/* ==================== Modules (templates) ==================== */
+// ==================== Modules (templates) ====================
 
-// List templates for an exam
+/**
+ * List templates for an exam
+ * Includes both released and scheduled so Admin sees everything.
+ * User endpoints will filter.
+ */
 router.get("/templates", async (req, res) => {
   const { examId } = req.query;
   if (!examId) return res.status(400).json({ success: false, error: "examId required" });
-  const items = await PrepModule.find({ examId }).sort({ dayIndex: 1, slotMin: 1 }).lean();
+  const items = await PrepModule.find({ examId })
+    .sort({ dayIndex: 1, slotMin: 1, releaseAt: 1 })
+    .lean();
   res.json({ success: true, items });
 });
 
-// Create/attach module (admin)
+/**
+ * Create/attach module (admin) with optional scheduling and manual text.
+ * If releaseAt provided => status = "scheduled" (OCR deferred to release time).
+ * If releaseAt missing => status = "released" (OCR runs now if asked).
+ */
 router.post(
   "/templates",
   isAdmin,
   upload.fields([
-    { name: "images", maxCount: 12 },
+    { name: "images", maxCount: 24 },
     { name: "pdf",    maxCount: 1  },
     { name: "audio",  maxCount: 1  },
     { name: "video",  maxCount: 1  },
@@ -127,11 +172,13 @@ router.post(
         slotMin = 0,
         title = "",
         description = "",
-        extractOCR = "false",
-        showOriginal = "false",
-        allowDownload = "false",
-        highlight = "false",
+        extractOCR,
+        showOriginal,
+        allowDownload,
+        highlight,
         background = "",
+        text = "",            // <-- NEW: manual text paste
+        releaseAt = "",       // <-- NEW: schedule ISO / datetime-local
       } = req.body || {};
 
       if (!examId || !dayIndex) {
@@ -139,9 +186,7 @@ router.post(
       }
 
       const files = [];
-      const addFile = (kind, payload) => {
-        files.push({ kind, url: payload.url, mime: payload.mime || payload.mimetype || "" });
-      };
+      const add = (kind, payload) => files.push({ kind, url: payload.url, mime: payload.mimetype || payload.mime || "" });
 
       const toStore = async (f) => {
         if (!f?.buffer?.length) throw new Error("empty file buffer");
@@ -152,42 +197,35 @@ router.post(
         });
       };
 
-      // store uploads (skip individual failures)
+      // store uploads (skip on per-file failure)
       for (const f of req.files?.images || []) {
-        try { addFile("image", { ...(await toStore(f)), mime: f.mimetype }); }
-        catch (e) { console.warn("[prep] image store failed:", e?.message || e); }
+        try { add("image", await toStore(f)); } catch (e) { console.warn("[prep] image save:", e?.message || e); }
       }
-      if (req.files?.pdf?.[0]) {
-        const f = req.files.pdf[0];
-        try { addFile("pdf",   { ...(await toStore(f)), mime: f.mimetype }); }
-        catch (e) { console.warn("[prep] pdf store failed:", e?.message || e); }
-      }
-      if (req.files?.audio?.[0]) {
-        const f = req.files.audio[0];
-        try { addFile("audio", { ...(await toStore(f)), mime: f.mimetype }); }
-        catch (e) { console.warn("[prep] audio store failed:", e?.message || e); }
-      }
-      if (req.files?.video?.[0]) {
-        const f = req.files.video[0];
-        try { addFile("video", { ...(await toStore(f)), mime: f.mimetype }); }
-        catch (e) { console.warn("[prep] video store failed:", e?.message || e); }
-      }
-
-      // OCR (first image/pdf) respecting truthy values
-      let ocrText = "";
-      const wantOCR = truthy(extractOCR);
-      if (wantOCR && (req.files?.images?.[0] || req.files?.pdf?.[0])) {
-        const src = req.files.images?.[0] || req.files.pdf?.[0];
-        ocrText = await runOcrSafe(src?.buffer);
-      }
+      if (req.files?.pdf?.[0])   { try { add("pdf",   await toStore(req.files.pdf[0])); }   catch (e) { console.warn("[prep] pdf save:", e?.message || e); } }
+      if (req.files?.audio?.[0]) { try { add("audio", await toStore(req.files.audio[0])); } catch (e) { console.warn("[prep] audio save:", e?.message || e); } }
+      if (req.files?.video?.[0]) { try { add("video", await toStore(req.files.video[0])); } catch (e) { console.warn("[prep] video save:", e?.message || e); } }
 
       const flags = {
-        extractOCR:  truthy(extractOCR),
+        extractOCR: truthy(extractOCR),
         showOriginal: truthy(showOriginal),
         allowDownload: truthy(allowDownload),
         highlight: truthy(highlight),
         background,
       };
+
+      // If a releaseAt is provided, schedule it; else release now.
+      const hasSchedule = Boolean(releaseAt);
+      const relAt = hasSchedule ? new Date(releaseAt) : null;
+      let ocrText = "";
+
+      // Manual text always wins (admin pasted text)
+      if (text && String(text).trim()) {
+        ocrText = String(text).trim();
+      } else if (!hasSchedule && flags.extractOCR) {
+        // No schedule => run OCR now (first image OR pdf)
+        const firstUpload = (req.files?.images?.[0] || req.files?.pdf?.[0])?.buffer;
+        if (firstUpload) ocrText = await runOcrSafe(firstUpload);
+      }
 
       const doc = await PrepModule.create({
         examId,
@@ -198,7 +236,8 @@ router.post(
         files,
         flags,
         ocrText,
-        status: "released",
+        status: hasSchedule ? "scheduled" : "released",
+        releaseAt: hasSchedule ? relAt : null,
       });
 
       res.json({ success: true, item: doc });
@@ -209,12 +248,12 @@ router.post(
   }
 );
 
-// Update flags / re-OCR / add more files (admin)
+/** Update fields / flags / files / schedule / re-OCR */
 router.patch(
   "/templates/:id",
   isAdmin,
   upload.fields([
-    { name: "images", maxCount: 12 },
+    { name: "images", maxCount: 24 },
     { name: "pdf",    maxCount: 1  },
     { name: "audio",  maxCount: 1  },
     { name: "video",  maxCount: 1  },
@@ -232,12 +271,31 @@ router.patch(
       if (req.body.dayIndex     != null) doc.dayIndex     = Number(req.body.dayIndex);
       if (req.body.slotMin      != null) doc.slotMin      = Number(req.body.slotMin);
 
-      // flags (now using truthy)
+      // manual text can replace ocrText
+      if (req.body.text != null) {
+        const txt = String(req.body.text || "").trim();
+        if (txt) doc.ocrText = txt;
+      }
+
+      // flags
       if (req.body.extractOCR   != null) setFlag("extractOCR",  truthy(req.body.extractOCR));
       if (req.body.showOriginal != null) setFlag("showOriginal", truthy(req.body.showOriginal));
       if (req.body.allowDownload!= null) setFlag("allowDownload",truthy(req.body.allowDownload));
       if (req.body.highlight    != null) setFlag("highlight",   truthy(req.body.highlight));
       if (req.body.background   != null) setFlag("background",  req.body.background);
+
+      // schedule
+      if (req.body.releaseAt != null) {
+        const ra = String(req.body.releaseAt).trim();
+        if (ra) {
+          doc.releaseAt = new Date(ra);
+          if (doc.status !== "released") doc.status = "scheduled";
+        } else {
+          // clear schedule (release immediately)
+          doc.releaseAt = null;
+          if (doc.status !== "released") doc.status = "released";
+        }
+      }
 
       // more files
       const toStore = async (f) => storeBuffer({
@@ -245,30 +303,16 @@ router.patch(
         filename: f.originalname || f.fieldname,
         mime: f.mimetype || "application/octet-stream",
       });
-      const pushFile = (kind, payload) => doc.files.push({ kind, url: payload.url, mime: payload.mimetype || "" });
+      const pushFile = (kind, payload) => doc.files.push({ kind, url: payload.url, mime: payload.mimetype || payload.mime || "" });
 
-      for (const f of req.files?.images || []) {
-        try { pushFile("image", { ...(await toStore(f)), mimetype: f.mimetype }); }
-        catch (e) { console.warn("[prep] image append failed:", e?.message || e); }
-      }
-      if (req.files?.pdf?.[0]) {
-        const f = req.files.pdf[0];
-        try { pushFile("pdf",   { ...(await toStore(f)), mimetype: f.mimetype }); }
-        catch (e) { console.warn("[prep] pdf append failed:", e?.message || e); }
-      }
-      if (req.files?.audio?.[0]) {
-        const f = req.files.audio[0];
-        try { pushFile("audio", { ...(await toStore(f)), mimetype: f.mimetype }); }
-        catch (e) { console.warn("[prep] audio append failed:", e?.message || e); }
-      }
-      if (req.files?.video?.[0]) {
-        const f = req.files.video[0];
-        try { pushFile("video", { ...(await toStore(f)), mimetype: f.mimetype }); }
-        catch (e) { console.warn("[prep] video append failed:", e?.message || e); }
-      }
+      for (const f of req.files?.images || []) { try { pushFile("image", await toStore(f)); } catch (e) {} }
+      if (req.files?.pdf?.[0])   { try { pushFile("pdf",   await toStore(req.files.pdf[0])); }   catch (e) {} }
+      if (req.files?.audio?.[0]) { try { pushFile("audio", await toStore(req.files.audio[0])); } catch (e) {} }
+      if (req.files?.video?.[0]) { try { pushFile("video", await toStore(req.files.video[0])); } catch (e) {} }
 
-      // optional re-OCR (if turned on)
+      // optional re-OCR (if turned on and requested)
       if (truthy(req.body.reOCR) && doc.flags.extractOCR) {
+        // Prefer newly uploaded images/pdf; else skip (defer to schedule if any)
         const uploaded = (req.files?.images?.[0] || req.files?.pdf?.[0])?.buffer;
         if (uploaded) doc.ocrText = await runOcrSafe(uploaded);
       }
@@ -282,9 +326,14 @@ router.patch(
   }
 );
 
-/* ==================== Access (cohort) ==================== */
+/** NEW: Delete a module */
+router.delete("/templates/:id", isAdmin, async (req, res) => {
+  const ok = await PrepModule.deleteOne({ _id: req.params.id });
+  res.json({ success: true, deleted: ok.deletedCount });
+});
 
-// Grant (admin)
+// ==================== Access (cohort) ====================
+
 router.post("/access/grant", isAdmin, async (req, res) => {
   const { userEmail, examId, planDays = 30, startAt } = req.body || {};
   if (!userEmail || !examId) {
@@ -316,7 +365,11 @@ router.post("/access/grant", isAdmin, async (req, res) => {
   res.json({ success: true, access });
 });
 
-// User summary (today day + modules)
+/**
+ * User summary (today):
+ * - released modules for todayDay
+ * - upcoming (scheduled) modules for the same day with times
+ */
 router.get("/user/summary", async (req, res) => {
   const { examId, email } = req.query || {};
   if (!examId) return res.status(400).json({ success: false, error: "examId required" });
@@ -334,15 +387,22 @@ router.get("/user/summary", async (req, res) => {
     Math.floor((now - new Date(startAt)) / 86400000) + 1
   ));
 
-  const modules = await PrepModule
-    .find({ examId, dayIndex: dayIdx })
-    .sort({ slotMin: 1 })
+  // Released content for today
+  const released = await PrepModule
+    .find({ examId, dayIndex: dayIdx, status: "released" })
+    .sort({ slotMin: 1, releaseAt: 1 })
     .lean();
 
-  res.json({ success: true, todayDay: dayIdx, planDays, modules });
+  // Upcoming (same day) – show to users as “coming soon”
+  const upcoming = await PrepModule
+    .find({ examId, dayIndex: dayIdx, status: "scheduled" })
+    .select("title releaseAt slotMin")
+    .sort({ releaseAt: 1, slotMin: 1 })
+    .lean();
+
+  res.json({ success: true, todayDay: dayIdx, planDays, modules: released, upcoming });
 });
 
-// Mark complete day
 router.post("/user/complete", async (req, res) => {
   const { examId, email, dayIndex } = req.body || {};
   if (!examId || !email || !dayIndex) {
@@ -357,3 +417,35 @@ router.post("/user/complete", async (req, res) => {
 });
 
 export default router;
+
+/* ==================== CRON: Promote scheduled -> released ====================
+
+Runs every minute:
+- Pick modules with status 'scheduled' whose releaseAt <= now
+- If extractOCR = true and no ocrText yet, run OCR once (pdf/image)
+- Mark as 'released'
+
+This keeps server.js untouched—cron starts when this file is imported.
+*/
+cron.schedule("*/1 * * * *", async () => {
+  const now = new Date();
+  const due = await PrepModule.find({ status: "scheduled", releaseAt: { $lte: now } }).limit(10);
+  if (!due.length) return;
+
+  console.log(`[prep] promoting ${due.length} scheduled module(s) @ ${now.toISOString()}`);
+  for (const doc of due) {
+    try {
+      if (doc.flags?.extractOCR && !doc.ocrText) {
+        // prefer image; else pdf
+        const first = (doc.files || []).find(f => f.kind === "image")
+                  || (doc.files || []).find(f => f.kind === "pdf");
+        const buf = await fetchBufferForFile(first);
+        if (buf) doc.ocrText = await runOcrSafe(buf);
+      }
+      doc.status = "released";
+      await doc.save();
+    } catch (e) {
+      console.warn("[prep] promote failed:", doc._id?.toString(), e?.message || e);
+    }
+  }
+});
