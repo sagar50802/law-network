@@ -1,3 +1,4 @@
+// server/routes/prep.js
 import express from "express";
 import multer from "multer";
 import mongoose from "mongoose";
@@ -9,7 +10,15 @@ import PrepProgress from "../models/PrepProgress.js";
 
 const router = express.Router();
 
-// 40 MB per file, memory storage (your existing behavior)
+// ---------- helpers ----------
+function truthy(v) {
+  return ["true", "1", "on", "yes"].includes(String(v).trim().toLowerCase());
+}
+function safeName(filename = "file") {
+  return String(filename).replace(/\s+/g, "_").replace(/[^\w.\-]/g, "");
+}
+
+// 40 MB per file, memory storage
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 40 * 1024 * 1024 },
@@ -25,20 +34,11 @@ function grid(bucket) {
   return new mongoose.mongo.GridFSBucket(db, { bucketName: bucket });
 }
 
-function safeName(filename = "file") {
-  return String(filename).replace(/\s+/g, "_").replace(/[^\w.\-]/g, "");
-}
-
-/**
- * Store a buffer:
- * 1) Try R2 if enabled
- * 2) If that throws or disabled, fallback to GridFS
- */
+/** Store a buffer: try R2 first; fallback to GridFS. */
 async function storeBuffer({ buffer, filename, mime, bucket = "prep" }) {
   const safefn = safeName(filename || "file");
   const contentType = mime || "application/octet-stream";
 
-  // Prefer R2 if it looks enabled, but never crash if it fails—fallback to GridFS
   if (R2?.r2Enabled?.() && R2?.uploadBuffer) {
     try {
       const url = await R2.uploadBuffer(buffer, safefn, contentType);
@@ -48,7 +48,6 @@ async function storeBuffer({ buffer, filename, mime, bucket = "prep" }) {
     }
   }
 
-  // ---- GridFS fallback ----
   const g = grid(bucket);
   if (!g) throw Object.assign(new Error("DB not connected"), { status: 503 });
 
@@ -78,7 +77,7 @@ async function runOcrSafe(buffer) {
   }
 }
 
-// ==================== Exams ====================
+/* ==================== Exams ==================== */
 
 // List exams (public)
 router.get("/exams", async (_req, res) => {
@@ -100,7 +99,7 @@ router.post("/exams", isAdmin, async (req, res) => {
   res.json({ success: true, exam: doc });
 });
 
-// ==================== Modules (templates) ====================
+/* ==================== Modules (templates) ==================== */
 
 // List templates for an exam
 router.get("/templates", async (req, res) => {
@@ -153,7 +152,7 @@ router.post(
         });
       };
 
-      // ---- store uploads (skip bad files instead of crashing) ----
+      // store uploads (skip individual failures)
       for (const f of req.files?.images || []) {
         try { addFile("image", { ...(await toStore(f)), mime: f.mimetype }); }
         catch (e) { console.warn("[prep] image store failed:", e?.message || e); }
@@ -174,19 +173,19 @@ router.post(
         catch (e) { console.warn("[prep] video store failed:", e?.message || e); }
       }
 
-      // ---- OCR (first image or pdf) ----
+      // OCR (first image/pdf) respecting truthy values
       let ocrText = "";
-      const wantOCR = String(extractOCR) === "true";
+      const wantOCR = truthy(extractOCR);
       if (wantOCR && (req.files?.images?.[0] || req.files?.pdf?.[0])) {
         const src = req.files.images?.[0] || req.files.pdf?.[0];
         ocrText = await runOcrSafe(src?.buffer);
       }
 
       const flags = {
-        extractOCR: wantOCR,
-        showOriginal: String(showOriginal) === "true",
-        allowDownload: String(allowDownload) === "true",
-        highlight: String(highlight) === "true",
+        extractOCR:  truthy(extractOCR),
+        showOriginal: truthy(showOriginal),
+        allowDownload: truthy(allowDownload),
+        highlight: truthy(highlight),
         background,
       };
 
@@ -199,7 +198,7 @@ router.post(
         files,
         flags,
         ocrText,
-        status: "released", // cohort mode
+        status: "released",
       });
 
       res.json({ success: true, item: doc });
@@ -233,11 +232,11 @@ router.patch(
       if (req.body.dayIndex     != null) doc.dayIndex     = Number(req.body.dayIndex);
       if (req.body.slotMin      != null) doc.slotMin      = Number(req.body.slotMin);
 
-      // flags
-      if (req.body.extractOCR   != null) setFlag("extractOCR",  String(req.body.extractOCR)  === "true");
-      if (req.body.showOriginal != null) setFlag("showOriginal", String(req.body.showOriginal)=== "true");
-      if (req.body.allowDownload!= null) setFlag("allowDownload",String(req.body.allowDownload)=== "true");
-      if (req.body.highlight    != null) setFlag("highlight",   String(req.body.highlight)   === "true");
+      // flags (now using truthy)
+      if (req.body.extractOCR   != null) setFlag("extractOCR",  truthy(req.body.extractOCR));
+      if (req.body.showOriginal != null) setFlag("showOriginal", truthy(req.body.showOriginal));
+      if (req.body.allowDownload!= null) setFlag("allowDownload",truthy(req.body.allowDownload));
+      if (req.body.highlight    != null) setFlag("highlight",   truthy(req.body.highlight));
       if (req.body.background   != null) setFlag("background",  req.body.background);
 
       // more files
@@ -269,11 +268,9 @@ router.patch(
       }
 
       // optional re-OCR (if turned on)
-      if (String(req.body.reOCR || "false") === "true" && doc.flags.extractOCR) {
+      if (truthy(req.body.reOCR) && doc.flags.extractOCR) {
         const uploaded = (req.files?.images?.[0] || req.files?.pdf?.[0])?.buffer;
-        if (uploaded) {
-          doc.ocrText = await runOcrSafe(uploaded);
-        }
+        if (uploaded) doc.ocrText = await runOcrSafe(uploaded);
       }
 
       await doc.save();
@@ -285,7 +282,7 @@ router.patch(
   }
 );
 
-// ==================== Access (cohort) ====================
+/* ==================== Access (cohort) ==================== */
 
 // Grant (admin)
 router.post("/access/grant", isAdmin, async (req, res) => {
