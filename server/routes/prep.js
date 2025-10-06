@@ -15,6 +15,7 @@ const router = express.Router();
 // 40 MB memory storage exactly like you had
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 40 * 1024 * 1024 } });
 
+// truthy helper for checkboxes
 function truthy(v) {
   return ["true", "1", "on", "yes"].includes(String(v).trim().toLowerCase());
 }
@@ -75,6 +76,24 @@ async function runOcrSafe(buffer) {
   }
 }
 
+// ------- NEW helpers for lazy OCR-at-release (GridFS only) -------
+const { Types } = mongoose;
+async function gridFetchBuffer(bucket, id) {
+  const g = grid(bucket);
+  if (!g) return null;
+  return new Promise((res, rej) => {
+    const rs = g.openDownloadStream(new Types.ObjectId(id));
+    const chunks = [];
+    rs.on("data", d => chunks.push(d));
+    rs.on("error", rej);
+    rs.on("end", () => res(Buffer.concat(chunks)));
+  });
+}
+function tryGetGridIdFromUrl(url = "") {
+  const m = String(url).match(/\/api\/files\/([^/]+)\/([0-9a-f]{24})$/i);
+  return m ? { bucket: m[1], id: m[2] } : null;
+}
+
 /* ================= Exams ================= */
 
 router.get("/exams", async (_req, res) => {
@@ -103,7 +122,7 @@ router.get("/templates", async (req, res) => {
   res.json({ success: true, items });
 });
 
-// create module
+// create module (now supports releaseAt, pasted text, OCR-at-release)
 router.post(
   "/templates",
   isAdmin,
@@ -117,11 +136,12 @@ router.post(
     try {
       const {
         examId, dayIndex, slotMin = 0, title = "", description = "",
-        // NEW: schedule + manual text
-        releaseAt, manualText = "",
-        // flags
+        // schedule + manual text
+        releaseAt, content = "", manualText = "",
+        // flags (aliases kept for compatibility)
         extractOCR = "false", showOriginal = "false", allowDownload = "false",
-        highlight = "false", background = "", deferOCRUntilRelease = "false",
+        highlight = "false", background = "",
+        ocrAtRelease = "false", deferOCRUntilRelease = "false",
       } = req.body || {};
 
       if (!examId || !dayIndex) {
@@ -150,19 +170,27 @@ router.post(
       const now = new Date();
       const status = relAt && relAt > now ? "scheduled" : "released";
 
+      // OCR intent
+      const wantsOCRAtRelease = truthy(ocrAtRelease) || truthy(deferOCRUntilRelease);
+      const wantsImmediateOCR = truthy(extractOCR) && !wantsOCRAtRelease;
+
       // flags
       const flags = {
-        extractOCR: truthy(extractOCR),
+        extractOCR: truthy(extractOCR) || wantsOCRAtRelease,
+        ocrAtRelease: wantsOCRAtRelease,                 // NEW (explicit)
+        deferOCRUntilRelease: wantsOCRAtRelease,         // keep legacy flag for compatibility
         showOriginal: truthy(showOriginal),
         allowDownload: truthy(allowDownload),
         highlight: truthy(highlight),
         background,
-        deferOCRUntilRelease: truthy(deferOCRUntilRelease),
       };
 
-      // OCR now (only if extract is ON, manualText is empty, and not deferred)
+      // text preference: manual content overrides OCR
       let ocrText = "";
-      if (flags.extractOCR && !truthy(deferOCRUntilRelease) && !manualText) {
+      const pasted = (content || manualText || "").trim();
+      if (pasted) {
+        ocrText = pasted;
+      } else if (wantsImmediateOCR && (req.files?.images?.[0] || req.files?.pdf?.[0])) {
         const src = (req.files?.images?.[0] || req.files?.pdf?.[0])?.buffer;
         if (src?.length) ocrText = await runOcrSafe(src);
       }
@@ -175,7 +203,7 @@ router.post(
         description,
         files,
         flags,
-        text: manualText || "",   // << store pasted text
+        text: pasted || "",   // keep the pasted text separately too
         ocrText,
         releaseAt: relAt || undefined,
         status,
@@ -189,7 +217,7 @@ router.post(
   }
 );
 
-// update module (edit flags, add files, re-OCR)
+// update module (edit flags, add files, re-OCR, schedule, paste text)
 router.patch(
   "/templates/:id",
   isAdmin,
@@ -209,7 +237,16 @@ router.patch(
       if (req.body.description != null) doc.description = req.body.description;
       if (req.body.dayIndex    != null) doc.dayIndex = Number(req.body.dayIndex);
       if (req.body.slotMin     != null) doc.slotMin = Number(req.body.slotMin);
-      if (req.body.manualText  != null) doc.text    = req.body.manualText;
+
+      // allow direct pasted text (content/manualText)
+      const pasted =
+        (req.body.content && String(req.body.content).trim()) ||
+        (req.body.manualText && String(req.body.manualText).trim()) ||
+        "";
+      if (pasted) {
+        doc.text = pasted;
+        doc.ocrText = pasted; // immediately usable on UI
+      }
 
       // schedule
       if (req.body.releaseAt != null) {
@@ -219,20 +256,33 @@ router.patch(
         doc.status = rel && rel > now ? "scheduled" : "released";
       }
 
-      // flags
+      // flags (add ocrAtRelease alias)
       const setFlag = (k, v) => (doc.flags[k] = v);
-      if (req.body.extractOCR           != null) setFlag("extractOCR",           truthy(req.body.extractOCR));
-      if (req.body.showOriginal         != null) setFlag("showOriginal",         truthy(req.body.showOriginal));
-      if (req.body.allowDownload        != null) setFlag("allowDownload",        truthy(req.body.allowDownload));
-      if (req.body.highlight            != null) setFlag("highlight",            truthy(req.body.highlight));
-      if (req.body.background           != null) setFlag("background",           req.body.background);
-      if (req.body.deferOCRUntilRelease != null) setFlag("deferOCRUntilRelease", truthy(req.body.deferOCRUntilRelease));
+      if (req.body.extractOCR   != null) setFlag("extractOCR",   truthy(req.body.extractOCR));
+      if (req.body.ocrAtRelease != null) {
+        const v = truthy(req.body.ocrAtRelease);
+        setFlag("ocrAtRelease", v);
+        setFlag("deferOCRUntilRelease", v); // keep in sync
+      }
+      if (req.body.showOriginal != null) setFlag("showOriginal", truthy(req.body.showOriginal));
+      if (req.body.allowDownload!= null) setFlag("allowDownload",truthy(req.body.allowDownload));
+      if (req.body.highlight    != null) setFlag("highlight",    truthy(req.body.highlight));
+      if (req.body.background   != null) setFlag("background",   req.body.background);
+      if (req.body.deferOCRUntilRelease != null) {
+        const v = truthy(req.body.deferOCRUntilRelease);
+        setFlag("deferOCRUntilRelease", v);
+        setFlag("ocrAtRelease", v);
+      }
 
       // new files
-      const toStore = async (f) => storeBuffer({
-        buffer: f.buffer, filename: f.originalname || f.fieldname, mime: f.mimetype || "application/octet-stream",
-      });
-      const pushFile = (kind, payload) => doc.files.push({ kind, url: payload.url, mime: payload.mimetype || "" });
+      const toStore = async (f) =>
+        storeBuffer({
+          buffer: f.buffer,
+          filename: f.originalname || f.fieldname,
+          mime: f.mimetype || "application/octet-stream",
+        });
+      const pushFile = (kind, payload) =>
+        doc.files.push({ kind, url: payload.url, mime: payload.mimetype || "" });
 
       for (const f of req.files?.images || []) { try { pushFile("image", { ...(await toStore(f)), mimetype: f.mimetype }); } catch {} }
       if (req.files?.pdf?.[0])   { const f = req.files.pdf[0];   try { pushFile("pdf",   { ...(await toStore(f)), mimetype: f.mimetype }); } catch {} }
@@ -240,7 +290,7 @@ router.patch(
       if (req.files?.video?.[0]) { const f = req.files.video[0]; try { pushFile("video", { ...(await toStore(f)), mimetype: f.mimetype }); } catch {} }
 
       // optional re-OCR now
-      if (truthy(req.body.reOCR) && doc.flags.extractOCR && !doc.flags.deferOCRUntilRelease && !doc.text) {
+      if (truthy(req.body.reOCR) && doc.flags.extractOCR && !doc.flags.ocrAtRelease && !doc.text) {
         const uploaded = (req.files?.images?.[0] || req.files?.pdf?.[0])?.buffer;
         if (uploaded?.length) doc.ocrText = await runOcrSafe(uploaded);
       }
@@ -254,7 +304,7 @@ router.patch(
   }
 );
 
-// NEW: delete module
+// Delete module (admin)
 router.delete("/templates/:id", isAdmin, async (req, res) => {
   try {
     const r = await PrepModule.findByIdAndDelete(req.params.id);
@@ -280,7 +330,8 @@ router.post("/access/grant", isAdmin, async (req, res) => {
   res.json({ success: true, access });
 });
 
-// summary for user (today)
+/* ================= User summary (released vs upcoming + lazy OCR) ================= */
+
 router.get("/user/summary", async (req, res) => {
   const { examId, email } = req.query || {};
   if (!examId) return res.status(400).json({ success: false, error: "examId required" });
@@ -289,34 +340,78 @@ router.get("/user/summary", async (req, res) => {
   if (email) {
     access = await PrepAccess.findOne({ examId, userEmail: email, status: "active" }).lean();
   }
+
   const now = new Date();
   const planDays = access?.planDays || 3;
   const startAt  = access?.startAt || now;
   const dayIdx   = Math.max(1, Math.min(planDays, Math.floor((now - new Date(startAt)) / 86400000) + 1));
 
-  // released modules for the day (either no releaseAt or already released)
-  const modules = await PrepModule
-    .find({
-      examId,
-      dayIndex: dayIdx,
-      $or: [{ status: "released" }, { releaseAt: { $exists: false } }],
-    })
-    .sort({ slotMin: 1 })
+  // fetch all for this day, then split released vs upcoming (today)
+  const all = await PrepModule
+    .find({ examId, dayIndex: dayIdx })
+    .sort({ releaseAt: 1, slotMin: 1 })
     .lean();
 
-  // coming later within the next 24h (for the calendar chip on UI)
-  const later = await PrepModule
-    .find({
-      examId,
-      dayIndex: dayIdx,
-      status: "scheduled",
-      releaseAt: { $gt: now, $lte: new Date(now.getTime() + 24 * 3600 * 1000) },
-    })
-    .sort({ releaseAt: 1 })
-    .select({ title: 1, releaseAt: 1 })
-    .lean();
+  const released = [];
+  const upcomingToday = [];
+  const now2 = new Date();
 
-  res.json({ success: true, todayDay: dayIdx, planDays, modules, comingLater: later });
+  for (const m of all) {
+    const rel = m.releaseAt ? new Date(m.releaseAt) : null;
+    const isReleased = !rel || rel <= now2 || m.status === "released";
+
+    if (isReleased) {
+      released.push(m);
+    } else {
+      if (rel && rel.toDateString() === now2.toDateString()) {
+        upcomingToday.push({
+          _id: m._id,
+          title: m.title || "Untitled",
+          releaseAt: rel,
+        });
+      }
+    }
+  }
+
+  // Lazy OCR after release, if admin set "OCR at release" and we still don't have text
+  for (const m of released) {
+    const needsLazy =
+      m?.flags?.extractOCR &&
+      (m?.flags?.ocrAtRelease || m?.flags?.deferOCRUntilRelease) &&
+      !m?.ocrText;
+
+    if (needsLazy) {
+      try {
+        const first = (m.files || []).find(f =>
+          (f.kind === "image" || f.kind === "pdf") && /^\/api\/files\//.test(f.url)
+        );
+        if (first) {
+          const meta = tryGetGridIdFromUrl(first.url);
+          if (meta) {
+            const buf = await gridFetchBuffer(meta.bucket, meta.id);
+            if (buf) {
+              const txt = await runOcrSafe(buf);
+              if (txt) {
+                await PrepModule.updateOne({ _id: m._id }, { $set: { ocrText: txt } });
+                m.ocrText = txt;
+              }
+            }
+          }
+        }
+      } catch (e) {
+        // swallow; non-fatal
+      }
+    }
+  }
+
+  res.json({
+    success: true,
+    todayDay: dayIdx,
+    planDays,
+    modules: released,
+    upcomingToday,           // preferred key
+    comingLater: upcomingToday, // backward-compat for older UI
+  });
 });
 
 // mark complete (fallback to guest if email missing)
@@ -336,7 +431,6 @@ router.post("/user/complete", async (req, res) => {
 /* ================= Light "cron" to flip scheduled → released ================= */
 
 // Every minute: release any scheduled modules whose time has arrived.
-// (If you want true cron, you can replace this with node-cron.)
 setInterval(async () => {
   try {
     const now = new Date();
