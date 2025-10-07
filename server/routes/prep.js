@@ -5,6 +5,7 @@
 import express from "express";
 import multer from "multer";
 import mongoose from "mongoose";
+import pdfParse from "pdf-parse"; // ← NEW
 import { isAdmin } from "./utils.js";
 import PrepExam from "../models/PrepExam.js";
 import PrepModule from "../models/PrepModule.js";
@@ -86,6 +87,33 @@ async function storeBuffer({ buffer, filename, mime, bucket = "prep" }) {
   return { url: `/api/files/${bucket}/${String(id)}`, via: "gridfs" };
 }
 
+/* -------------------- OCR helpers (PDF now, images later) ------------------- */
+
+async function tryPdfText(buf) {
+  try {
+    const out = await pdfParse(buf);
+    return (out.text || "").trim();
+  } catch (e) {
+    console.warn("[prep] pdf-parse failed:", e.message);
+    return "";
+  }
+}
+
+/** Prefer manual/pasted text; else OCR from uploaded PDF when requested. */
+async function computeBestText({ body, files }) {
+  const manual = (body?.manualText || "").trim();
+  if (manual) return manual;
+
+  const pasted = (body?.content || "").trim();
+  if (pasted) return pasted;
+
+  if (truthy(body?.extractOCR) && files?.pdf?.[0]?.buffer) {
+    const t = await tryPdfText(files.pdf[0].buffer);
+    if (t) return t;
+  }
+  return "";
+}
+
 /* -------------------------------------------------------------------------- */
 /*                                    Exams                                   */
 /* -------------------------------------------------------------------------- */
@@ -108,6 +136,26 @@ router.post("/exams", isAdmin, async (req, res) => {
     { upsert: true, new: true }
   );
   res.json({ success: true, exam: doc });
+});
+
+// NEW: delete an exam and related records
+router.delete("/exams/:examId", isAdmin, async (req, res) => {
+  try {
+    const examId = req.params.examId;
+    if (!examId) return res.status(400).json({ success: false, error: "examId required" });
+
+    const r1 = await PrepModule.deleteMany({ examId });
+    const r2 = await PrepAccess.deleteMany({ examId });
+    const r3 = await PrepProgress.deleteMany({ examId });
+    const r4 = await PrepExam.deleteOne({ examId });
+
+    res.json({
+      success: true,
+      removed: { modules: r1.deletedCount, access: r2.deletedCount, progress: r3.deletedCount, exams: r4.deletedCount }
+    });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e?.message || "server error" });
+  }
 });
 
 /* -------------------------------------------------------------------------- */
@@ -191,6 +239,9 @@ router.post(
         files.push({ kind: "video", url: s.url, mime: f.mimetype });
       }
 
+      // NEW: best-effort text (manual/pasted/OCR)
+      const bestText = await computeBestText({ body: req.body, files: req.files });
+
       const relAt = releaseAt ? new Date(releaseAt) : null;
       const status =
         relAt && relAt > new Date() ? "scheduled" : "released";
@@ -200,7 +251,7 @@ router.post(
         dayIndex: Number(dayIndex),
         slotMin: Number(slotMin),
         title,
-        text: manualText,
+        text: bestText || manualText, // keep compatibility
         files,
         flags: {
           extractOCR: truthy(extractOCR),
@@ -218,6 +269,7 @@ router.post(
         title,
         count: files.length,
         status,
+        ocr: truthy(extractOCR) ? (bestText ? "ok" : "none") : "off",
       });
 
       if (!doc?._id) {
@@ -227,7 +279,6 @@ router.post(
           .json({ success: false, error: "Document not created" });
       }
 
-      // ✅ Always send valid JSON back
       res.setHeader("Content-Type", "application/json");
       return res.json({
         success: true,
@@ -312,7 +363,6 @@ router.get("/user/summary", async (req, res) => {
 });
 
 // Today's modules (for the computed day). Includes released + scheduled for that day.
-// The client shows "Coming later" using releaseAt.
 router.get("/user/today", async (req, res) => {
   const { examId, email } = req.query || {};
   if (!examId)
@@ -363,6 +413,33 @@ setInterval(async () => {
       console.log(
         `[prep] auto-released ${r.modifiedCount} module(s) at ${now.toISOString()}`
       );
+
+    // OPTIONAL: OCR-at-release for PDFs that have extractOCR flag but empty text
+    // (limits to a few per minute to keep overhead tiny)
+    const candidates = await PrepModule.find({
+      status: "released",
+      $or: [{ text: { $exists: false } }, { text: "" }],
+      "flags.extractOCR": true,
+      files: { $elemMatch: { kind: "pdf" } },
+    }).limit(3).lean();
+
+    for (const m of candidates) {
+      try {
+        const pdf = (m.files || []).find((f) => f.kind === "pdf" && f.url);
+        if (!pdf || typeof fetch !== "function") continue;
+        const resp = await fetch(pdf.url);
+        if (!resp.ok) continue;
+        const ab = await resp.arrayBuffer();
+        const buf = Buffer.from(ab);
+        const t = await tryPdfText(buf);
+        if (t) {
+          await PrepModule.updateOne({ _id: m._id }, { $set: { text: t } });
+          console.log("[prep] OCR@release ok:", m._id.toString());
+        }
+      } catch (e) {
+        console.warn("[prep] OCR@release failed:", m._id?.toString(), e.message);
+      }
+    }
   } catch (e) {
     console.warn("[prep] auto-release failed:", e.message);
   }
