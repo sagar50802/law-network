@@ -94,25 +94,6 @@ function tryGetGridIdFromUrl(url = "") {
   return m ? { bucket: m[1], id: m[2] } : null;
 }
 
-/** ---- NEW: pull files regardless of fieldname; infer kind from field or mime ---- */
-function listIncomingFiles(req) {
-  if (!req.files) return [];
-  // support both shapes (multer.any() -> array; multer.fields() -> object)
-  return Array.isArray(req.files) ? req.files : Object.values(req.files).flat();
-}
-function inferKind(fieldname = "", mimetype = "") {
-  const f = (fieldname || "").toLowerCase();
-  const m = (mimetype || "").toLowerCase();
-  if (f.includes("pdf") || m === "application/pdf") return "pdf";
-  if (f.includes("image") || m.startsWith("image/")) return "image";
-  if (f.includes("audio") || f.includes("sound") || m.startsWith("audio/")) return "audio";
-  if (f.includes("video") || m.startsWith("video/")) return "video";
-  // fallback by major type
-  const major = m.split("/")[0];
-  if (major === "image" || major === "audio" || major === "video") return major;
-  return "file";
-}
-
 /* ================= Exams ================= */
 
 router.get("/exams", async (_req, res) => {
@@ -141,17 +122,30 @@ router.get("/templates", async (req, res) => {
   res.json({ success: true, items });
 });
 
-// create module (supports releaseAt, pasted text, OCR-at-release)
-// IMPORTANT: accept ANY file field name so Admin UI doesn't need to match exactly
+// infer kind from mimetype/fieldname
+function inferKind(file) {
+  const name = (file.fieldname || "").toLowerCase();
+  const mime = (file.mimetype || "").toLowerCase();
+  if (mime.startsWith("image/") || name.includes("image")) return "image";
+  if (mime.startsWith("audio/") || name.includes("audio")) return "audio";
+  if (mime.startsWith("video/") || name.includes("video")) return "video";
+  if (mime === "application/pdf" || name.includes("pdf")) return "pdf";
+  return ""; // unknown
+}
+
+// create module (now supports releaseAt, pasted text, OCR-at-release)
 router.post(
   "/templates",
   isAdmin,
-  upload.any(),            // <— was fields([...]); accept any field name now
+  // Accept ANY file field name so the admin UI can't accidentally miss multer's whitelist
+  upload.any(),
   async (req, res) => {
     try {
       const {
         examId, dayIndex, slotMin = 0, title = "", description = "",
+        // schedule + manual text
         releaseAt, content = "", manualText = "",
+        // flags (aliases kept for compatibility)
         extractOCR = "false", showOriginal = "false", allowDownload = "false",
         highlight = "false", background = "",
         ocrAtRelease = "false", deferOCRUntilRelease = "false",
@@ -163,20 +157,23 @@ router.post(
 
       // files (robust)
       const files = [];
-      for (const f of listIncomingFiles(req)) {
-        try {
-          const stored = await storeBuffer({
-            buffer: f.buffer,
-            filename: f.originalname || f.fieldname,
-            mime: f.mimetype || "application/octet-stream",
-          });
-          files.push({
-            kind: inferKind(f.fieldname, f.mimetype),
-            url: stored.url,
-            mime: f.mimetype || "",
-          });
-        } catch (e) {
-          console.warn("[prep] store file failed:", e?.message || e);
+      const toStore = async (f) =>
+        storeBuffer({
+          buffer: f.buffer,
+          filename: f.originalname || f.fieldname,
+          mime: f.mimetype || "application/octet-stream",
+        });
+
+      if (Array.isArray(req.files)) {
+        for (const f of req.files) {
+          try {
+            const kind = inferKind(f);
+            if (!kind) continue;
+            const stored = await toStore(f);
+            files.push({ kind, url: stored.url, mime: f.mimetype || "" });
+          } catch (e) {
+            console.warn("[prep] file save failed:", e?.message || e);
+          }
         }
       }
 
@@ -192,8 +189,8 @@ router.post(
       // flags
       const flags = {
         extractOCR: truthy(extractOCR) || wantsOCRAtRelease,
-        ocrAtRelease: wantsOCRAtRelease,
-        deferOCRUntilRelease: wantsOCRAtRelease,
+        ocrAtRelease: wantsOCRAtRelease,                 // NEW (explicit)
+        deferOCRUntilRelease: wantsOCRAtRelease,         // keep legacy flag for compatibility
         showOriginal: truthy(showOriginal),
         allowDownload: truthy(allowDownload),
         highlight: truthy(highlight),
@@ -206,10 +203,10 @@ router.post(
       if (pasted) {
         ocrText = pasted;
       } else if (wantsImmediateOCR) {
-        const imgOrPdf = listIncomingFiles(req).find(
-          (f) => f && (f.mimetype?.startsWith("image/") || f.mimetype === "application/pdf")
-        );
-        if (imgOrPdf?.buffer?.length) ocrText = await runOcrSafe(imgOrPdf.buffer);
+        const firstImgOrPdf = (req.files || []).find(f => f.mimetype?.startsWith("image/") || f.mimetype === "application/pdf");
+        if (firstImgOrPdf?.buffer?.length) {
+          ocrText = await runOcrSafe(firstImgOrPdf.buffer);
+        }
       }
 
       const doc = await PrepModule.create({
@@ -220,7 +217,7 @@ router.post(
         description,
         files,
         flags,
-        text: pasted || "",
+        text: pasted || "",   // keep the pasted text separately too
         ocrText,
         releaseAt: relAt || undefined,
         status,
@@ -238,7 +235,7 @@ router.post(
 router.patch(
   "/templates/:id",
   isAdmin,
-  upload.any(),           // <— accept any file field name here too
+  upload.any(), // robust: accept any field names
   async (req, res) => {
     try {
       const doc = await PrepModule.findById(req.params.id);
@@ -274,7 +271,7 @@ router.patch(
       if (req.body.ocrAtRelease != null) {
         const v = truthy(req.body.ocrAtRelease);
         setFlag("ocrAtRelease", v);
-        setFlag("deferOCRUntilRelease", v);
+        setFlag("deferOCRUntilRelease", v); // keep in sync
       }
       if (req.body.showOriginal != null) setFlag("showOriginal", truthy(req.body.showOriginal));
       if (req.body.allowDownload!= null) setFlag("allowDownload",truthy(req.body.allowDownload));
@@ -286,30 +283,31 @@ router.patch(
         setFlag("ocrAtRelease", v);
       }
 
-      // new files
-      for (const f of listIncomingFiles(req)) {
-        try {
-          const stored = await storeBuffer({
-            buffer: f.buffer,
-            filename: f.originalname || f.fieldname,
-            mime: f.mimetype || "application/octet-stream",
-          });
-          doc.files.push({
-            kind: inferKind(f.fieldname, f.mimetype),
-            url: stored.url,
-            mime: f.mimetype || "",
-          });
-        } catch (e) {
-          console.warn("[prep] store file failed (patch):", e?.message || e);
+      // new files (robust)
+      const toStore = async (f) =>
+        storeBuffer({
+          buffer: f.buffer,
+          filename: f.originalname || f.fieldname,
+          mime: f.mimetype || "application/octet-stream",
+        });
+
+      if (Array.isArray(req.files)) {
+        for (const f of req.files) {
+          try {
+            const kind = inferKind(f);
+            if (!kind) continue;
+            const stored = await toStore(f);
+            doc.files.push({ kind, url: stored.url, mime: f.mimetype || "" });
+          } catch (e) {
+            console.warn("[prep] patch file save failed:", e?.message || e);
+          }
         }
       }
 
       // optional re-OCR now
       if (truthy(req.body.reOCR) && doc.flags.extractOCR && !doc.flags.ocrAtRelease && !doc.text) {
-        const uploaded = listIncomingFiles(req).find(
-          (f) => f && (f.mimetype?.startsWith("image/") || f.mimetype === "application/pdf")
-        );
-        if (uploaded?.buffer?.length) doc.ocrText = await runOcrSafe(uploaded.buffer);
+        const uploaded = (req.files || []).find(f => f.mimetype?.startsWith("image/") || f.mimetype === "application/pdf")?.buffer;
+        if (uploaded?.length) doc.ocrText = await runOcrSafe(uploaded);
       }
 
       await doc.save();
