@@ -122,23 +122,49 @@ router.get("/templates", async (req, res) => {
   res.json({ success: true, items });
 });
 
-// infer kind from mimetype/fieldname
-function inferKind(file) {
-  const name = (file.fieldname || "").toLowerCase();
-  const mime = (file.mimetype || "").toLowerCase();
-  if (mime.startsWith("image/") || name.includes("image")) return "image";
-  if (mime.startsWith("audio/") || name.includes("audio")) return "audio";
-  if (mime.startsWith("video/") || name.includes("video")) return "video";
-  if (mime === "application/pdf" || name.includes("pdf")) return "pdf";
-  return ""; // unknown
+/* ---------- COMMON: normalize files from ANY field name ---------- */
+/** Accept files even if the frontend used wrong field names or singles */
+function collectIncomingFiles(req) {
+  // priority: multer.fields() registered names
+  const out = {
+    images: [].concat(req.files?.images || []),
+    pdf:    [].concat(req.files?.pdf    || []),
+    audio:  [].concat(req.files?.audio  || []),
+    video:  [].concat(req.files?.video  || []),
+  };
+
+  // Tolerate common alternate names or when upload.any() is used downstream
+  const pool = Array.isArray(req.files) ? req.files : [];
+  const add = (arr, f) => { if (f && f.buffer?.length) arr.push(f); };
+
+  for (const f of pool) {
+    const name = (f.fieldname || "").toLowerCase();
+    if (["images[]","images","image","files","photos","pictures"].includes(name)) add(out.images, f);
+    else if (["pdf","document"].includes(name)) add(out.pdf, f);
+    else if (["audio","sound","music"].includes(name)) add(out.audio, f);
+    else if (["video","movie","clip"].includes(name)) add(out.video, f);
+  }
+
+  return out;
 }
 
-// create module (now supports releaseAt, pasted text, OCR-at-release)
+/* -------- create module (releaseAt, pasted text, OCR-at-release) -------- */
 router.post(
   "/templates",
+  // Accept known field names AND gracefully accept any() in case of mismatch
+  (req, res, next) => upload.fields([
+    { name: "images", maxCount: 12 },
+    { name: "pdf",    maxCount: 1  },
+    { name: "audio",  maxCount: 1  },
+    { name: "video",  maxCount: 1  },
+  ])(req, res, (err) => {
+    // If fields() didn't pick anything (wrong field names), fall back to any()
+    if (!err && (!req.files || (Object.keys(req.files).length === 0))) {
+      return upload.any()(req, res, next);
+    }
+    next(err);
+  }),
   isAdmin,
-  // Accept ANY file field name so the admin UI can't accidentally miss multer's whitelist
-  upload.any(),
   async (req, res) => {
     try {
       const {
@@ -155,7 +181,8 @@ router.post(
         return res.status(400).json({ success: false, error: "examId & dayIndex required" });
       }
 
-      // files (robust)
+      // merge files from any field name
+      const incoming = collectIncomingFiles(req);
       const files = [];
       const toStore = async (f) =>
         storeBuffer({
@@ -163,19 +190,12 @@ router.post(
           filename: f.originalname || f.fieldname,
           mime: f.mimetype || "application/octet-stream",
         });
+      const addFile = (kind, payload, mime) => files.push({ kind, url: payload.url, mime: mime || "" });
 
-      if (Array.isArray(req.files)) {
-        for (const f of req.files) {
-          try {
-            const kind = inferKind(f);
-            if (!kind) continue;
-            const stored = await toStore(f);
-            files.push({ kind, url: stored.url, mime: f.mimetype || "" });
-          } catch (e) {
-            console.warn("[prep] file save failed:", e?.message || e);
-          }
-        }
-      }
+      for (const f of incoming.images) { try { addFile("image", await toStore(f), f.mimetype); } catch {} }
+      for (const f of incoming.pdf)    { try { addFile("pdf",   await toStore(f), f.mimetype); } catch {} }
+      for (const f of incoming.audio)  { try { addFile("audio", await toStore(f), f.mimetype); } catch {} }
+      for (const f of incoming.video)  { try { addFile("video", await toStore(f), f.mimetype); } catch {} }
 
       // schedule
       const relAt = releaseAt ? new Date(releaseAt) : null;
@@ -189,8 +209,8 @@ router.post(
       // flags
       const flags = {
         extractOCR: truthy(extractOCR) || wantsOCRAtRelease,
-        ocrAtRelease: wantsOCRAtRelease,                 // NEW (explicit)
-        deferOCRUntilRelease: wantsOCRAtRelease,         // keep legacy flag for compatibility
+        ocrAtRelease: wantsOCRAtRelease,
+        deferOCRUntilRelease: wantsOCRAtRelease,
         showOriginal: truthy(showOriginal),
         allowDownload: truthy(allowDownload),
         highlight: truthy(highlight),
@@ -202,11 +222,9 @@ router.post(
       const pasted = (content || manualText || "").trim();
       if (pasted) {
         ocrText = pasted;
-      } else if (wantsImmediateOCR) {
-        const firstImgOrPdf = (req.files || []).find(f => f.mimetype?.startsWith("image/") || f.mimetype === "application/pdf");
-        if (firstImgOrPdf?.buffer?.length) {
-          ocrText = await runOcrSafe(firstImgOrPdf.buffer);
-        }
+      } else if (wantsImmediateOCR && (incoming.images[0] || incoming.pdf[0])) {
+        const src = (incoming.images[0] || incoming.pdf[0])?.buffer;
+        if (src?.length) ocrText = await runOcrSafe(src);
       }
 
       const doc = await PrepModule.create({
@@ -217,7 +235,7 @@ router.post(
         description,
         files,
         flags,
-        text: pasted || "",   // keep the pasted text separately too
+        text: pasted || "",
         ocrText,
         releaseAt: relAt || undefined,
         status,
@@ -234,8 +252,18 @@ router.post(
 // update module (edit flags, add files, re-OCR, schedule, paste text)
 router.patch(
   "/templates/:id",
+  (req, res, next) => upload.fields([
+    { name: "images", maxCount: 12 },
+    { name: "pdf",    maxCount: 1  },
+    { name: "audio",  maxCount: 1  },
+    { name: "video",  maxCount: 1  },
+  ])(req, res, (err) => {
+    if (!err && (!req.files || (Object.keys(req.files).length === 0))) {
+      return upload.any()(req, res, next);
+    }
+    next(err);
+  }),
   isAdmin,
-  upload.any(), // robust: accept any field names
   async (req, res) => {
     try {
       const doc = await PrepModule.findById(req.params.id);
@@ -283,31 +311,26 @@ router.patch(
         setFlag("ocrAtRelease", v);
       }
 
-      // new files (robust)
+      // new files (tolerate any field name)
+      const incoming = collectIncomingFiles(req);
       const toStore = async (f) =>
         storeBuffer({
           buffer: f.buffer,
           filename: f.originalname || f.fieldname,
           mime: f.mimetype || "application/octet-stream",
         });
+      const pushFile = (kind, payload, mime) =>
+        doc.files.push({ kind, url: payload.url, mime: mime || "" });
 
-      if (Array.isArray(req.files)) {
-        for (const f of req.files) {
-          try {
-            const kind = inferKind(f);
-            if (!kind) continue;
-            const stored = await toStore(f);
-            doc.files.push({ kind, url: stored.url, mime: f.mimetype || "" });
-          } catch (e) {
-            console.warn("[prep] patch file save failed:", e?.message || e);
-          }
-        }
-      }
+      for (const f of incoming.images) { try { pushFile("image", await toStore(f), f.mimetype); } catch {} }
+      for (const f of incoming.pdf)    { try { pushFile("pdf",   await toStore(f), f.mimetype); } catch {} }
+      for (const f of incoming.audio)  { try { pushFile("audio", await toStore(f), f.mimetype); } catch {} }
+      for (const f of incoming.video)  { try { pushFile("video", await toStore(f), f.mimetype); } catch {} }
 
       // optional re-OCR now
       if (truthy(req.body.reOCR) && doc.flags.extractOCR && !doc.flags.ocrAtRelease && !doc.text) {
-        const uploaded = (req.files || []).find(f => f.mimetype?.startsWith("image/") || f.mimetype === "application/pdf")?.buffer;
-        if (uploaded?.length) doc.ocrText = await runOcrSafe(uploaded);
+        const first = incoming.images[0] || incoming.pdf[0];
+        if (first?.buffer?.length) doc.ocrText = await runOcrSafe(first.buffer);
       }
 
       await doc.save();
@@ -388,7 +411,7 @@ router.get("/user/summary", async (req, res) => {
     }
   }
 
-  // Lazy OCR after release, if admin set "OCR at release" and we still don't have text
+  // Lazy OCR after release
   for (const m of released) {
     const needsLazy =
       m?.flags?.extractOCR &&
@@ -424,23 +447,28 @@ router.get("/user/summary", async (req, res) => {
     todayDay: dayIdx,
     planDays,
     modules: released,
-    upcomingToday,           // preferred key
-    comingLater: upcomingToday, // backward-compat for older UI
+    upcomingToday,
+    comingLater: upcomingToday,
   });
 });
 
-// mark complete (fallback to guest if email missing)
-router.post("/user/complete", async (req, res) => {
-  const { examId, email, dayIndex } = req.body || {};
-  if (!examId || !dayIndex) return res.status(400).json({ success: false, error: "examId & dayIndex required" });
-  let userKey = (email || "").trim();
-  if (!userKey) userKey = `guest:${req.ip || "0.0.0.0"}`;
-  const doc = await PrepProgress.findOneAndUpdate(
-    { userEmail: userKey, examId },
-    { $addToSet: { completedDays: Number(dayIndex) } },
-    { upsert: true, new: true }
-  );
-  res.json({ success: true, progress: doc });
+/* --------- NEW: optional /user/today alias so the 404 goes away --------- */
+router.get("/user/today", async (req, res) => {
+  // Return the same "released modules" as summary, but include full items array
+  const { examId, email } = req.query || {};
+  if (!examId) return res.status(400).json({ success: false, error: "examId required" });
+
+  // reuse logic above
+  const now = new Date();
+  let access = null;
+  if (email) access = await PrepAccess.findOne({ examId, userEmail: email, status: "active" }).lean();
+  const planDays = access?.planDays || 3;
+  const startAt  = access?.startAt || now;
+  const dayIdx   = Math.max(1, Math.min(planDays, Math.floor((now - new Date(startAt)) / 86400000) + 1));
+
+  const all = await PrepModule.find({ examId, dayIndex: dayIdx }).sort({ releaseAt: 1, slotMin: 1 }).lean();
+  const items = all.filter(m => !m.releaseAt || new Date(m.releaseAt) <= now || m.status === "released");
+  res.json({ success: true, items });
 });
 
 /* ================= Light "cron" to flip scheduled → released ================= */
