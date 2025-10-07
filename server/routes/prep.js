@@ -11,9 +11,16 @@ import PrepProgress from "../models/PrepProgress.js";
 const router = express.Router();
 
 /* --------- helpers --------- */
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 40 * 1024 * 1024 } });
-function truthy(v) { return ["true", "1", "on", "yes"].includes(String(v).trim().toLowerCase()); }
 
+// 40 MB memory storage exactly like you had
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 40 * 1024 * 1024 } });
+
+// truthy helper for checkboxes
+function truthy(v) {
+  return ["true", "1", "on", "yes"].includes(String(v).trim().toLowerCase());
+}
+
+// Optional R2 + GridFS fallback
 let R2 = null;
 try { R2 = await import("../utils/r2.js"); } catch { R2 = null; }
 
@@ -31,6 +38,7 @@ async function storeBuffer({ buffer, filename, mime, bucket = "prep" }) {
   const name = safeName(filename || "file");
   const contentType = mime || "application/octet-stream";
 
+  // Prefer R2 if available
   if (R2?.r2Enabled?.() && R2?.uploadBuffer) {
     try {
       const url = await R2.uploadBuffer(buffer, name, contentType);
@@ -40,6 +48,7 @@ async function storeBuffer({ buffer, filename, mime, bucket = "prep" }) {
     }
   }
 
+  // GridFS
   const g = grid(bucket);
   if (!g) throw Object.assign(new Error("DB not connected"), { status: 503 });
   const id = await new Promise((resolve, reject) => {
@@ -51,6 +60,7 @@ async function storeBuffer({ buffer, filename, mime, bucket = "prep" }) {
   return { url: `/api/files/${bucket}/${String(id)}`, via: "gridfs" };
 }
 
+// OCR helper (graceful)
 let OCR = null;
 try { OCR = await import("../utils/ocr.js"); } catch { OCR = null; }
 
@@ -66,7 +76,7 @@ async function runOcrSafe(buffer) {
   }
 }
 
-// ------- helpers for lazy OCR-at-release (GridFS only) -------
+// ------- NEW helpers for lazy OCR-at-release (GridFS only) -------
 const { Types } = mongoose;
 async function gridFetchBuffer(bucket, id) {
   const g = grid(bucket);
@@ -84,7 +94,18 @@ function tryGetGridIdFromUrl(url = "") {
   return m ? { bucket: m[1], id: m[2] } : null;
 }
 
+// ------- NEW: accept multiple possible field names from the admin form -------
+function collectFiles(req, names) {
+  const out = [];
+  for (const n of names) {
+    const arr = (req.files && req.files[n]) || [];
+    for (const f of arr) out.push(f);
+  }
+  return out;
+}
+
 /* ================= Exams ================= */
+
 router.get("/exams", async (_req, res) => {
   const exams = await PrepExam.find({}).sort({ name: 1 }).lean();
   res.json({ success: true, exams });
@@ -102,6 +123,8 @@ router.post("/exams", isAdmin, async (req, res) => {
 });
 
 /* ================= Templates (modules) ================= */
+
+// list templates for an exam
 router.get("/templates", async (req, res) => {
   const { examId } = req.query || {};
   if (!examId) return res.status(400).json({ success: false, error: "examId required" });
@@ -109,20 +132,31 @@ router.get("/templates", async (req, res) => {
   res.json({ success: true, items });
 });
 
+// create module (now supports releaseAt, pasted text, OCR-at-release)
 router.post(
   "/templates",
   isAdmin,
   upload.fields([
     { name: "images", maxCount: 12 },
+    { name: "images[]", maxCount: 12 },        // NEW: accept images[]
+    { name: "image",  maxCount: 12 },          // NEW
+    { name: "img",    maxCount: 12 },          // NEW
     { name: "pdf",    maxCount: 1  },
+    { name: "pdfs",   maxCount: 1  },          // NEW
     { name: "audio",  maxCount: 1  },
+    { name: "audios", maxCount: 1  },          // NEW
+    { name: "audioFile", maxCount: 1 },        // NEW
     { name: "video",  maxCount: 1  },
+    { name: "videos", maxCount: 1  },          // NEW
+    { name: "videoFile", maxCount: 1 },        // NEW
   ]),
   async (req, res) => {
     try {
       const {
         examId, dayIndex, slotMin = 0, title = "", description = "",
+        // schedule + manual text
         releaseAt, content = "", manualText = "",
+        // flags (aliases kept for compatibility)
         extractOCR = "false", showOriginal = "false", allowDownload = "false",
         highlight = "false", background = "",
         ocrAtRelease = "false", deferOCRUntilRelease = "false",
@@ -132,7 +166,18 @@ router.post(
         return res.status(400).json({ success: false, error: "examId & dayIndex required" });
       }
 
+      // files (collect from many possible keys)
+      const imgUp   = collectFiles(req, ["images", "images[]", "image", "img"]);
+      const pdfUp   = collectFiles(req, ["pdf", "pdfs"]);
+      const audioUp = collectFiles(req, ["audio", "audios", "audioFile"]);
+      const videoUp = collectFiles(req, ["video", "videos", "videoFile"]);
+
       const files = [];
+      const legacyImages = [];
+      let legacyAudio = "";
+      let legacyVideo = "";
+      let legacyPdf   = "";
+
       const addFile = (kind, f) => files.push({ kind, url: f.url, mime: f.mime || f.mimetype || "" });
       const toStore = async (f) =>
         storeBuffer({
@@ -141,49 +186,61 @@ router.post(
           mime: f.mimetype || "application/octet-stream",
         });
 
-      for (const f of req.files?.images || []) { try { addFile("image", { ...(await toStore(f)), mime: f.mimetype }); } catch {} }
-      if (req.files?.pdf?.[0])   { const f = req.files.pdf[0];   try { addFile("pdf",   { ...(await toStore(f)), mime: f.mimetype }); } catch {} }
-      if (req.files?.audio?.[0]) { const f = req.files.audio[0]; try { addFile("audio", { ...(await toStore(f)), mime: f.mimetype }); } catch {} }
-      if (req.files?.video?.[0]) { const f = req.files.video[0]; try { addFile("video", { ...(await toStore(f)), mime: f.mimetype }); } catch {} }
+      for (const f of imgUp)  { try { const s = await toStore(f); addFile("image", s); legacyImages.push(s.url); } catch {} }
+      if (pdfUp[0])   { try { const s = await toStore(pdfUp[0]);   addFile("pdf", s);   legacyPdf   = s.url; } catch {} }
+      if (audioUp[0]) { try { const s = await toStore(audioUp[0]); addFile("audio", s); legacyAudio = s.url; } catch {} }
+      if (videoUp[0]) { try { const s = await toStore(videoUp[0]); addFile("video", s); legacyVideo = s.url; } catch {} }
 
+      // schedule
       const relAt = releaseAt ? new Date(releaseAt) : null;
       const now = new Date();
       const status = relAt && relAt > now ? "scheduled" : "released";
 
+      // OCR intent
       const wantsOCRAtRelease = truthy(ocrAtRelease) || truthy(deferOCRUntilRelease);
       const wantsImmediateOCR = truthy(extractOCR) && !wantsOCRAtRelease;
 
+      // flags
       const flags = {
         extractOCR: truthy(extractOCR) || wantsOCRAtRelease,
-        ocrAtRelease: wantsOCRAtRelease,
-        deferOCRUntilRelease: wantsOCRAtRelease,
+        ocrAtRelease: wantsOCRAtRelease,                 // NEW (explicit)
+        deferOCRUntilRelease: wantsOCRAtRelease,         // keep legacy flag for compatibility
         showOriginal: truthy(showOriginal),
         allowDownload: truthy(allowDownload),
         highlight: truthy(highlight),
         background,
       };
 
+      // text preference: manual content overrides OCR
       let ocrText = "";
       const pasted = (content || manualText || "").trim();
-      if (pasted) ocrText = pasted;
-      else if (wantsImmediateOCR && (req.files?.images?.[0] || req.files?.pdf?.[0])) {
-        const src = (req.files?.images?.[0] || req.files?.pdf?.[0])?.buffer;
+      if (pasted) {
+        ocrText = pasted;
+      } else if (wantsImmediateOCR && (imgUp[0] || pdfUp[0])) {
+        const src = (imgUp[0] || pdfUp[0])?.buffer;
         if (src?.length) ocrText = await runOcrSafe(src);
       }
 
-      const doc = await PrepModule.create({
+      // Save both modern and legacy fields so any schema works
+      const baseDoc = {
         examId,
         dayIndex: Number(dayIndex),
         slotMin: Number(slotMin || 0),
         title,
         description,
-        files,  // ✅ will persist now (schema updated)
+        files,                               // may be ignored if schema lacks it; legacy below still works
         flags,
         text: pasted || "",
         ocrText,
         releaseAt: relAt || undefined,
         status,
-      });
+      };
+      if (legacyImages.length) baseDoc.images = legacyImages;
+      if (legacyAudio) baseDoc.audio = legacyAudio;
+      if (legacyVideo) baseDoc.video = legacyVideo;
+      if (legacyPdf)   baseDoc.pdf   = legacyPdf;
+
+      const doc = await PrepModule.create(baseDoc);
 
       res.json({ success: true, item: doc });
     } catch (e) {
@@ -193,34 +250,50 @@ router.post(
   }
 );
 
+// update module (edit flags, add files, re-OCR, schedule, paste text)
 router.patch(
   "/templates/:id",
   isAdmin,
   upload.fields([
     { name: "images", maxCount: 12 },
+    { name: "images[]", maxCount: 12 },      // NEW
+    { name: "image",  maxCount: 12 },        // NEW
+    { name: "img",    maxCount: 12 },        // NEW
     { name: "pdf",    maxCount: 1  },
+    { name: "pdfs",   maxCount: 1  },        // NEW
     { name: "audio",  maxCount: 1  },
+    { name: "audios", maxCount: 1  },        // NEW
+    { name: "audioFile", maxCount: 1 },      // NEW
     { name: "video",  maxCount: 1  },
+    { name: "videos", maxCount: 1  },        // NEW
+    { name: "videoFile", maxCount: 1 },      // NEW
   ]),
   async (req, res) => {
     try {
       const doc = await PrepModule.findById(req.params.id);
       if (!doc) return res.status(404).json({ success: false, error: "Not found" });
 
+      // ensure arrays exist even if schema didn't previously have them
+      if (!Array.isArray(doc.files))  doc.files  = [];
+      if (!Array.isArray(doc.images)) doc.images = [];
+
+      // basic fields
       if (req.body.title       != null) doc.title = req.body.title;
       if (req.body.description != null) doc.description = req.body.description;
       if (req.body.dayIndex    != null) doc.dayIndex = Number(req.body.dayIndex);
       if (req.body.slotMin     != null) doc.slotMin = Number(req.body.slotMin);
 
+      // allow direct pasted text (content/manualText)
       const pasted =
         (req.body.content && String(req.body.content).trim()) ||
         (req.body.manualText && String(req.body.manualText).trim()) ||
         "";
       if (pasted) {
         doc.text = pasted;
-        doc.ocrText = pasted;
+        doc.ocrText = pasted; // immediately usable on UI
       }
 
+      // schedule
       if (req.body.releaseAt != null) {
         const rel = req.body.releaseAt ? new Date(req.body.releaseAt) : null;
         doc.releaseAt = rel || undefined;
@@ -228,11 +301,13 @@ router.patch(
         doc.status = rel && rel > now ? "scheduled" : "released";
       }
 
+      // flags (add ocrAtRelease alias)
       const setFlag = (k, v) => (doc.flags[k] = v);
       if (req.body.extractOCR   != null) setFlag("extractOCR",   truthy(req.body.extractOCR));
       if (req.body.ocrAtRelease != null) {
         const v = truthy(req.body.ocrAtRelease);
-        setFlag("ocrAtRelease", v); setFlag("deferOCRUntilRelease", v);
+        setFlag("ocrAtRelease", v);
+        setFlag("deferOCRUntilRelease", v); // keep in sync
       }
       if (req.body.showOriginal != null) setFlag("showOriginal", truthy(req.body.showOriginal));
       if (req.body.allowDownload!= null) setFlag("allowDownload",truthy(req.body.allowDownload));
@@ -240,8 +315,15 @@ router.patch(
       if (req.body.background   != null) setFlag("background",   req.body.background);
       if (req.body.deferOCRUntilRelease != null) {
         const v = truthy(req.body.deferOCRUntilRelease);
-        setFlag("deferOCRUntilRelease", v); setFlag("ocrAtRelease", v);
+        setFlag("deferOCRUntilRelease", v);
+        setFlag("ocrAtRelease", v);
       }
+
+      // new files (robust to various field names)
+      const imgUp   = collectFiles(req, ["images", "images[]", "image", "img"]);
+      const pdfUp   = collectFiles(req, ["pdf", "pdfs"]);
+      const audioUp = collectFiles(req, ["audio", "audios", "audioFile"]);
+      const videoUp = collectFiles(req, ["video", "videos", "videoFile"]);
 
       const toStore = async (f) =>
         storeBuffer({
@@ -249,16 +331,39 @@ router.patch(
           filename: f.originalname || f.fieldname,
           mime: f.mimetype || "application/octet-stream",
         });
-      const pushFile = (kind, payload) =>
-        doc.files.push({ kind, url: payload.url, mime: payload.mimetype || "" });
 
-      for (const f of req.files?.images || []) { try { pushFile("image", { ...(await toStore(f)), mimetype: f.mimetype }); } catch {} }
-      if (req.files?.pdf?.[0])   { const f = req.files.pdf[0];   try { pushFile("pdf",   { ...(await toStore(f)), mimetype: f.mimetype }); } catch {} }
-      if (req.files?.audio?.[0]) { const f = req.files.audio[0]; try { pushFile("audio", { ...(await toStore(f)), mimetype: f.mimetype }); } catch {} }
-      if (req.files?.video?.[0]) { const f = req.files.video[0]; try { pushFile("video", { ...(await toStore(f)), mimetype: f.mimetype }); } catch {} }
+      for (const f of imgUp) {
+        try {
+          const s = await toStore(f);
+          doc.files.push({ kind: "image", url: s.url, mime: f.mimetype || "" });
+          doc.images.push(s.url);             // legacy mirror
+        } catch {}
+      }
+      if (pdfUp[0]) {
+        try {
+          const s = await toStore(pdfUp[0]);
+          doc.files.push({ kind: "pdf", url: s.url, mime: pdfUp[0].mimetype || "" });
+          doc.pdf = s.url;                    // legacy mirror
+        } catch {}
+      }
+      if (audioUp[0]) {
+        try {
+          const s = await toStore(audioUp[0]);
+          doc.files.push({ kind: "audio", url: s.url, mime: audioUp[0].mimetype || "" });
+          doc.audio = s.url;                  // legacy mirror
+        } catch {}
+      }
+      if (videoUp[0]) {
+        try {
+          const s = await toStore(videoUp[0]);
+          doc.files.push({ kind: "video", url: s.url, mime: videoUp[0].mimetype || "" });
+          doc.video = s.url;                  // legacy mirror
+        } catch {}
+      }
 
+      // optional re-OCR now
       if (truthy(req.body.reOCR) && doc.flags.extractOCR && !doc.flags.ocrAtRelease && !doc.text) {
-        const uploaded = (req.files?.images?.[0] || req.files?.pdf?.[0])?.buffer;
+        const uploaded = (imgUp[0] || pdfUp[0])?.buffer;
         if (uploaded?.length) doc.ocrText = await runOcrSafe(uploaded);
       }
 
@@ -271,6 +376,7 @@ router.patch(
   }
 );
 
+// Delete module (admin)
 router.delete("/templates/:id", isAdmin, async (req, res) => {
   try {
     const r = await PrepModule.findByIdAndDelete(req.params.id);
@@ -282,6 +388,7 @@ router.delete("/templates/:id", isAdmin, async (req, res) => {
 });
 
 /* ================= Access (cohort) ================= */
+
 router.post("/access/grant", isAdmin, async (req, res) => {
   const { userEmail, examId, planDays = 30, startAt } = req.body || {};
   if (!userEmail || !examId) return res.status(400).json({ success: false, error: "userEmail & examId required" });
@@ -296,6 +403,7 @@ router.post("/access/grant", isAdmin, async (req, res) => {
 });
 
 /* ================= User summary (released vs upcoming + lazy OCR) ================= */
+
 router.get("/user/summary", async (req, res) => {
   const { examId, email } = req.query || {};
   if (!examId) return res.status(400).json({ success: false, error: "examId required" });
@@ -310,6 +418,7 @@ router.get("/user/summary", async (req, res) => {
   const startAt  = access?.startAt || now;
   const dayIdx   = Math.max(1, Math.min(planDays, Math.floor((now - new Date(startAt)) / 86400000) + 1));
 
+  // fetch all for this day, then split released vs upcoming (today)
   const all = await PrepModule
     .find({ examId, dayIndex: dayIdx })
     .sort({ releaseAt: 1, slotMin: 1 })
@@ -322,13 +431,21 @@ router.get("/user/summary", async (req, res) => {
   for (const m of all) {
     const rel = m.releaseAt ? new Date(m.releaseAt) : null;
     const isReleased = !rel || rel <= now2 || m.status === "released";
-    if (isReleased) released.push(m);
-    else if (rel && rel.toDateString() === now2.toDateString()) {
-      upcomingToday.push({ _id: m._id, title: m.title || "Untitled", releaseAt: rel });
+
+    if (isReleased) {
+      released.push(m);
+    } else {
+      if (rel && rel.toDateString() === now2.toDateString()) {
+        upcomingToday.push({
+          _id: m._id,
+          title: m.title || "Untitled",
+          releaseAt: rel,
+        });
+      }
     }
   }
 
-  // lazy OCR if needed
+  // Lazy OCR after release, if admin set "OCR at release" and we still don't have text
   for (const m of released) {
     const needsLazy =
       m?.flags?.extractOCR &&
@@ -353,7 +470,9 @@ router.get("/user/summary", async (req, res) => {
             }
           }
         }
-      } catch {}
+      } catch (e) {
+        // swallow; non-fatal
+      }
     }
   }
 
@@ -361,35 +480,29 @@ router.get("/user/summary", async (req, res) => {
     success: true,
     todayDay: dayIdx,
     planDays,
-    modules: released,        // includes files[] now that schema persists it
-    upcomingToday,
-    comingLater: upcomingToday,
+    modules: released,
+    upcomingToday,           // preferred key
+    comingLater: upcomingToday, // backward-compat for older UI
   });
 });
 
-/* ============== OPTIONAL: give UI a non-404 full "today" endpoint ============== */
-router.get("/user/today", async (req, res) => {
-  const { examId, email } = req.query || {};
-  if (!examId) return res.status(400).json({ success: false, error: "examId required" });
-
-  let access = null;
-  if (email) {
-    access = await PrepAccess.findOne({ examId, userEmail: email, status: "active" }).lean();
-  }
-  const now = new Date();
-  const planDays = access?.planDays || 3;
-  const startAt  = access?.startAt || now;
-  const dayIdx   = Math.max(1, Math.min(planDays, Math.floor((now - new Date(startAt)) / 86400000) + 1));
-
-  const items = await PrepModule
-    .find({ examId, dayIndex: dayIdx })
-    .sort({ slotMin: 1, releaseAt: 1 })
-    .lean();
-
-  res.json({ success: true, items, todayDay: dayIdx, planDays });
+// mark complete (fallback to guest if email missing)
+router.post("/user/complete", async (req, res) => {
+  const { examId, email, dayIndex } = req.body || {};
+  if (!examId || !dayIndex) return res.status(400).json({ success: false, error: "examId & dayIndex required" });
+  let userKey = (email || "").trim();
+  if (!userKey) userKey = `guest:${req.ip || "0.0.0.0"}`;
+  const doc = await PrepProgress.findOneAndUpdate(
+    { userEmail: userKey, examId },
+    { $addToSet: { completedDays: Number(dayIndex) } },
+    { upsert: true, new: true }
+  );
+  res.json({ success: true, progress: doc });
 });
 
 /* ================= Light "cron" to flip scheduled → released ================= */
+
+// Every minute: release any scheduled modules whose time has arrived.
 setInterval(async () => {
   try {
     const now = new Date();
