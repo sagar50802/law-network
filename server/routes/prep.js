@@ -1,4 +1,3 @@
-// server/routes/prep.js
 // ---------------------------------------------------------------------------
 // LawNetwork Prep Routes — Exams, Modules, Access, and Progress
 // ---------------------------------------------------------------------------
@@ -267,32 +266,67 @@ router.delete("/templates/:id", isAdmin, async (req, res) => {
 /*                               User endpoints                               */
 /* -------------------------------------------------------------------------- */
 
-// Summary (planDays, todayDay)
+// Helper: compute "todayDay" for an exam/user (clamped to planDays)
+async function computeTodayDay(examId, email) {
+  const now = new Date();
+
+  // Try active access (preferred)
+  const access = email
+    ? await PrepAccess.findOne({ examId, userEmail: email, status: "active" }).lean()
+    : null;
+
+  // Determine planDays to clamp against:
+  let planDays = 1;
+  if (access?.planDays) {
+    planDays = Number(access.planDays) || 1;
+  } else {
+    // Fallback to highest day index defined for the exam
+    const days = await PrepModule.find({ examId }).distinct("dayIndex");
+    planDays = days.length ? Math.max(...days.map(Number)) : 1;
+  }
+
+  // If no access, default to Day 1
+  if (!access) return 1;
+
+  const start = new Date(access.startAt || now);
+  const dayIndex = Math.floor((now - start) / 86400000) + 1;
+  return Math.max(1, Math.min(planDays, dayIndex));
+}
+
+// Summary (planDays, todayDay) — now computes todayDay using PrepAccess (if present)
 router.get("/user/summary", async (req, res) => {
-  const { examId } = req.query || {};
+  const { examId, email } = req.query || {};
   if (!examId)
     return res
       .status(400)
       .json({ success: false, error: "examId required" });
 
-  const maxDay = await PrepModule.find({ examId }).distinct("dayIndex");
-  const planDays = maxDay.length ? Math.max(...maxDay.map(Number)) : 1;
-  const todayDay = 1; // simple placeholder (you can expand logic later)
+  const planDays = (await PrepModule.find({ examId }).distinct("dayIndex"))
+    .map(Number)
+    .filter(Number.isFinite)
+    .reduce((m, v) => Math.max(m, v), 1);
+
+  const todayDay = await computeTodayDay(examId, email);
+
   res.json({ success: true, planDays, todayDay });
 });
 
-// Today's modules (released + scheduled)
+// Today's modules (for the computed day). Includes released + scheduled for that day.
+// The client shows "Coming later" using releaseAt.
 router.get("/user/today", async (req, res) => {
-  const { examId } = req.query || {};
+  const { examId, email } = req.query || {};
   if (!examId)
     return res
       .status(400)
       .json({ success: false, error: "examId required" });
 
-  const items = await PrepModule.find({ examId })
-    .sort({ dayIndex: 1, slotMin: 1 })
+  const day = await computeTodayDay(examId, email);
+
+  const items = await PrepModule.find({ examId, dayIndex: day })
+    .sort({ releaseAt: 1, slotMin: 1 })
     .lean();
-  res.json({ success: true, items });
+
+  res.json({ success: true, items, todayDay: day });
 });
 
 // Mark completion
