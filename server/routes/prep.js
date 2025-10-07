@@ -39,9 +39,10 @@ async function storeBuffer({ buffer, filename, mime, bucket = "prep" }) {
   const contentType = mime || "application/octet-stream";
 
   // Prefer R2 if available
-  if (R2?.r2Enabled?.() && R2?.uploadBuffer) {
+  if (R2?.r2Enabled && R2?.uploadBuffer) {
     try {
-      const url = await R2.uploadBuffer(buffer, name, contentType);
+      // r2.js defines uploadBuffer(key, buffer, contentType, ...)
+      const url = await R2.uploadBuffer(name, buffer, contentType);
       return { url, via: "r2" };
     } catch (e) {
       console.warn("[prep] R2 upload failed, falling back to GridFS:", e?.message || e);
