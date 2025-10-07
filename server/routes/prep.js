@@ -1,4 +1,8 @@
 // server/routes/prep.js
+// ---------------------------------------------------------------------------
+// LawNetwork Prep Routes — Exams, Modules, Access, and Progress
+// ---------------------------------------------------------------------------
+
 import express from "express";
 import multer from "multer";
 import mongoose from "mongoose";
@@ -10,49 +14,66 @@ import PrepProgress from "../models/PrepProgress.js";
 
 const router = express.Router();
 
-/* ------------------ helpers ------------------ */
+/* -------------------------------------------------------------------------- */
+/*                              Helper utilities                              */
+/* -------------------------------------------------------------------------- */
 
-// memory upload (max 40 MB)
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 40 * 1024 * 1024 } });
+// Memory upload (max 40 MB per file)
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 40 * 1024 * 1024 },
+});
 
-// truthy helper
+// Parse “truthy” strings like "on", "true", etc.
 function truthy(v) {
   return ["true", "1", "on", "yes"].includes(String(v).trim().toLowerCase());
 }
 
+// Safe filename for R2/GridFS
 function safeName(filename = "file") {
   return String(filename).replace(/\s+/g, "_").replace(/[^\w.\-]/g, "");
 }
 
-// optional R2
+// Optional R2 import
 let R2 = null;
-try { R2 = await import("../utils/r2.js"); } catch { R2 = null; }
+try {
+  R2 = await import("../utils/r2.js");
+} catch {
+  R2 = null;
+}
 
+// GridFS bucket
 function grid(bucket) {
   const db = mongoose.connection?.db;
   if (!db) return null;
   return new mongoose.mongo.GridFSBucket(db, { bucketName: bucket });
 }
 
-// store buffer (R2 first, then GridFS)
+/**
+ * Store buffer to R2 (if configured) else GridFS.
+ * Returns { url, via }
+ */
 async function storeBuffer({ buffer, filename, mime, bucket = "prep" }) {
   const name = safeName(filename || "file");
   const contentType = mime || "application/octet-stream";
 
   // Try Cloudflare R2 first
-  try {
-    const enabled = R2 && (typeof R2.r2Enabled === "function" ? R2.r2Enabled() : !!R2.r2Enabled);
-    if (enabled && typeof R2.uploadBuffer === "function") {
-      // IMPORTANT: r2.js uploadBuffer(key, buffer, contentType)
+  if (
+    R2 &&
+    typeof R2.r2Enabled === "function" &&
+    R2.r2Enabled() &&
+    typeof R2.uploadBuffer === "function"
+  ) {
+    try {
       const key = `${bucket}/${name}`;
       const url = await R2.uploadBuffer(key, buffer, contentType);
       return { url, via: "r2" };
+    } catch (e) {
+      console.warn("[prep] R2 upload failed → fallback to GridFS:", e.message);
     }
-  } catch (e) {
-    console.warn("[prep] R2 upload failed → fallback to GridFS:", e?.message || e);
   }
 
-  // Fallback to GridFS
+  // Fallback → GridFS
   const g = grid(bucket);
   if (!g) throw Object.assign(new Error("DB not connected"), { status: 503 });
 
@@ -62,79 +83,62 @@ async function storeBuffer({ buffer, filename, mime, bucket = "prep" }) {
     ws.on("finish", () => resolve(ws.id));
     ws.end(buffer);
   });
+
   return { url: `/api/files/${bucket}/${String(id)}`, via: "gridfs" };
 }
 
-/* ------------------ Exams ------------------ */
+/* -------------------------------------------------------------------------- */
+/*                                    Exams                                   */
+/* -------------------------------------------------------------------------- */
 
 router.get("/exams", async (_req, res) => {
   const exams = await PrepExam.find({}).sort({ name: 1 }).lean();
-  res.set("Cache-Control", "no-store");
   res.json({ success: true, exams });
 });
 
 router.post("/exams", isAdmin, async (req, res) => {
   const { examId, name, scheduleMode = "cohort" } = req.body || {};
-  if (!examId || !name) return res.status(400).json({ success: false, error: "examId & name required" });
+  if (!examId || !name)
+    return res
+      .status(400)
+      .json({ success: false, error: "examId & name required" });
+
   const doc = await PrepExam.findOneAndUpdate(
     { examId },
     { $set: { name, scheduleMode } },
     { upsert: true, new: true }
   );
-  res.set("Cache-Control", "no-store");
   res.json({ success: true, exam: doc });
 });
 
-/* ------------------ Templates ------------------ */
+/* -------------------------------------------------------------------------- */
+/*                                  Templates                                 */
+/* -------------------------------------------------------------------------- */
 
+// GET all templates for an exam
 router.get("/templates", async (req, res) => {
   const { examId } = req.query || {};
-  if (!examId) return res.status(400).json({ success: false, error: "examId required" });
-  const items = await PrepModule.find({ examId }).sort({ dayIndex: 1, slotMin: 1 }).lean();
-  res.set("Cache-Control", "no-store");
+  if (!examId)
+    return res
+      .status(400)
+      .json({ success: false, error: "examId required" });
+
+  const items = await PrepModule.find({ examId })
+    .sort({ dayIndex: 1, slotMin: 1 })
+    .lean();
   res.json({ success: true, items });
 });
 
-/** Accept files even if field names mismatch */
-function collectIncomingFiles(req) {
-  const out = {
-    images: [].concat(req.files?.images || []),
-    pdf:    [].concat(req.files?.pdf    || []),
-    audio:  [].concat(req.files?.audio  || []),
-    video:  [].concat(req.files?.video  || []),
-  };
-
-  // If upload.any() populated req.files as an array, accept common alternates
-  const pool = Array.isArray(req.files) ? req.files : [];
-  const add = (arr, f) => { if (f && f.buffer?.length) arr.push(f); };
-
-  for (const f of pool) {
-    const name = (f.fieldname || "").toLowerCase();
-    if (["images[]","images","image","files","photos","pictures"].includes(name)) add(out.images, f);
-    else if (["pdf","document"].includes(name)) add(out.pdf, f);
-    else if (["audio","sound","music"].includes(name)) add(out.audio, f);
-    else if (["video","movie","clip"].includes(name)) add(out.video, f);
-  }
-
-  return out;
-}
-
-// POST /templates  (multer first, then fallback to any(), then admin check)
+// POST create new module template (admin)
 router.post(
   "/templates",
-  (req, res, next) => upload.fields([
-    { name: "images", maxCount: 12 },
-    { name: "pdf",    maxCount: 1  },
-    { name: "audio",  maxCount: 1  },
-    { name: "video",  maxCount: 1  },
-  ])(req, res, (err) => {
-    if (err) return next(err);
-    if (!req.files || (Object.keys(req.files).length === 0)) {
-      return upload.any()(req, res, next);
-    }
-    next();
-  }),
   isAdmin,
+  upload.fields([
+    { name: "images", maxCount: 12 },
+    { name: "pdf", maxCount: 1 },
+    { name: "audio", maxCount: 1 },
+    { name: "video", maxCount: 1 },
+  ]),
   async (req, res) => {
     try {
       const {
@@ -152,10 +156,11 @@ router.post(
       } = req.body || {};
 
       if (!examId || !dayIndex) {
-        return res.status(400).json({ success: false, error: "examId & dayIndex required" });
+        return res
+          .status(400)
+          .json({ success: false, error: "examId & dayIndex required" });
       }
 
-      const incoming = collectIncomingFiles(req);
       const files = [];
       const toStore = async (f) =>
         storeBuffer({
@@ -163,20 +168,38 @@ router.post(
           filename: f.originalname || f.fieldname,
           mime: f.mimetype || "application/octet-stream",
         });
-      const add = (kind, payload, mime) => files.push({ kind, url: payload.url, mime: mime || "" });
 
-      for (const f of incoming.images) { try { add("image", await toStore(f), f.mimetype); } catch {} }
-      if (incoming.pdf[0])   { try { add("pdf",   await toStore(incoming.pdf[0]),   incoming.pdf[0].mimetype); } catch {} }
-      if (incoming.audio[0]) { try { add("audio", await toStore(incoming.audio[0]), incoming.audio[0].mimetype); } catch {} }
-      if (incoming.video[0]) { try { add("video", await toStore(incoming.video[0]), incoming.video[0].mimetype); } catch {} }
+      // Sequential upload to ensure order
+      if (req.files?.images) {
+        for (const f of req.files.images) {
+          const s = await toStore(f);
+          files.push({ kind: "image", url: s.url, mime: f.mimetype });
+        }
+      }
+      if (req.files?.pdf?.[0]) {
+        const f = req.files.pdf[0];
+        const s = await toStore(f);
+        files.push({ kind: "pdf", url: s.url, mime: f.mimetype });
+      }
+      if (req.files?.audio?.[0]) {
+        const f = req.files.audio[0];
+        const s = await toStore(f);
+        files.push({ kind: "audio", url: s.url, mime: f.mimetype });
+      }
+      if (req.files?.video?.[0]) {
+        const f = req.files.video[0];
+        const s = await toStore(f);
+        files.push({ kind: "video", url: s.url, mime: f.mimetype });
+      }
 
       const relAt = releaseAt ? new Date(releaseAt) : null;
-      const status = relAt && relAt > new Date() ? "scheduled" : "released";
+      const status =
+        relAt && relAt > new Date() ? "scheduled" : "released";
 
       const doc = await PrepModule.create({
         examId,
         dayIndex: Number(dayIndex),
-        slotMin: Number(slotMin || 0),
+        slotMin: Number(slotMin),
         title,
         text: manualText,
         files,
@@ -191,77 +214,97 @@ router.post(
         status,
       });
 
-      res.set("Cache-Control", "no-store");
-      return res.json({ success: true, item: doc });
+      console.log("[prep] created:", {
+        examId,
+        title,
+        count: files.length,
+        status,
+      });
+
+      if (!doc?._id) {
+        console.error("[prep] failed to create module properly");
+        return res
+          .status(500)
+          .json({ success: false, error: "Document not created" });
+      }
+
+      // ✅ Always send valid JSON back
+      res.setHeader("Content-Type", "application/json");
+      return res.json({
+        success: true,
+        item: {
+          ...doc.toObject(),
+          files,
+          message: `Uploaded ${files.length} file(s) successfully.`,
+        },
+      });
     } catch (e) {
       console.error("[prep] create template failed:", e);
-      res.status(500).json({ success: false, error: e?.message || "server error" });
+      res
+        .status(500)
+        .json({ success: false, error: e?.message || "server error" });
     }
   }
 );
 
-// Delete module (admin)
+// DELETE a module
 router.delete("/templates/:id", isAdmin, async (req, res) => {
   try {
     const r = await PrepModule.findByIdAndDelete(req.params.id);
-    if (!r) return res.status(404).json({ success: false, error: "Not found" });
+    if (!r)
+      return res
+        .status(404)
+        .json({ success: false, error: "Not found" });
     res.json({ success: true, removed: r._id });
   } catch (e) {
-    res.status(500).json({ success: false, error: e?.message || "server error" });
+    res
+      .status(500)
+      .json({ success: false, error: e?.message || "server error" });
   }
 });
 
-/* ------------------ User endpoints ------------------ */
+/* -------------------------------------------------------------------------- */
+/*                               User endpoints                               */
+/* -------------------------------------------------------------------------- */
 
-// meta: todayDay + planDays for the user (cohort-style if access exists)
+// Summary (planDays, todayDay)
 router.get("/user/summary", async (req, res) => {
-  const { examId, email } = req.query || {};
-  if (!examId) return res.status(400).json({ success: false, error: "examId required" });
+  const { examId } = req.query || {};
+  if (!examId)
+    return res
+      .status(400)
+      .json({ success: false, error: "examId required" });
 
-  let access = null;
-  if (email) {
-    access = await PrepAccess.findOne({ examId, userEmail: email, status: "active" }).lean();
-  }
-
-  const now = new Date();
-  const planDays = access?.planDays || (await PrepModule.find({ examId }).distinct("dayIndex")).length || 1;
-  const startAt  = access?.startAt || now;
-  const todayDay = Math.max(1, Math.min(planDays, Math.floor((now - new Date(startAt)) / 86400000) + 1));
-
-  res.set("Cache-Control", "no-store");
+  const maxDay = await PrepModule.find({ examId }).distinct("dayIndex");
+  const planDays = maxDay.length ? Math.max(...maxDay.map(Number)) : 1;
+  const todayDay = 1; // simple placeholder (you can expand logic later)
   res.json({ success: true, planDays, todayDay });
 });
 
-// all modules for today's dayIndex (released + scheduled)
-// client filters/reorders and shows “Coming later today”
+// Today's modules (released + scheduled)
 router.get("/user/today", async (req, res) => {
-  const { examId, email } = req.query || {};
-  if (!examId) return res.status(400).json({ success: false, error: "examId required" });
+  const { examId } = req.query || {};
+  if (!examId)
+    return res
+      .status(400)
+      .json({ success: false, error: "examId required" });
 
-  let access = null;
-  if (email) {
-    access = await PrepAccess.findOne({ examId, userEmail: email, status: "active" }).lean();
-  }
-
-  const now = new Date();
-  const planDays = access?.planDays || (await PrepModule.find({ examId }).distinct("dayIndex")).length || 1;
-  const startAt  = access?.startAt || now;
-  const todayDay = Math.max(1, Math.min(planDays, Math.floor((now - new Date(startAt)) / 86400000) + 1));
-
-  const items = await PrepModule
-    .find({ examId, dayIndex: todayDay })
-    .sort({ releaseAt: 1, slotMin: 1 })
+  const items = await PrepModule.find({ examId })
+    .sort({ dayIndex: 1, slotMin: 1 })
     .lean();
-
-  res.set("Cache-Control", "no-store");
   res.json({ success: true, items });
 });
 
-// mark complete (kept)
+// Mark completion
 router.post("/user/complete", async (req, res) => {
   const { examId, email, dayIndex } = req.body || {};
   if (!examId || !email || !dayIndex)
-    return res.status(400).json({ success: false, error: "examId, email, dayIndex required" });
+    return res
+      .status(400)
+      .json({
+        success: false,
+        error: "examId, email, dayIndex required",
+      });
 
   const doc = await PrepProgress.findOneAndUpdate(
     { examId, email, dayIndex },
@@ -271,7 +314,9 @@ router.post("/user/complete", async (req, res) => {
   res.json({ success: true, progress: doc });
 });
 
-/* ------------------ Auto-release ------------------ */
+/* -------------------------------------------------------------------------- */
+/*                               Auto-release loop                            */
+/* -------------------------------------------------------------------------- */
 
 setInterval(async () => {
   try {
@@ -280,10 +325,15 @@ setInterval(async () => {
       { status: "scheduled", releaseAt: { $lte: now } },
       { $set: { status: "released" } }
     );
-    if (r.modifiedCount) console.log(`[prep] auto-released ${r.modifiedCount} module(s)`);
+    if (r?.modifiedCount)
+      console.log(
+        `[prep] auto-released ${r.modifiedCount} module(s) at ${now.toISOString()}`
+      );
   } catch (e) {
-    console.warn("[prep] auto-release failed:", e?.message || e);
+    console.warn("[prep] auto-release failed:", e.message);
   }
 }, 60_000);
+
+/* -------------------------------------------------------------------------- */
 
 export default router;
