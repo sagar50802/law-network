@@ -5,7 +5,20 @@
 import express from "express";
 import multer from "multer";
 import mongoose from "mongoose";
-import pdfParse from "pdf-parse"; // ← NEW
+// ---- SAFE pdf-parse import (avoids test/demo entry) -----------------------
+let pdfParse = null;
+try {
+  // Preferred: import the library entry directly
+  pdfParse = (await import("pdf-parse/lib/pdf-parse.js")).default;
+} catch {
+  try {
+    // Fallback: normal entry
+    pdfParse = (await import("pdf-parse")).default;
+  } catch {
+    pdfParse = null;
+    console.warn("[prep] pdf-parse not available; PDF OCR disabled");
+  }
+}
 import { isAdmin } from "./utils.js";
 import PrepExam from "../models/PrepExam.js";
 import PrepModule from "../models/PrepModule.js";
@@ -90,6 +103,7 @@ async function storeBuffer({ buffer, filename, mime, bucket = "prep" }) {
 /* -------------------- OCR helpers (PDF now, images later) ------------------- */
 
 async function tryPdfText(buf) {
+  if (!pdfParse) return "";
   try {
     const out = await pdfParse(buf);
     return (out.text || "").trim();
@@ -138,7 +152,7 @@ router.post("/exams", isAdmin, async (req, res) => {
   res.json({ success: true, exam: doc });
 });
 
-// NEW: delete an exam and related records
+// Delete an exam and related records (modules/access/progress)
 router.delete("/exams/:examId", isAdmin, async (req, res) => {
   try {
     const examId = req.params.examId;
@@ -239,7 +253,7 @@ router.post(
         files.push({ kind: "video", url: s.url, mime: f.mimetype });
       }
 
-      // NEW: best-effort text (manual/pasted/OCR)
+      // Best-effort text (manual/pasted/OCR)
       const bestText = await computeBestText({ body: req.body, files: req.files });
 
       const relAt = releaseAt ? new Date(releaseAt) : null;
@@ -251,7 +265,7 @@ router.post(
         dayIndex: Number(dayIndex),
         slotMin: Number(slotMin),
         title,
-        text: bestText || manualText, // keep compatibility
+        text: bestText || manualText,
         files,
         flags: {
           extractOCR: truthy(extractOCR),
@@ -344,7 +358,7 @@ async function computeTodayDay(examId, email) {
   return Math.max(1, Math.min(planDays, dayIndex));
 }
 
-// Summary (planDays, todayDay) — now computes todayDay using PrepAccess (if present)
+// Summary (planDays, todayDay)
 router.get("/user/summary", async (req, res) => {
   const { examId, email } = req.query || {};
   if (!examId)
@@ -362,7 +376,7 @@ router.get("/user/summary", async (req, res) => {
   res.json({ success: true, planDays, todayDay });
 });
 
-// Today's modules (for the computed day). Includes released + scheduled for that day.
+// Today's modules (released + scheduled for that day)
 router.get("/user/today", async (req, res) => {
   const { examId, email } = req.query || {};
   if (!examId)
@@ -414,8 +428,7 @@ setInterval(async () => {
         `[prep] auto-released ${r.modifiedCount} module(s) at ${now.toISOString()}`
       );
 
-    // OPTIONAL: OCR-at-release for PDFs that have extractOCR flag but empty text
-    // (limits to a few per minute to keep overhead tiny)
+    // OCR-at-release for PDFs with extractOCR flag but empty text (tiny batch)
     const candidates = await PrepModule.find({
       status: "released",
       $or: [{ text: { $exists: false } }, { text: "" }],
