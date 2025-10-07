@@ -12,7 +12,7 @@ const router = express.Router();
 
 /* --------- helpers --------- */
 
-// 40 MB memory storage exactly like you had
+// 40 MB memory storage
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 40 * 1024 * 1024 } });
 
 // truthy helper for checkboxes
@@ -34,15 +34,17 @@ function safeName(filename = "file") {
   return String(filename).replace(/\s+/g, "_").replace(/[^\w.\-]/g, "");
 }
 
+// IMPORTANT: fixed R2 signature & r2Enabled (boolean, not function)
 async function storeBuffer({ buffer, filename, mime, bucket = "prep" }) {
   const name = safeName(filename || "file");
   const contentType = mime || "application/octet-stream";
 
   // Prefer R2 if available
-  if (R2?.r2Enabled && R2?.uploadBuffer) {
+  if (R2 && R2.r2Enabled && typeof R2.uploadBuffer === "function") {
     try {
       // r2.js defines uploadBuffer(key, buffer, contentType, ...)
-      const url = await R2.uploadBuffer(name, buffer, contentType);
+      const key = `${bucket}/${name}`;
+      const url = await R2.uploadBuffer(key, buffer, contentType);
       return { url, via: "r2" };
     } catch (e) {
       console.warn("[prep] R2 upload failed, falling back to GridFS:", e?.message || e);
@@ -77,7 +79,7 @@ async function runOcrSafe(buffer) {
   }
 }
 
-// ------- NEW helpers for lazy OCR-at-release (GridFS only) -------
+// ------- helpers for lazy OCR-at-release (GridFS only) -------
 const { Types } = mongoose;
 async function gridFetchBuffer(bucket, id) {
   const g = grid(bucket);
@@ -124,20 +126,16 @@ router.get("/templates", async (req, res) => {
 });
 
 /* ---------- COMMON: normalize files from ANY field name ---------- */
-/** Accept files even if the frontend used wrong field names or singles */
 function collectIncomingFiles(req) {
-  // priority: multer.fields() registered names
   const out = {
     images: [].concat(req.files?.images || []),
     pdf:    [].concat(req.files?.pdf    || []),
     audio:  [].concat(req.files?.audio  || []),
     video:  [].concat(req.files?.video  || []),
   };
-
-  // Tolerate common alternate names or when upload.any() is used downstream
+  // tolerate upload.any() shape
   const pool = Array.isArray(req.files) ? req.files : [];
   const add = (arr, f) => { if (f && f.buffer?.length) arr.push(f); };
-
   for (const f of pool) {
     const name = (f.fieldname || "").toLowerCase();
     if (["images[]","images","image","files","photos","pictures"].includes(name)) add(out.images, f);
@@ -145,21 +143,18 @@ function collectIncomingFiles(req) {
     else if (["audio","sound","music"].includes(name)) add(out.audio, f);
     else if (["video","movie","clip"].includes(name)) add(out.video, f);
   }
-
   return out;
 }
 
-/* -------- create module (releaseAt, pasted text, OCR-at-release) -------- */
+/* -------- create module -------- */
 router.post(
   "/templates",
-  // Accept known field names AND gracefully accept any() in case of mismatch
   (req, res, next) => upload.fields([
     { name: "images", maxCount: 12 },
     { name: "pdf",    maxCount: 1  },
     { name: "audio",  maxCount: 1  },
     { name: "video",  maxCount: 1  },
   ])(req, res, (err) => {
-    // If fields() didn't pick anything (wrong field names), fall back to any()
     if (!err && (!req.files || (Object.keys(req.files).length === 0))) {
       return upload.any()(req, res, next);
     }
@@ -170,9 +165,7 @@ router.post(
     try {
       const {
         examId, dayIndex, slotMin = 0, title = "", description = "",
-        // schedule + manual text
         releaseAt, content = "", manualText = "",
-        // flags (aliases kept for compatibility)
         extractOCR = "false", showOriginal = "false", allowDownload = "false",
         highlight = "false", background = "",
         ocrAtRelease = "false", deferOCRUntilRelease = "false",
@@ -182,7 +175,7 @@ router.post(
         return res.status(400).json({ success: false, error: "examId & dayIndex required" });
       }
 
-      // merge files from any field name
+      // merge files
       const incoming = collectIncomingFiles(req);
       const files = [];
       const toStore = async (f) =>
@@ -198,16 +191,13 @@ router.post(
       for (const f of incoming.audio)  { try { addFile("audio", await toStore(f), f.mimetype); } catch {} }
       for (const f of incoming.video)  { try { addFile("video", await toStore(f), f.mimetype); } catch {} }
 
-      // schedule
+      // schedule & status
       const relAt = releaseAt ? new Date(releaseAt) : null;
       const now = new Date();
       const status = relAt && relAt > now ? "scheduled" : "released";
 
-      // OCR intent
-      const wantsOCRAtRelease = truthy(ocrAtRelease) || truthy(deferOCRUntilRelease);
-      const wantsImmediateOCR = truthy(extractOCR) && !wantsOCRAtRelease;
-
       // flags
+      const wantsOCRAtRelease = truthy(ocrAtRelease) || truthy(deferOCRUntilRelease);
       const flags = {
         extractOCR: truthy(extractOCR) || wantsOCRAtRelease,
         ocrAtRelease: wantsOCRAtRelease,
@@ -218,13 +208,13 @@ router.post(
         background,
       };
 
-      // text preference: manual content overrides OCR
+      // text
       let ocrText = "";
       const pasted = (content || manualText || "").trim();
       if (pasted) {
         ocrText = pasted;
-      } else if (wantsImmediateOCR && (incoming.images[0] || incoming.pdf[0])) {
-        const src = (incoming.images[0] || incoming.pdf[0])?.buffer;
+      } else if (truthy(extractOCR) && !wantsOCRAtRelease && (incoming.images[0] || incoming.pdf[0])) {
+        const src = (incoming.images[0] || incoming.pdf[0]).buffer;
         if (src?.length) ocrText = await runOcrSafe(src);
       }
 
@@ -250,7 +240,7 @@ router.post(
   }
 );
 
-// update module (edit flags, add files, re-OCR, schedule, paste text)
+/* -------- update module -------- */
 router.patch(
   "/templates/:id",
   (req, res, next) => upload.fields([
@@ -270,20 +260,20 @@ router.patch(
       const doc = await PrepModule.findById(req.params.id);
       if (!doc) return res.status(404).json({ success: false, error: "Not found" });
 
-      // basic fields
+      // basics
       if (req.body.title       != null) doc.title = req.body.title;
       if (req.body.description != null) doc.description = req.body.description;
       if (req.body.dayIndex    != null) doc.dayIndex = Number(req.body.dayIndex);
       if (req.body.slotMin     != null) doc.slotMin = Number(req.body.slotMin);
 
-      // allow direct pasted text (content/manualText)
+      // pasted text
       const pasted =
         (req.body.content && String(req.body.content).trim()) ||
         (req.body.manualText && String(req.body.manualText).trim()) ||
         "";
       if (pasted) {
         doc.text = pasted;
-        doc.ocrText = pasted; // immediately usable on UI
+        doc.ocrText = pasted;
       }
 
       // schedule
@@ -294,13 +284,13 @@ router.patch(
         doc.status = rel && rel > now ? "scheduled" : "released";
       }
 
-      // flags (add ocrAtRelease alias)
+      // flags
       const setFlag = (k, v) => (doc.flags[k] = v);
       if (req.body.extractOCR   != null) setFlag("extractOCR",   truthy(req.body.extractOCR));
       if (req.body.ocrAtRelease != null) {
         const v = truthy(req.body.ocrAtRelease);
         setFlag("ocrAtRelease", v);
-        setFlag("deferOCRUntilRelease", v); // keep in sync
+        setFlag("deferOCRUntilRelease", v);
       }
       if (req.body.showOriginal != null) setFlag("showOriginal", truthy(req.body.showOriginal));
       if (req.body.allowDownload!= null) setFlag("allowDownload",truthy(req.body.allowDownload));
@@ -312,7 +302,7 @@ router.patch(
         setFlag("ocrAtRelease", v);
       }
 
-      // new files (tolerate any field name)
+      // new files
       const incoming = collectIncomingFiles(req);
       const toStore = async (f) =>
         storeBuffer({
@@ -385,7 +375,6 @@ router.get("/user/summary", async (req, res) => {
   const startAt  = access?.startAt || now;
   const dayIdx   = Math.max(1, Math.min(planDays, Math.floor((now - new Date(startAt)) / 86400000) + 1));
 
-  // fetch all for this day, then split released vs upcoming (today)
   const all = await PrepModule
     .find({ examId, dayIndex: dayIdx })
     .sort({ releaseAt: 1, slotMin: 1 })
@@ -398,21 +387,13 @@ router.get("/user/summary", async (req, res) => {
   for (const m of all) {
     const rel = m.releaseAt ? new Date(m.releaseAt) : null;
     const isReleased = !rel || rel <= now2 || m.status === "released";
-
-    if (isReleased) {
-      released.push(m);
-    } else {
-      if (rel && rel.toDateString() === now2.toDateString()) {
-        upcomingToday.push({
-          _id: m._id,
-          title: m.title || "Untitled",
-          releaseAt: rel,
-        });
-      }
+    if (isReleased) released.push(m);
+    else if (rel && rel.toDateString() === now2.toDateString()) {
+      upcomingToday.push({ _id: m._id, title: m.title || "Untitled", releaseAt: rel });
     }
   }
 
-  // Lazy OCR after release
+  // Lazy OCR (GridFS sources only)
   for (const m of released) {
     const needsLazy =
       m?.flags?.extractOCR &&
@@ -437,9 +418,7 @@ router.get("/user/summary", async (req, res) => {
             }
           }
         }
-      } catch (e) {
-        // swallow; non-fatal
-      }
+      } catch { /* non-fatal */ }
     }
   }
 
@@ -453,13 +432,11 @@ router.get("/user/summary", async (req, res) => {
   });
 });
 
-/* --------- NEW: optional /user/today alias so the 404 goes away --------- */
+/* --------- /user/today alias (your frontend hit this) --------- */
 router.get("/user/today", async (req, res) => {
-  // Return the same "released modules" as summary, but include full items array
   const { examId, email } = req.query || {};
   if (!examId) return res.status(400).json({ success: false, error: "examId required" });
 
-  // reuse logic above
   const now = new Date();
   let access = null;
   if (email) access = await PrepAccess.findOne({ examId, userEmail: email, status: "active" }).lean();
@@ -474,7 +451,6 @@ router.get("/user/today", async (req, res) => {
 
 /* ================= Light "cron" to flip scheduled → released ================= */
 
-// Every minute: release any scheduled modules whose time has arrived.
 setInterval(async () => {
   try {
     const now = new Date();
