@@ -94,14 +94,23 @@ function tryGetGridIdFromUrl(url = "") {
   return m ? { bucket: m[1], id: m[2] } : null;
 }
 
-// ------- NEW: accept multiple possible field names from the admin form -------
-function collectFiles(req, names) {
-  const out = [];
-  for (const n of names) {
-    const arr = (req.files && req.files[n]) || [];
-    for (const f of arr) out.push(f);
-  }
-  return out;
+/** ---- NEW: pull files regardless of fieldname; infer kind from field or mime ---- */
+function listIncomingFiles(req) {
+  if (!req.files) return [];
+  // support both shapes (multer.any() -> array; multer.fields() -> object)
+  return Array.isArray(req.files) ? req.files : Object.values(req.files).flat();
+}
+function inferKind(fieldname = "", mimetype = "") {
+  const f = (fieldname || "").toLowerCase();
+  const m = (mimetype || "").toLowerCase();
+  if (f.includes("pdf") || m === "application/pdf") return "pdf";
+  if (f.includes("image") || m.startsWith("image/")) return "image";
+  if (f.includes("audio") || f.includes("sound") || m.startsWith("audio/")) return "audio";
+  if (f.includes("video") || m.startsWith("video/")) return "video";
+  // fallback by major type
+  const major = m.split("/")[0];
+  if (major === "image" || major === "audio" || major === "video") return major;
+  return "file";
 }
 
 /* ================= Exams ================= */
@@ -132,31 +141,17 @@ router.get("/templates", async (req, res) => {
   res.json({ success: true, items });
 });
 
-// create module (now supports releaseAt, pasted text, OCR-at-release)
+// create module (supports releaseAt, pasted text, OCR-at-release)
+// IMPORTANT: accept ANY file field name so Admin UI doesn't need to match exactly
 router.post(
   "/templates",
   isAdmin,
-  upload.fields([
-    { name: "images", maxCount: 12 },
-    { name: "images[]", maxCount: 12 },        // NEW: accept images[]
-    { name: "image",  maxCount: 12 },          // NEW
-    { name: "img",    maxCount: 12 },          // NEW
-    { name: "pdf",    maxCount: 1  },
-    { name: "pdfs",   maxCount: 1  },          // NEW
-    { name: "audio",  maxCount: 1  },
-    { name: "audios", maxCount: 1  },          // NEW
-    { name: "audioFile", maxCount: 1 },        // NEW
-    { name: "video",  maxCount: 1  },
-    { name: "videos", maxCount: 1  },          // NEW
-    { name: "videoFile", maxCount: 1 },        // NEW
-  ]),
+  upload.any(),            // <— was fields([...]); accept any field name now
   async (req, res) => {
     try {
       const {
         examId, dayIndex, slotMin = 0, title = "", description = "",
-        // schedule + manual text
         releaseAt, content = "", manualText = "",
-        // flags (aliases kept for compatibility)
         extractOCR = "false", showOriginal = "false", allowDownload = "false",
         highlight = "false", background = "",
         ocrAtRelease = "false", deferOCRUntilRelease = "false",
@@ -166,30 +161,24 @@ router.post(
         return res.status(400).json({ success: false, error: "examId & dayIndex required" });
       }
 
-      // files (collect from many possible keys)
-      const imgUp   = collectFiles(req, ["images", "images[]", "image", "img"]);
-      const pdfUp   = collectFiles(req, ["pdf", "pdfs"]);
-      const audioUp = collectFiles(req, ["audio", "audios", "audioFile"]);
-      const videoUp = collectFiles(req, ["video", "videos", "videoFile"]);
-
+      // files (robust)
       const files = [];
-      const legacyImages = [];
-      let legacyAudio = "";
-      let legacyVideo = "";
-      let legacyPdf   = "";
-
-      const addFile = (kind, f) => files.push({ kind, url: f.url, mime: f.mime || f.mimetype || "" });
-      const toStore = async (f) =>
-        storeBuffer({
-          buffer: f.buffer,
-          filename: f.originalname || f.fieldname,
-          mime: f.mimetype || "application/octet-stream",
-        });
-
-      for (const f of imgUp)  { try { const s = await toStore(f); addFile("image", s); legacyImages.push(s.url); } catch {} }
-      if (pdfUp[0])   { try { const s = await toStore(pdfUp[0]);   addFile("pdf", s);   legacyPdf   = s.url; } catch {} }
-      if (audioUp[0]) { try { const s = await toStore(audioUp[0]); addFile("audio", s); legacyAudio = s.url; } catch {} }
-      if (videoUp[0]) { try { const s = await toStore(videoUp[0]); addFile("video", s); legacyVideo = s.url; } catch {} }
+      for (const f of listIncomingFiles(req)) {
+        try {
+          const stored = await storeBuffer({
+            buffer: f.buffer,
+            filename: f.originalname || f.fieldname,
+            mime: f.mimetype || "application/octet-stream",
+          });
+          files.push({
+            kind: inferKind(f.fieldname, f.mimetype),
+            url: stored.url,
+            mime: f.mimetype || "",
+          });
+        } catch (e) {
+          console.warn("[prep] store file failed:", e?.message || e);
+        }
+      }
 
       // schedule
       const relAt = releaseAt ? new Date(releaseAt) : null;
@@ -203,8 +192,8 @@ router.post(
       // flags
       const flags = {
         extractOCR: truthy(extractOCR) || wantsOCRAtRelease,
-        ocrAtRelease: wantsOCRAtRelease,                 // NEW (explicit)
-        deferOCRUntilRelease: wantsOCRAtRelease,         // keep legacy flag for compatibility
+        ocrAtRelease: wantsOCRAtRelease,
+        deferOCRUntilRelease: wantsOCRAtRelease,
         showOriginal: truthy(showOriginal),
         allowDownload: truthy(allowDownload),
         highlight: truthy(highlight),
@@ -216,31 +205,26 @@ router.post(
       const pasted = (content || manualText || "").trim();
       if (pasted) {
         ocrText = pasted;
-      } else if (wantsImmediateOCR && (imgUp[0] || pdfUp[0])) {
-        const src = (imgUp[0] || pdfUp[0])?.buffer;
-        if (src?.length) ocrText = await runOcrSafe(src);
+      } else if (wantsImmediateOCR) {
+        const imgOrPdf = listIncomingFiles(req).find(
+          (f) => f && (f.mimetype?.startsWith("image/") || f.mimetype === "application/pdf")
+        );
+        if (imgOrPdf?.buffer?.length) ocrText = await runOcrSafe(imgOrPdf.buffer);
       }
 
-      // Save both modern and legacy fields so any schema works
-      const baseDoc = {
+      const doc = await PrepModule.create({
         examId,
         dayIndex: Number(dayIndex),
         slotMin: Number(slotMin || 0),
         title,
         description,
-        files,                               // may be ignored if schema lacks it; legacy below still works
+        files,
         flags,
         text: pasted || "",
         ocrText,
         releaseAt: relAt || undefined,
         status,
-      };
-      if (legacyImages.length) baseDoc.images = legacyImages;
-      if (legacyAudio) baseDoc.audio = legacyAudio;
-      if (legacyVideo) baseDoc.video = legacyVideo;
-      if (legacyPdf)   baseDoc.pdf   = legacyPdf;
-
-      const doc = await PrepModule.create(baseDoc);
+      });
 
       res.json({ success: true, item: doc });
     } catch (e) {
@@ -254,28 +238,11 @@ router.post(
 router.patch(
   "/templates/:id",
   isAdmin,
-  upload.fields([
-    { name: "images", maxCount: 12 },
-    { name: "images[]", maxCount: 12 },      // NEW
-    { name: "image",  maxCount: 12 },        // NEW
-    { name: "img",    maxCount: 12 },        // NEW
-    { name: "pdf",    maxCount: 1  },
-    { name: "pdfs",   maxCount: 1  },        // NEW
-    { name: "audio",  maxCount: 1  },
-    { name: "audios", maxCount: 1  },        // NEW
-    { name: "audioFile", maxCount: 1 },      // NEW
-    { name: "video",  maxCount: 1  },
-    { name: "videos", maxCount: 1  },        // NEW
-    { name: "videoFile", maxCount: 1 },      // NEW
-  ]),
+  upload.any(),           // <— accept any file field name here too
   async (req, res) => {
     try {
       const doc = await PrepModule.findById(req.params.id);
       if (!doc) return res.status(404).json({ success: false, error: "Not found" });
-
-      // ensure arrays exist even if schema didn't previously have them
-      if (!Array.isArray(doc.files))  doc.files  = [];
-      if (!Array.isArray(doc.images)) doc.images = [];
 
       // basic fields
       if (req.body.title       != null) doc.title = req.body.title;
@@ -307,7 +274,7 @@ router.patch(
       if (req.body.ocrAtRelease != null) {
         const v = truthy(req.body.ocrAtRelease);
         setFlag("ocrAtRelease", v);
-        setFlag("deferOCRUntilRelease", v); // keep in sync
+        setFlag("deferOCRUntilRelease", v);
       }
       if (req.body.showOriginal != null) setFlag("showOriginal", truthy(req.body.showOriginal));
       if (req.body.allowDownload!= null) setFlag("allowDownload",truthy(req.body.allowDownload));
@@ -319,52 +286,30 @@ router.patch(
         setFlag("ocrAtRelease", v);
       }
 
-      // new files (robust to various field names)
-      const imgUp   = collectFiles(req, ["images", "images[]", "image", "img"]);
-      const pdfUp   = collectFiles(req, ["pdf", "pdfs"]);
-      const audioUp = collectFiles(req, ["audio", "audios", "audioFile"]);
-      const videoUp = collectFiles(req, ["video", "videos", "videoFile"]);
-
-      const toStore = async (f) =>
-        storeBuffer({
-          buffer: f.buffer,
-          filename: f.originalname || f.fieldname,
-          mime: f.mimetype || "application/octet-stream",
-        });
-
-      for (const f of imgUp) {
+      // new files
+      for (const f of listIncomingFiles(req)) {
         try {
-          const s = await toStore(f);
-          doc.files.push({ kind: "image", url: s.url, mime: f.mimetype || "" });
-          doc.images.push(s.url);             // legacy mirror
-        } catch {}
-      }
-      if (pdfUp[0]) {
-        try {
-          const s = await toStore(pdfUp[0]);
-          doc.files.push({ kind: "pdf", url: s.url, mime: pdfUp[0].mimetype || "" });
-          doc.pdf = s.url;                    // legacy mirror
-        } catch {}
-      }
-      if (audioUp[0]) {
-        try {
-          const s = await toStore(audioUp[0]);
-          doc.files.push({ kind: "audio", url: s.url, mime: audioUp[0].mimetype || "" });
-          doc.audio = s.url;                  // legacy mirror
-        } catch {}
-      }
-      if (videoUp[0]) {
-        try {
-          const s = await toStore(videoUp[0]);
-          doc.files.push({ kind: "video", url: s.url, mime: videoUp[0].mimetype || "" });
-          doc.video = s.url;                  // legacy mirror
-        } catch {}
+          const stored = await storeBuffer({
+            buffer: f.buffer,
+            filename: f.originalname || f.fieldname,
+            mime: f.mimetype || "application/octet-stream",
+          });
+          doc.files.push({
+            kind: inferKind(f.fieldname, f.mimetype),
+            url: stored.url,
+            mime: f.mimetype || "",
+          });
+        } catch (e) {
+          console.warn("[prep] store file failed (patch):", e?.message || e);
+        }
       }
 
       // optional re-OCR now
       if (truthy(req.body.reOCR) && doc.flags.extractOCR && !doc.flags.ocrAtRelease && !doc.text) {
-        const uploaded = (imgUp[0] || pdfUp[0])?.buffer;
-        if (uploaded?.length) doc.ocrText = await runOcrSafe(uploaded);
+        const uploaded = listIncomingFiles(req).find(
+          (f) => f && (f.mimetype?.startsWith("image/") || f.mimetype === "application/pdf")
+        );
+        if (uploaded?.buffer?.length) doc.ocrText = await runOcrSafe(uploaded.buffer);
       }
 
       await doc.save();
