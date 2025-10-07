@@ -414,18 +414,32 @@ router.get("/user/summary", async (req, res) => {
   });
 });
 
-// mark complete (fallback to guest if email missing)
-router.post("/user/complete", async (req, res) => {
-  const { examId, email, dayIndex } = req.body || {};
-  if (!examId || !dayIndex) return res.status(400).json({ success: false, error: "examId & dayIndex required" });
-  let userKey = (email || "").trim();
-  if (!userKey) userKey = `guest:${req.ip || "0.0.0.0"}`;
-  const doc = await PrepProgress.findOneAndUpdate(
-    { userEmail: userKey, examId },
-    { $addToSet: { completedDays: Number(dayIndex) } },
-    { upsert: true, new: true }
-  );
-  res.json({ success: true, progress: doc });
+/* ================= NEW: Full "today" (optional) ================= */
+// This is additive—won't break anything. It returns ALL modules for the user's
+// current day (released + scheduled) so the UI can render attachments cleanly.
+router.get("/user/today", async (req, res) => {
+  try {
+    const { examId, email } = req.query || {};
+    if (!examId) return res.status(400).json({ success: false, error: "examId required" });
+
+    let access = null;
+    if (email) access = await PrepAccess.findOne({ examId, userEmail: email, status: "active" }).lean();
+
+    const now = new Date();
+    const planDays = access?.planDays || 3;
+    const startAt  = access?.startAt || now;
+    const dayIdx   = Math.max(1, Math.min(planDays, Math.floor((now - new Date(startAt)) / 86400000) + 1));
+
+    const items = await PrepModule
+      .find({ examId, dayIndex: dayIdx })
+      .sort({ slotMin: 1, releaseAt: 1 })
+      .lean();
+
+    res.json({ success: true, items, todayDay: dayIdx, planDays });
+  } catch (e) {
+    console.error("[prep] /user/today failed:", e);
+    res.status(500).json({ success: false, error: e?.message || "server error" });
+  }
 });
 
 /* ================= Light "cron" to flip scheduled → released ================= */
