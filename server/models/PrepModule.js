@@ -3,9 +3,10 @@ import mongoose from "mongoose";
 
 const FileSchema = new mongoose.Schema(
   {
-    kind: { type: String, enum: ["image", "pdf", "audio", "video", "other"], default: "other" },
-    url: String,
-    mime: String,
+    kind: { type: String, default: "other" },       // "image" | "audio" | "video" | "pdf" | "other"
+    url:  { type: String,  required: true },        // /api/files/prep/:id or external https URL
+    mime: { type: String,  default: "" },           // e.g. image/jpeg, audio/mpeg
+    name: { type: String,  default: "" },
   },
   { _id: false }
 );
@@ -13,38 +14,43 @@ const FileSchema = new mongoose.Schema(
 const FlagsSchema = new mongoose.Schema(
   {
     extractOCR: { type: Boolean, default: false },
+    ocrAtRelease: { type: Boolean, default: false },
+    deferOCRUntilRelease: { type: Boolean, default: false }, // legacy alias
     showOriginal: { type: Boolean, default: false },
     allowDownload: { type: Boolean, default: false },
     highlight: { type: Boolean, default: false },
     background: { type: String, default: "" },
-    // optional: run OCR only when it actually releases
-    deferOCRUntilRelease: { type: Boolean, default: false },
   },
   { _id: false }
 );
 
 const PrepModuleSchema = new mongoose.Schema(
   {
-    examId: { type: String, index: true },
-    dayIndex: { type: Number, required: true },
-    slotMin: { type: Number, default: 0 }, // for ordering within the day
-    title: { type: String, default: "" },
+    examId:   { type: String, required: true, index: true },
+    dayIndex: { type: Number, required: true, index: true },
+    slotMin:  { type: Number, default: 0, index: true },
+
+    title:       { type: String, default: "" },
     description: { type: String, default: "" },
 
-    // NEW: manual text admin pastes (shown to users first if non-empty)
-    text: { type: String, default: "" },
+    // ✅ This is the important bit: persist modern attachments
+    files: { type: [FileSchema], default: [] },
 
-    // OCR text (filled only when Extract OCR is true and we process a file)
+    // Legacy fields (kept for compatibility)
+    images: [String],
+    audio:  mongoose.Schema.Types.Mixed,
+    video:  mongoose.Schema.Types.Mixed,
+    pdf:    mongoose.Schema.Types.Mixed,
+
+    text:    { type: String, default: "" },   // pasted text
     ocrText: { type: String, default: "" },
 
-    files: [FileSchema],
-    flags: FlagsSchema,
+    flags: { type: FlagsSchema, default: () => ({}) },
 
-    // NEW: schedule
-    releaseAt: { type: Date },                    // optional (UTC)
-    status: { type: String, enum: ["released", "scheduled", "draft"], default: "released" },
+    releaseAt: { type: Date },
+    status:    { type: String, enum: ["scheduled", "released"], default: "released", index: true },
   },
-  { timestamps: true }
+  { timestamps: true, strict: true } // strict keeps schema clean; we explicitly allow files[]
 );
 
-export default mongoose.model("PrepModule", PrepModuleSchema);
+export default mongoose.models.PrepModule || mongoose.model("PrepModule", PrepModuleSchema);
