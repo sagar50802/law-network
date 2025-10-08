@@ -28,7 +28,7 @@
     "node-fetch": "^3.3.2",
     "nanoid": "^4.0.0",
     "nspell": "2.0.0",
-    "pdf-parse": "1.1.1",
+    "pdfjs-dist": "^4.7.76",
     "pdfkit": "0.15.0",
     "synonyms": "1.0.1"
   }
