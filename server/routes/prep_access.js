@@ -144,7 +144,7 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
 
 /* ------------------------------------------------------------------
  * GET /api/prep/access/status
- * with overlay scheduling logic
+ * now includes overlay schedule check
  * ------------------------------------------------------------------ */
 router.get("/access/status", async (req, res) => {
   try {
@@ -183,6 +183,40 @@ router.get("/access/status", async (req, res) => {
       overlay.show = true;
     }
 
+    // --- overlay schedule check (add this block) ---
+    const ov = exam?.overlay || {};
+    let forceOverlay = false;
+
+    // After N days from user start
+    if (ov.overlayMode === "afterN") {
+      const startMs = Date.parse(
+        access?.startedAt ||
+          access?.createdAt ||
+          access?.trialStartedAt ||
+          0
+      );
+      if (startMs && ov.daysAfterStart > 0) {
+        forceOverlay = now >= startMs + ov.daysAfterStart * 86400000;
+      }
+    }
+
+    // Fixed date/time
+    if (ov.overlayMode === "fixed") {
+      const fixedMs = Date.parse(ov.fixedAt || 0);
+      if (fixedMs) forceOverlay = now >= fixedMs;
+    }
+
+    // Expose to client
+    if (forceOverlay) {
+      if (access) {
+        access.overlayForce = true;
+        access.forceMode = "purchase";
+      }
+      overlay.show = true;
+      overlay.mode = "purchase";
+    }
+    // --- end block ---
+
     const trialDays = Number(exam?.trialDays || 3);
     const trialEnded = status === "trial" && todayDay > trialDays;
 
@@ -196,6 +230,8 @@ router.get("/access/status", async (req, res) => {
         canRestart,
         trialEnded,
         startAt: access?.startAt,
+        overlayForce: access?.overlayForce || false,
+        forceMode: access?.forceMode || null,
       },
       overlay,
     });
