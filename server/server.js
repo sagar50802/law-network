@@ -135,7 +135,6 @@ const staticHeaders = {
     res.setHeader("Vary", "Origin");
     res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
     if (stat && stat.mtime) {
-      // long-lived cache for uploaded files (cache-busted with ?t=)
       res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
     } else {
       res.setHeader("Cache-Control", "public, max-age=86400");
@@ -158,8 +157,10 @@ import submissionsRoutes from "./routes/submissions.js";
 import qrRoutes from "./routes/qr.js";
 import examRoutes from "./routes/exams.js";
 
-/* ✅ NEW: Prep API (minimal, non-invasive) */
+/* ✅ NEW: Prep (Exam Wizard) APIs */
 import prepRoutes from "./routes/prep.js";
+/* ✅ NEW: Prep Access APIs (Grant/Revoke/Restart) */
+import prepAccessRoutes from "./routes/prep_access.js";
 /* ✅ NEW: Files (GridFS) API */
 import filesRoutes from "./routes/files.js";
 
@@ -176,6 +177,8 @@ app.use("/api/exams", examRoutes);
 
 /* ✅ Mount new prep routes */
 app.use("/api/prep", prepRoutes);
+/* ✅ Mount new prep access routes */
+app.use("/api/prep", prepAccessRoutes);
 /* ✅ Mount GridFS files routes */
 app.use("/api/files", filesRoutes);
 
