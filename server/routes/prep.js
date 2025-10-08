@@ -5,20 +5,6 @@
 import express from "express";
 import multer from "multer";
 import mongoose from "mongoose";
-// ---- SAFE pdf-parse import (avoids test/demo entry) -----------------------
-let pdfParse = null;
-try {
-  // Preferred: import the library entry directly
-  pdfParse = (await import("pdf-parse/lib/pdf-parse.js")).default;
-} catch {
-  try {
-    // Fallback: normal entry
-    pdfParse = (await import("pdf-parse")).default;
-  } catch {
-    pdfParse = null;
-    console.warn("[prep] pdf-parse not available; PDF OCR disabled");
-  }
-}
 import { isAdmin } from "./utils.js";
 import PrepExam from "../models/PrepExam.js";
 import PrepModule from "../models/PrepModule.js";
@@ -100,31 +86,50 @@ async function storeBuffer({ buffer, filename, mime, bucket = "prep" }) {
   return { url: `/api/files/${bucket}/${String(id)}`, via: "gridfs" };
 }
 
-/* -------------------- OCR helpers (PDF now, images later) ------------------- */
-
-async function tryPdfText(buf) {
-  if (!pdfParse) return "";
+/* -------------------------------------------------------------------------- */
+/*                       PDF text extraction (no worker)                      */
+/* -------------------------------------------------------------------------- */
+/** Lazy-loaded pdfjs-dist (legacy build) for server-side extraction */
+let pdfjsLib = null;
+async function extractPdfText(buf) {
   try {
-    const out = await pdfParse(buf);
-    return (out.text || "").trim();
+    if (!pdfjsLib) {
+      const mod = await import("pdfjs-dist/legacy/build/pdf.js");
+      pdfjsLib = mod;
+    }
+    const loadingTask = pdfjsLib.getDocument({
+      data: buf instanceof Buffer ? new Uint8Array(buf) : buf,
+      disableWorker: true,
+      isEvalSupported: false,
+    });
+    const doc = await loadingTask.promise;
+    const out = [];
+    for (let p = 1; p <= doc.numPages; p++) {
+      const page = await doc.getPage(p);
+      const tc = await page.getTextContent({ normalizeWhitespace: true });
+      out.push(
+        tc.items
+          .map((it) => (it.str || "").replace(/\s+/g, " ").trim())
+          .filter(Boolean)
+          .join(" ")
+      );
+      await page.cleanup();
+    }
+    await doc.cleanup();
+    return out.join("\n\n").trim();
   } catch (e) {
-    console.warn("[prep] pdf-parse failed:", e.message);
+    console.warn("[prep] PDF extract failed:", e.message);
     return "";
   }
 }
 
-/** Prefer manual/pasted text; else OCR from uploaded PDF when requested. */
-async function computeBestText({ body, files }) {
+/* -------------------- Small text helper (manual/pasted) -------------------- */
+/** Keep ‘text’ for admin-provided content; OCR text is saved separately */
+function bestManualText(body) {
   const manual = (body?.manualText || "").trim();
   if (manual) return manual;
-
   const pasted = (body?.content || "").trim();
   if (pasted) return pasted;
-
-  if (truthy(body?.extractOCR) && files?.pdf?.[0]?.buffer) {
-    const t = await tryPdfText(files.pdf[0].buffer);
-    if (t) return t;
-  }
   return "";
 }
 
@@ -237,11 +242,16 @@ router.post(
           files.push({ kind: "image", url: s.url, mime: f.mimetype });
         }
       }
+
+      // Keep the uploaded PDF file object (buffer) for optional extraction
+      let uploadedPdf = null;
       if (req.files?.pdf?.[0]) {
         const f = req.files.pdf[0];
         const s = await toStore(f);
         files.push({ kind: "pdf", url: s.url, mime: f.mimetype });
+        uploadedPdf = f;
       }
+
       if (req.files?.audio?.[0]) {
         const f = req.files.audio[0];
         const s = await toStore(f);
@@ -253,8 +263,19 @@ router.post(
         files.push({ kind: "video", url: s.url, mime: f.mimetype });
       }
 
-      // Best-effort text (manual/pasted/OCR)
-      const bestText = await computeBestText({ body: req.body, files: req.files });
+      // Text fields:
+      const manualOrPasted = bestManualText(req.body);
+
+      // Optional: extract text from uploaded PDF when admin checked "Extract OCR"
+      let ocrText = "";
+      if (truthy(extractOCR) && uploadedPdf?.buffer?.length) {
+        ocrText = await extractPdfText(uploadedPdf.buffer);
+        if (ocrText) {
+          console.log(`[prep] PDF text extracted (${ocrText.length} chars)`);
+        } else {
+          console.log("[prep] PDF text was empty or failed to extract");
+        }
+      }
 
       const relAt = releaseAt ? new Date(releaseAt) : null;
       const status =
@@ -265,7 +286,8 @@ router.post(
         dayIndex: Number(dayIndex),
         slotMin: Number(slotMin),
         title,
-        text: bestText || manualText,
+        text: manualOrPasted || manualText, // keep 'text' for admin-provided content
+        ocrText: ocrText || undefined,      // OCR text saved separately
         files,
         flags: {
           extractOCR: truthy(extractOCR),
@@ -273,6 +295,7 @@ router.post(
           allowDownload: truthy(allowDownload),
           highlight: truthy(highlight),
           background,
+          ocrSource: ocrText ? "pdf" : undefined,
         },
         releaseAt: relAt || undefined,
         status,
@@ -283,7 +306,7 @@ router.post(
         title,
         count: files.length,
         status,
-        ocr: truthy(extractOCR) ? (bestText ? "ok" : "none") : "off",
+        ocr: truthy(extractOCR) ? (ocrText ? "ok" : "empty") : "off",
       });
 
       if (!doc?._id) {
@@ -358,7 +381,7 @@ async function computeTodayDay(examId, email) {
   return Math.max(1, Math.min(planDays, dayIndex));
 }
 
-// Summary (planDays, todayDay)
+// Summary (planDays, todayDay) — now computes todayDay using PrepAccess (if present)
 router.get("/user/summary", async (req, res) => {
   const { examId, email } = req.query || {};
   if (!examId)
@@ -376,7 +399,8 @@ router.get("/user/summary", async (req, res) => {
   res.json({ success: true, planDays, todayDay });
 });
 
-// Today's modules (released + scheduled for that day)
+// Today's modules (for the computed day). Includes released + scheduled for that day.
+// The client shows "Coming later" using releaseAt.
 router.get("/user/today", async (req, res) => {
   const { examId, email } = req.query || {};
   if (!examId)
@@ -428,13 +452,15 @@ setInterval(async () => {
         `[prep] auto-released ${r.modifiedCount} module(s) at ${now.toISOString()}`
       );
 
-    // OCR-at-release for PDFs with extractOCR flag but empty text (tiny batch)
+    // OCR-at-release for PDFs with extractOCR flag but empty ocrText (tiny batch)
     const candidates = await PrepModule.find({
       status: "released",
-      $or: [{ text: { $exists: false } }, { text: "" }],
+      $or: [{ ocrText: { $exists: false } }, { ocrText: "" }],
       "flags.extractOCR": true,
       files: { $elemMatch: { kind: "pdf" } },
-    }).limit(3).lean();
+    })
+      .limit(3)
+      .lean();
 
     for (const m of candidates) {
       try {
@@ -444,9 +470,12 @@ setInterval(async () => {
         if (!resp.ok) continue;
         const ab = await resp.arrayBuffer();
         const buf = Buffer.from(ab);
-        const t = await tryPdfText(buf);
+        const t = await extractPdfText(buf);
         if (t) {
-          await PrepModule.updateOne({ _id: m._id }, { $set: { text: t } });
+          await PrepModule.updateOne(
+            { _id: m._id },
+            { $set: { ocrText: t, "flags.ocrSource": "pdf" } }
+          );
           console.log("[prep] OCR@release ok:", m._id.toString());
         }
       } catch (e) {
