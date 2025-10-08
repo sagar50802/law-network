@@ -86,12 +86,41 @@ async function storeBuffer({ buffer, filename, mime, bucket = "prep" }) {
   return { url: `/api/files/${bucket}/${String(id)}`, via: "gridfs" };
 }
 
+/* --------------------- Absolute URL helper for server fetch ---------------- */
+
+const PUBLIC_BASE =
+  process.env.APP_BASE_URL ||
+  process.env.RENDER_EXTERNAL_URL ||
+  process.env.PUBLIC_BASE_URL ||
+  "";
+
+function toAbs(u) {
+  if (!u) return "";
+  if (/^https?:\/\//i.test(u)) return u;
+  if (!PUBLIC_BASE) return "";
+  return `${PUBLIC_BASE.replace(/\/+$/,"")}${u.startsWith("/") ? "" : "/"}${u}`;
+}
+
 /* -------------------------------------------------------------------------- */
 /*                       PDF text extraction (no worker)                      */
 /* -------------------------------------------------------------------------- */
-/** Lazy-loaded pdfjs-dist (legacy build) for server-side extraction */
+
+// Safe/lazy import of pdf-parse (avoids the test-file crash)
+let pdfParse = null;
+try {
+  pdfParse = (await import("pdf-parse/lib/pdf-parse.js")).default;
+} catch {
+  try {
+    pdfParse = (await import("pdf-parse")).default;
+  } catch {
+    pdfParse = null;
+    console.warn("[prep] pdf-parse not available; will rely on pdfjs-dist");
+  }
+}
+
+// Lazy-loaded pdfjs-dist (legacy build) for server-side extraction
 let pdfjsLib = null;
-async function extractPdfText(buf) {
+async function extractWithPdfJs(buf) {
   try {
     if (!pdfjsLib) {
       const mod = await import("pdfjs-dist/legacy/build/pdf.js");
@@ -118,9 +147,23 @@ async function extractPdfText(buf) {
     await doc.cleanup();
     return out.join("\n\n").trim();
   } catch (e) {
-    console.warn("[prep] PDF extract failed:", e.message);
+    console.warn("[prep] PDF extract (pdfjs-dist) failed:", e.message);
     return "";
   }
+}
+
+// Try pdf-parse first (fast), then pdfjs-dist (compatible)
+async function extractPdfTextDual(buf) {
+  if (pdfParse) {
+    try {
+      const out = await pdfParse(buf);
+      const t = (out?.text || "").trim();
+      if (t) return t;
+    } catch (e) {
+      console.warn("[prep] pdf-parse failed:", e.message);
+    }
+  }
+  return await extractWithPdfJs(buf);
 }
 
 /* -------------------- Small text helper (manual/pasted) -------------------- */
@@ -269,7 +312,7 @@ router.post(
       // Optional: extract text from uploaded PDF when admin checked "Extract OCR"
       let ocrText = "";
       if (truthy(extractOCR) && uploadedPdf?.buffer?.length) {
-        ocrText = await extractPdfText(uploadedPdf.buffer);
+        ocrText = await extractPdfTextDual(uploadedPdf.buffer);
         if (ocrText) {
           console.log(`[prep] PDF text extracted (${ocrText.length} chars)`);
         } else {
@@ -400,7 +443,6 @@ router.get("/user/summary", async (req, res) => {
 });
 
 // Today's modules (for the computed day). Includes released + scheduled for that day.
-// The client shows "Coming later" using releaseAt.
 router.get("/user/today", async (req, res) => {
   const { examId, email } = req.query || {};
   if (!examId)
@@ -465,12 +507,15 @@ setInterval(async () => {
     for (const m of candidates) {
       try {
         const pdf = (m.files || []).find((f) => f.kind === "pdf" && f.url);
-        if (!pdf || typeof fetch !== "function") continue;
-        const resp = await fetch(pdf.url);
+        const abs = toAbs(pdf?.url);
+        if (!abs || typeof fetch !== "function") continue;
+
+        const resp = await fetch(abs);
         if (!resp.ok) continue;
         const ab = await resp.arrayBuffer();
         const buf = Buffer.from(ab);
-        const t = await extractPdfText(buf);
+
+        const t = await extractPdfTextDual(buf);
         if (t) {
           await PrepModule.updateOne(
             { _id: m._id },
