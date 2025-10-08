@@ -349,6 +349,61 @@ router.get("/stream", async (req, res) => {
   }
 });
 
+/* ✅ NEW: overlay/meta endpoints (match frontend calls) --------------------- */
+
+// Admin meta for editor (price, trialDays, overlay)
+router.get("/:examId/meta", isOwner, async (req, res) => {
+  const exam = await Exam.findOne({ examId: req.params.examId }).lean();
+  if (!exam) return res.status(404).json({ success: false, message: "Exam not found" });
+  const { price = 0, trialDays = 3, overlay = {}, name, examId } = exam;
+  res.json({ success: true, price, trialDays, overlay: overlay || {}, name, examId });
+});
+
+// GET overlay-config (admin)
+router.get("/:examId/overlay-config", isOwner, async (req, res) => {
+  const exam = await Exam.findOne({ examId: req.params.examId }).lean();
+  const overlay = exam?.overlay || {
+    mode: "offset-days",           // "offset-days" | "fixed-date" | "never"
+    offsetDays: 3,
+    fixedAt: null,
+  };
+  res.json({
+    success: true,
+    examId: req.params.examId,
+    price: Number(exam?.price ?? 0),
+    trialDays: Number(exam?.trialDays ?? 3),
+    overlay,
+  });
+});
+
+// PATCH overlay-config (admin) — also accepts POST for compatibility
+async function saveOverlayHandler(req, res) {
+  const { examId } = req.params;
+  const body = req.body || {};
+  const update = {
+    ...(body.price != null ? { price: Number(body.price) || 0 } : {}),
+    ...(body.trialDays != null ? { trialDays: Number(body.trialDays) || 0 } : {}),
+    overlay: {
+      ...(body.mode ? { mode: body.mode } : {}),
+      ...(body.offsetDays != null ? { offsetDays: Number(body.offsetDays) || 0 } : {}),
+      ...(Object.prototype.hasOwnProperty.call(body, "fixedAt")
+        ? { fixedAt: body.fixedAt ? new Date(body.fixedAt) : null }
+        : {}),
+    },
+  };
+
+  const doc = await Exam.findOneAndUpdate(
+    { examId },
+    { $set: update },
+    { new: true, upsert: true }
+  ).lean();
+
+  res.json({ success: true, exam: doc });
+}
+router.patch("/:examId/overlay-config", isOwner, express.json(), saveOverlayHandler);
+router.post("/:examId/overlay-config", isOwner, express.json(), saveOverlayHandler);
+/* ------------------------------------------------------------------------- */
+
 /* ---------------- error handler ---------------- */
 router.use((err, _req, res, _next) => {
   console.error("Exams route error:", err);
