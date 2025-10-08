@@ -86,41 +86,12 @@ async function storeBuffer({ buffer, filename, mime, bucket = "prep" }) {
   return { url: `/api/files/${bucket}/${String(id)}`, via: "gridfs" };
 }
 
-/* --------------------- Absolute URL helper for server fetch ---------------- */
-
-const PUBLIC_BASE =
-  process.env.APP_BASE_URL ||
-  process.env.RENDER_EXTERNAL_URL ||
-  process.env.PUBLIC_BASE_URL ||
-  "";
-
-function toAbs(u) {
-  if (!u) return "";
-  if (/^https?:\/\//i.test(u)) return u;
-  if (!PUBLIC_BASE) return "";
-  return `${PUBLIC_BASE.replace(/\/+$/,"")}${u.startsWith("/") ? "" : "/"}${u}`;
-}
-
 /* -------------------------------------------------------------------------- */
-/*                       PDF text extraction (no worker)                      */
+/*                       PDF text extraction helpers                          */
 /* -------------------------------------------------------------------------- */
-
-// Safe/lazy import of pdf-parse (avoids the test-file crash)
-let pdfParse = null;
-try {
-  pdfParse = (await import("pdf-parse/lib/pdf-parse.js")).default;
-} catch {
-  try {
-    pdfParse = (await import("pdf-parse")).default;
-  } catch {
-    pdfParse = null;
-    console.warn("[prep] pdf-parse not available; will rely on pdfjs-dist");
-  }
-}
-
-// Lazy-loaded pdfjs-dist (legacy build) for server-side extraction
+/** Existing pdfjs-dist (legacy build) extractor (kept) */
 let pdfjsLib = null;
-async function extractWithPdfJs(buf) {
+async function extractPdfText(buf) {
   try {
     if (!pdfjsLib) {
       const mod = await import("pdfjs-dist/legacy/build/pdf.js");
@@ -147,23 +118,40 @@ async function extractWithPdfJs(buf) {
     await doc.cleanup();
     return out.join("\n\n").trim();
   } catch (e) {
-    console.warn("[prep] PDF extract (pdfjs-dist) failed:", e.message);
+    console.warn("[prep] PDF extract (pdfjs) failed:", e.message);
     return "";
   }
 }
 
-// Try pdf-parse first (fast), then pdfjs-dist (compatible)
-async function extractPdfTextDual(buf) {
-  if (pdfParse) {
-    try {
-      const out = await pdfParse(buf);
-      const t = (out?.text || "").trim();
-      if (t) return t;
-    } catch (e) {
-      console.warn("[prep] pdf-parse failed:", e.message);
-    }
+/** Safe pdf-parse import (avoids demo/test file path issue) */
+let pdfParse = null;
+try {
+  pdfParse = (await import("pdf-parse/lib/pdf-parse.js")).default;
+} catch {
+  try {
+    pdfParse = (await import("pdf-parse")).default;
+  } catch {
+    pdfParse = null;
+    console.warn("[prep] pdf-parse not available; using pdfjs only");
   }
-  return await extractWithPdfJs(buf);
+}
+
+async function tryPdfParse(buf) {
+  if (!pdfParse) return "";
+  try {
+    const out = await pdfParse(buf);
+    return (out?.text || "").trim();
+  } catch (e) {
+    console.warn("[prep] pdf-parse failed:", e.message);
+    return "";
+  }
+}
+
+/** Dual extractor: try pdf-parse first, fallback to pdfjs-dist */
+async function extractPdfTextDual(buf) {
+  const a = await tryPdfParse(buf);
+  if (a) return a;
+  return await extractPdfText(buf);
 }
 
 /* -------------------- Small text helper (manual/pasted) -------------------- */
@@ -174,6 +162,20 @@ function bestManualText(body) {
   const pasted = (body?.content || "").trim();
   if (pasted) return pasted;
   return "";
+}
+
+/* ---------------------- Absolute URL helper for fetch ---------------------- */
+const PUBLIC_BASE =
+  process.env.APP_BASE_URL ||
+  process.env.RENDER_EXTERNAL_URL ||
+  process.env.PUBLIC_BASE_URL ||
+  "";
+
+function toAbs(u) {
+  if (!u) return "";
+  if (/^https?:\/\//i.test(u)) return u;
+  if (!PUBLIC_BASE) return "";
+  return `${PUBLIC_BASE.replace(/\/+$/,"")}${u.startsWith("/") ? "" : "/"}${u}`;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -309,7 +311,7 @@ router.post(
       // Text fields:
       const manualOrPasted = bestManualText(req.body);
 
-      // Optional: extract text from uploaded PDF when admin checked "Extract OCR"
+      // Optional: extract text from uploaded PDF when admin checked "Extract OCR" (dual extractor)
       let ocrText = "";
       if (truthy(extractOCR) && uploadedPdf?.buffer?.length) {
         ocrText = await extractPdfTextDual(uploadedPdf.buffer);
@@ -443,6 +445,7 @@ router.get("/user/summary", async (req, res) => {
 });
 
 // Today's modules (for the computed day). Includes released + scheduled for that day.
+// The client shows "Coming later" using releaseAt.
 router.get("/user/today", async (req, res) => {
   const { examId, email } = req.query || {};
   if (!examId)
@@ -508,7 +511,7 @@ setInterval(async () => {
       try {
         const pdf = (m.files || []).find((f) => f.kind === "pdf" && f.url);
         const abs = toAbs(pdf?.url);
-        if (!abs || typeof fetch !== "function") continue;
+        if (!abs) continue; // no absolute base configured
 
         const resp = await fetch(abs);
         if (!resp.ok) continue;
@@ -521,7 +524,7 @@ setInterval(async () => {
             { _id: m._id },
             { $set: { ocrText: t, "flags.ocrSource": "pdf" } }
           );
-          console.log("[prep] OCR@release ok:", m._id.toString());
+          console.log("[prep] OCR@release ok:", m._id.toString(), `(${t.length} chars)`);
         }
       } catch (e) {
         console.warn("[prep] OCR@release failed:", m._id?.toString(), e.message);
