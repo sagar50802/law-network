@@ -83,11 +83,11 @@ async function grantActiveAccess({ examId, email }) {
   return doc;
 }
 
-// 🧮 Compute overlay trigger time per user
+// Compute overlay trigger time per user
 function computeOverlayAt(exam, access) {
   if (!exam?.overlay || exam.overlay.mode === "never") return { openAt: null };
 
-  // ✅ NEW: planDayTime में सर्वर openAt नहीं निकालेगा (क्लाइंट लोकल-टाइम पर खोलेगा)
+  // When admin uses planDayTime, server does not compute openAt.
   if (exam.overlay.mode === "planDayTime") {
     return { openAt: null };
   }
@@ -128,8 +128,23 @@ router.get("/exams/:examId/meta", isAdmin, async (req, res) => {
 });
 
 // Update overlay config (and price/trialDays)
+// ✅ PATCHED: also persist showOnDay and showAtLocal
 router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
-  const { price, trialDays, mode, offsetDays, fixedAt } = req.body || {};
+  const {
+    price,
+    trialDays,
+    mode,
+    offsetDays,
+    fixedAt,
+    showOnDay,   // NEW
+    showAtLocal, // NEW ("HH:mm")
+  } = req.body || {};
+
+  const toNum = (v) =>
+    v === undefined || v === null || v === "" ? undefined : Number(v);
+  const toStr = (v) =>
+    v === undefined || v === null ? undefined : String(v).trim();
+
   const update = {
     ...(price != null ? { price: Number(price) } : {}),
     ...(trialDays != null ? { trialDays: Number(trialDays) } : {}),
@@ -137,8 +152,11 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
       ...(mode ? { mode } : {}),
       ...(offsetDays != null ? { offsetDays: Number(offsetDays) } : {}),
       ...(fixedAt ? { fixedAt: new Date(fixedAt) } : { fixedAt: null }),
+      ...(toNum(showOnDay) !== undefined ? { showOnDay: toNum(showOnDay) } : {}),
+      ...(toStr(showAtLocal) !== undefined ? { showAtLocal: toStr(showAtLocal) } : {}),
     },
   };
+
   const doc = await PrepExam.findOneAndUpdate(
     { examId: req.params.examId },
     { $set: update },
@@ -171,7 +189,7 @@ router.get("/access/status", async (req, res) => {
       todayDay = Math.min(planDays, dayIndexFrom(access.startAt));
     const canRestart = status === "active" && todayDay >= planDays;
 
-    // ✅ include overlay plan so client can auto-open at right moment
+    // include overlay plan so client can auto-open at right moment
     const ov = exam?.overlay || null;
     if (ov && access) {
       access.overlayPlan = {
@@ -190,7 +208,7 @@ router.get("/access/status", async (req, res) => {
       openAt: openAt ? openAt.toISOString() : null,
     };
 
-    // ✅ NEW: planDayTime में सर्वर "show: true" नहीं करेगा
+    // Show immediately only for non-planDayTime modes
     if (exam?.overlay?.mode !== "planDayTime") {
       if (openAt && +openAt <= now) {
         const forceRestart = canRestart;
@@ -200,7 +218,7 @@ router.get("/access/status", async (req, res) => {
       }
     }
 
-    // --- overlay schedule check (legacy safeguards) ---
+    // --- legacy overlay schedule safeguards ---
     const ovLegacy = exam?.overlay || {};
     let forceOverlay = false;
 
