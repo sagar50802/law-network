@@ -189,7 +189,102 @@ function computeOverlayAt(exam, access) {
 const router = express.Router();
 
 /* ------------------------------------------------------------------
- * NEW ADMIN ENDPOINTS
+ * ADMIN: Overlay UI endpoints (non-breaking, UI-only)
+ * ------------------------------------------------------------------ */
+
+// === Simple list of exams for the dropdown (admin) ===
+router.get("/exams", isAdmin, async (req, res) => {
+  const rows = await PrepExam.find({}, { examId: 1, name: 1 })
+    .sort({ name: 1 })
+    .lean();
+  res.json({ success: true, exams: rows || [] });
+});
+
+// === Read overlay UI config (UPI/WA/etc) ===
+router.get("/overlay/:examId", isAdmin, async (req, res) => {
+  const exam = await PrepExam.findOne(
+    { examId: req.params.examId },
+    { overlayUI: 1, price: 1, trialDays: 1, name: 1, examId: 1 }
+  ).lean();
+  if (!exam) return res.status(404).json({ success: false, message: "Exam not found" });
+  res.json({ success: true, config: exam.overlayUI || {}, exam });
+});
+
+// === Save overlay UI config (UPI/WA + optional images) ===
+router.post(
+  "/overlay/:examId",
+  isAdmin,
+  upload.fields([{ name: "banner" }, { name: "whatsappQR" }]),
+  async (req, res) => {
+    const examId = req.params.examId;
+
+    const {
+      upiId = "",
+      upiName = "",
+      priceINR = 0,
+      whatsappId = "",
+      forceOverlayAfterDays = "",
+      forceOverlayAt = "",
+      tz = "",
+    } = req.body || {};
+
+    let bannerUrl = "";
+    let whatsappQRUrl = "";
+
+    if (req.files?.banner?.[0]) {
+      const f = req.files.banner[0];
+      const saved = await storeBuffer({
+        buffer: f.buffer,
+        filename: f.originalname,
+        mime: f.mimetype,
+        bucket: "prep-overlay",
+      });
+      bannerUrl = saved.url;
+    }
+    if (req.files?.whatsappQR?.[0]) {
+      const f = req.files.whatsappQR[0];
+      const saved = await storeBuffer({
+        buffer: f.buffer,
+        filename: f.originalname,
+        mime: f.mimetype,
+        bucket: "prep-overlay",
+      });
+      whatsappQRUrl = saved.url;
+    }
+
+    // Build overlayUI subdoc (kept separate from overlay timing config)
+    const overlayUI = {
+      upiId: String(upiId).trim(),
+      upiName: String(upiName || "").trim(),
+      priceINR: Number(priceINR || 0),
+      whatsappLink: whatsappId ? `https://wa.me/${String(whatsappId).replace(/\D/g, "")}` : "",
+      ...(bannerUrl ? { bannerUrl } : {}),
+      ...(whatsappQRUrl ? { whatsappQRUrl } : {}),
+      // Optional scheduling notes (stored here only for editor convenience)
+      ...(forceOverlayAfterDays !== "" ? { forceOverlayAfterDays: Number(forceOverlayAfterDays) } : {}),
+      ...(forceOverlayAt ? { forceOverlayAt: new Date(forceOverlayAt).toISOString() } : {}),
+      ...(tz ? { tz: String(tz) } : {}),
+    };
+
+    // Persist
+    const update = {
+      overlayUI,
+      // keep exam.price in sync with UI price if provided
+      ...(priceINR ? { price: Number(priceINR) } : {}),
+    };
+
+    const doc = await PrepExam.findOneAndUpdate(
+      { examId },
+      { $set: update },
+      { new: true }
+    ).lean();
+
+    res.json({ success: true, exam: doc });
+  }
+);
+
+/* ------------------------------------------------------------------
+ * EXISTING ADMIN ENDPOINTS (unchanged)
  * ------------------------------------------------------------------ */
 
 // Get exam meta (price/trialDays/overlay) for admin UI
@@ -230,7 +325,7 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
     overlay: {
       ...(mode ? { mode } : {}),
       ...(offsetDays != null ? { offsetDays: Number(offsetDays) } : {}),
-      ...(fixedAt ? { fixedAt: new Date(fixedAt) } : { fixedAt: null }),
+      ...(fixedAt ? { fixedAt: new Date(fixedAt) } : { fixedAt: null } ),
       ...(showOnDay != null ? { showOnDay: Number(showOnDay) } : {}),
       ...(showAtLocal ? { showAtLocal: String(showAtLocal) } : {}),
       ...(tz ? { tz: String(tz) } : {}),
