@@ -18,6 +18,19 @@ function truthy(v) {
 function safeName(filename = "file") {
   return String(filename).replace(/\s+/g, "_").replace(/[^\w.\-]/g, "");
 }
+function sanitizeUpiId(v) {
+  if (!v) return "";
+  return String(v).trim(); // you can tighten later if you want
+}
+function sanitizePhone(v) {
+  if (!v) return "";
+  // keep digits and leading +
+  return String(v).trim().replace(/[^\d+]/g, "");
+}
+function sanitizeText(v) {
+  if (!v) return "";
+  return String(v).trim();
+}
 
 let R2 = null;
 try {
@@ -184,19 +197,20 @@ router.get("/exams/:examId/meta", isAdmin, async (req, res) => {
   const exam = await PrepExam.findOne({ examId: req.params.examId }).lean();
   if (!exam)
     return res.status(404).json({ success: false, message: "Exam not found" });
-  const { price = 0, trialDays = 3, overlay = {} } = exam;
+  const { price = 0, trialDays = 3, overlay = {}, payment = {} } = exam;
   res.json({
     success: true,
     price,
     trialDays,
     overlay,
+    payment,  // <-- expose for admin UI
     name: exam.name,
     examId: exam.examId,
   });
 });
 
 // Update overlay config (and price/trialDays)
-// Also persist showOnDay, showAtLocal, and optional tz (defaults to Asia/Kolkata)
+// Also persist showOnDay, showAtLocal, optional tz, and payment config
 router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
   const {
     price,
@@ -207,6 +221,7 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
     showOnDay,
     showAtLocal,
     tz, // optional IANA tz, e.g. "Asia/Kolkata"
+    payment, // { upiId, waPhone, waText } optional
   } = req.body || {};
 
   const update = {
@@ -218,8 +233,17 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
       ...(fixedAt ? { fixedAt: new Date(fixedAt) } : { fixedAt: null }),
       ...(showOnDay != null ? { showOnDay: Number(showOnDay) } : {}),
       ...(showAtLocal ? { showAtLocal: String(showAtLocal) } : {}),
-      ...(tz ? { tz: String(tz) } : {}), // if omitted, runtime will use default
+      ...(tz ? { tz: String(tz) } : {}),
     },
+    ...(payment
+      ? {
+          payment: {
+            ...(payment.upiId ? { upiId: sanitizeUpiId(payment.upiId) } : {}),
+            ...(payment.waPhone ? { waPhone: sanitizePhone(payment.waPhone) } : {}),
+            ...(payment.waText ? { waText: sanitizeText(payment.waText) } : {}),
+          },
+        }
+      : {}),
   };
 
   // Ensure default tz if planDayTime chosen and tz not provided
@@ -330,7 +354,7 @@ router.get("/access/status", async (req, res) => {
 
     res.json({
       success: true,
-      exam,
+      exam, // includes exam.payment if configured
       access: {
         status,
         planDays,
