@@ -83,7 +83,7 @@ async function grantActiveAccess({ examId, email }) {
   return doc;
 }
 
-// 🧮 NEW: Compute overlay trigger time per user
+// 🧮 Compute overlay trigger time per user
 function computeOverlayAt(exam, access) {
   if (!exam?.overlay || exam.overlay.mode === "never") return { openAt: null };
 
@@ -144,7 +144,6 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
 
 /* ------------------------------------------------------------------
  * GET /api/prep/access/status
- * now includes overlay schedule check
  * ------------------------------------------------------------------ */
 router.get("/access/status", async (req, res) => {
   try {
@@ -183,11 +182,10 @@ router.get("/access/status", async (req, res) => {
       overlay.show = true;
     }
 
-    // --- overlay schedule check (add this block) ---
+    // --- overlay schedule check (existing block) ---
     const ov = exam?.overlay || {};
     let forceOverlay = false;
 
-    // After N days from user start
     if (ov.overlayMode === "afterN") {
       const startMs = Date.parse(
         access?.startedAt ||
@@ -200,13 +198,11 @@ router.get("/access/status", async (req, res) => {
       }
     }
 
-    // Fixed date/time
     if (ov.overlayMode === "fixed") {
       const fixedMs = Date.parse(ov.fixedAt || 0);
       if (fixedMs) forceOverlay = now >= fixedMs;
     }
 
-    // Expose to client
     if (forceOverlay) {
       if (access) {
         access.overlayForce = true;
@@ -215,7 +211,17 @@ router.get("/access/status", async (req, res) => {
       overlay.show = true;
       overlay.mode = "purchase";
     }
-    // --- end block ---
+    // --- end overlay schedule check ---
+
+    // ✅ NEW: expose overlay config to client
+    const ovCfg = exam?.overlay || null;
+    if (ovCfg) {
+      access.overlayPlan = {
+        mode: ovCfg.mode || "planDayTime",
+        showOnDay: ovCfg.showOnDay || 1,
+        showAtLocal: ovCfg.showAtLocal || "09:00",
+      };
+    }
 
     const trialDays = Number(exam?.trialDays || 3);
     const trialEnded = status === "trial" && todayDay > trialDays;
@@ -232,6 +238,7 @@ router.get("/access/status", async (req, res) => {
         startAt: access?.startAt,
         overlayForce: access?.overlayForce || false,
         forceMode: access?.forceMode || null,
+        overlayPlan: access?.overlayPlan || null, // included for frontend use
       },
       overlay,
     });
@@ -278,7 +285,7 @@ router.post("/access/start-trial", async (req, res) => {
   }
 });
 
-// Access request
+// Access request (unchanged)
 router.post("/access/request", upload.single("screenshot"), async (req, res) => {
   try {
     const { examId, email, intent, note } = req.body || {};
@@ -333,7 +340,7 @@ router.post("/access/request", upload.single("screenshot"), async (req, res) => 
   }
 });
 
-// Admin list requests
+// Admin list requests (unchanged)
 router.get("/access/requests", isAdmin, async (req, res) => {
   try {
     const { examId, status = "pending" } = req.query || {};
@@ -350,7 +357,7 @@ router.get("/access/requests", isAdmin, async (req, res) => {
   }
 });
 
-// Admin approve/revoke
+// Admin approve/revoke (unchanged)
 router.post("/access/admin/approve", isAdmin, async (req, res) => {
   try {
     const { requestId, approve = true } = req.body || {};
