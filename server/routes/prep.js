@@ -222,6 +222,63 @@ router.delete("/exams/:examId", isAdmin, async (req, res) => {
   }
 });
 
+/* ─────────────── NEW: Overlay Config (GET/POST) for Admin panel ───────────── */
+
+// GET current overlay config for an exam (and mirror price/trialDays)
+router.get("/exams/:examId/overlay-config", async (req, res) => {
+  try {
+    const { examId } = req.params;
+    const exam = await PrepExam.findOne({ examId }).lean();
+
+    const overlay = exam?.overlay || {
+      mode: "planDayTime",      // 'planDayTime' | 'afterN' | 'fixed' | 'never'
+      showOnDay: 1,
+      showAtLocal: "09:00",     // HH:mm (local)
+      daysAfterStart: 0,
+      fixedAt: null
+    };
+
+    const price = Number(exam?.price ?? 0);
+    const trialDays = Number(exam?.trialDays ?? 3);
+
+    res.json({ success: true, examId, price, trialDays, overlay });
+  } catch (e) {
+    console.error("overlay-config GET error", e);
+    res.status(500).json({ success: false, error: "server_error" });
+  }
+});
+
+// Save overlay config (expects JSON). Also mirrors price/trialDays on the exam doc.
+router.post("/exams/:examId/overlay-config", isAdmin, express.json(), async (req, res) => {
+  try {
+    const { examId } = req.params;
+    const b = req.body || {};
+
+    const modeList = ["planDayTime", "afterN", "fixed", "never"];
+    const overlay = {
+      mode: modeList.includes(b.mode) ? b.mode : "planDayTime",
+      showOnDay: Number(b.showOnDay) || 1,
+      showAtLocal: String(b.showAtLocal || "09:00").slice(0, 5),
+      daysAfterStart: Number(b.daysAfterStart) || 0,
+      fixedAt: b.fixedAt || null
+    };
+
+    const price = Number(b.price) || 0;
+    const trialDays = Number(b.trialDays) || 0;
+
+    await PrepExam.updateOne(
+      { examId },
+      { $set: { overlay, price, trialDays } },
+      { upsert: true }
+    );
+
+    res.json({ success: true });
+  } catch (e) {
+    console.error("overlay-config POST error", e);
+    res.status(500).json({ success: false, error: "server_error" });
+  }
+});
+
 /* -------------------------------------------------------------------------- */
 /*                                  Templates                                 */
 /* -------------------------------------------------------------------------- */
