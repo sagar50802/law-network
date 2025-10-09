@@ -87,7 +87,7 @@ async function grantActiveAccess({ examId, email }) {
 function computeOverlayAt(exam, access) {
   if (!exam?.overlay || exam.overlay.mode === "never") return { openAt: null };
 
-  // When admin uses planDayTime, server does not compute openAt.
+  // When admin uses planDayTime, server does not compute openAt; client handles local time.
   if (exam.overlay.mode === "planDayTime") {
     return { openAt: null };
   }
@@ -128,7 +128,7 @@ router.get("/exams/:examId/meta", isAdmin, async (req, res) => {
 });
 
 // Update overlay config (and price/trialDays)
-// ✅ PATCHED: also persist showOnDay and showAtLocal
+// Persists showOnDay/showAtLocal; uses dotted $set so other overlay fields aren't wiped.
 router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
   const {
     price,
@@ -136,30 +136,29 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
     mode,
     offsetDays,
     fixedAt,
-    showOnDay,   // NEW
-    showAtLocal, // NEW ("HH:mm")
+    showOnDay,   // e.g. 1
+    showAtLocal, // e.g. "21:30"
   } = req.body || {};
 
-  const toNum = (v) =>
+  const num = (v) =>
     v === undefined || v === null || v === "" ? undefined : Number(v);
-  const toStr = (v) =>
+  const str = (v) =>
     v === undefined || v === null ? undefined : String(v).trim();
+  const hhmmOk = (s) => typeof s === "string" && /^\d{1,2}:\d{2}$/.test(s);
 
-  const update = {
+  const set = {
     ...(price != null ? { price: Number(price) } : {}),
     ...(trialDays != null ? { trialDays: Number(trialDays) } : {}),
-    overlay: {
-      ...(mode ? { mode } : {}),
-      ...(offsetDays != null ? { offsetDays: Number(offsetDays) } : {}),
-      ...(fixedAt ? { fixedAt: new Date(fixedAt) } : { fixedAt: null }),
-      ...(toNum(showOnDay) !== undefined ? { showOnDay: toNum(showOnDay) } : {}),
-      ...(toStr(showAtLocal) !== undefined ? { showAtLocal: toStr(showAtLocal) } : {}),
-    },
+    ...(mode ? { "overlay.mode": mode } : {}),
+    ...(offsetDays != null ? { "overlay.offsetDays": Number(offsetDays) } : {}),
+    ...(fixedAt ? { "overlay.fixedAt": new Date(fixedAt) } : { "overlay.fixedAt": null }),
+    ...(num(showOnDay) !== undefined ? { "overlay.showOnDay": Math.max(1, num(showOnDay)) } : {}),
+    ...(str(showAtLocal) && hhmmOk(str(showAtLocal)) ? { "overlay.showAtLocal": str(showAtLocal) } : {}),
   };
 
   const doc = await PrepExam.findOneAndUpdate(
     { examId: req.params.examId },
-    { $set: update },
+    { $set: set },
     { new: true }
   ).lean();
   res.json({ success: true, exam: doc });
@@ -189,7 +188,7 @@ router.get("/access/status", async (req, res) => {
       todayDay = Math.min(planDays, dayIndexFrom(access.startAt));
     const canRestart = status === "active" && todayDay >= planDays;
 
-    // include overlay plan so client can auto-open at right moment
+    // include overlay plan so client can auto-open at the right moment
     const ov = exam?.overlay || null;
     if (ov && access) {
       access.overlayPlan = {
@@ -218,7 +217,7 @@ router.get("/access/status", async (req, res) => {
       }
     }
 
-    // --- legacy overlay schedule safeguards ---
+    // --- legacy overlay schedule safeguards (kept as-is) ---
     const ovLegacy = exam?.overlay || {};
     let forceOverlay = false;
 
@@ -353,7 +352,7 @@ router.post("/access/request", upload.single("screenshot"), async (req, res) => 
           $set: {
             status: "approved",
             approvedAt: new Date(),
-            approvedBy: "auto",
+            approvedBy: "admin",
           },
         }
       );
