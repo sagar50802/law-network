@@ -1,4 +1,4 @@
-import express from "express";
+import express from "express"; 
 import multer from "multer";
 import mongoose from "mongoose";
 import PrepExam from "../models/PrepExam.js";
@@ -284,7 +284,7 @@ router.post(
 );
 
 /* ------------------------------------------------------------------
- * EXISTING ADMIN ENDPOINTS (unchanged)
+ * EXISTING ADMIN ENDPOINTS (unchanged except the PATCH route below)
  * ------------------------------------------------------------------ */
 
 // Get exam meta (price/trialDays/overlay) for admin UI
@@ -304,8 +304,8 @@ router.get("/exams/:examId/meta", isAdmin, async (req, res) => {
   });
 });
 
-// Update overlay config (and price/trialDays)
-// Also persist showOnDay, showAtLocal, optional tz, and payment config
+// === UPDATED ===
+// Update overlay config (and price/trialDays) + payment/proof fields
 router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
   const {
     price,
@@ -315,8 +315,13 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
     fixedAt,
     showOnDay,
     showAtLocal,
-    tz, // optional IANA tz, e.g. "Asia/Kolkata"
-    payment, // { upiId, waPhone, waText } optional
+    tz,
+
+    // NEW: payment/proof config (flat fields)
+    upiId,            // e.g. "7767045080@ptyes"
+    upiName,          // optional display name
+    whatsappNumber,   // e.g. "+9199xxxxxxx" or "9199xxxxxxx"
+    whatsappText,     // optional default message
   } = req.body || {};
 
   const update = {
@@ -325,23 +330,25 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
     overlay: {
       ...(mode ? { mode } : {}),
       ...(offsetDays != null ? { offsetDays: Number(offsetDays) } : {}),
-      ...(fixedAt ? { fixedAt: new Date(fixedAt) } : { fixedAt: null } ),
+      ...(fixedAt ? { fixedAt: new Date(fixedAt) } : { fixedAt: null }),
       ...(showOnDay != null ? { showOnDay: Number(showOnDay) } : {}),
       ...(showAtLocal ? { showAtLocal: String(showAtLocal) } : {}),
       ...(tz ? { tz: String(tz) } : {}),
+
+      // NEW: save payment/proof in overlay.payment
+      ...(upiId || upiName || whatsappNumber || whatsappText
+        ? {
+            payment: {
+              ...(upiId ? { upiId: String(upiId).trim() } : {}),
+              ...(upiName ? { upiName: String(upiName).trim() } : {}),
+              ...(whatsappNumber ? { whatsappNumber: String(whatsappNumber).trim() } : {}),
+              ...(whatsappText ? { whatsappText: String(whatsappText).trim() } : {}),
+            },
+          }
+        : {}),
     },
-    ...(payment
-      ? {
-          payment: {
-            ...(payment.upiId ? { upiId: sanitizeUpiId(payment.upiId) } : {}),
-            ...(payment.waPhone ? { waPhone: sanitizePhone(payment.waPhone) } : {}),
-            ...(payment.waText ? { waText: sanitizeText(payment.waText) } : {}),
-          },
-        }
-      : {}),
   };
 
-  // Ensure default tz if planDayTime chosen and tz not provided
   if (update.overlay?.mode === "planDayTime" && !("tz" in update.overlay)) {
     update.overlay.tz = "Asia/Kolkata";
   }
@@ -398,6 +405,18 @@ router.get("/access/status", async (req, res) => {
       openAt: openAt ? openAt.toISOString() : null,
       tz: exam?.overlay?.tz || "Asia/Kolkata",
     };
+
+    // === NEW: include payment/proof + course info for client buttons ===
+    const pay = exam?.overlay?.payment || {};
+    overlay.payment = {
+      courseName: exam?.name || String(examId),
+      priceINR: Number(exam?.price || 0),
+      upiId: pay.upiId || "",
+      upiName: pay.upiName || "",
+      whatsappNumber: pay.whatsappNumber || "",
+      whatsappText: pay.whatsappText || "",
+    };
+    // === end NEW block ===
 
     if (exam?.overlay?.mode === "planDayTime") {
       if (planTimeShow) {
