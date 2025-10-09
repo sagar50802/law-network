@@ -87,13 +87,18 @@ async function grantActiveAccess({ examId, email }) {
 function computeOverlayAt(exam, access) {
   if (!exam?.overlay || exam.overlay.mode === "never") return { openAt: null };
 
+  // ✅ NEW: planDayTime में सर्वर openAt नहीं निकालेगा (क्लाइंट लोकल-टाइम पर खोलेगा)
+  if (exam.overlay.mode === "planDayTime") {
+    return { openAt: null };
+  }
+
   const mode = exam.overlay.mode;
   if (mode === "fixed-date") {
     const dt = exam.overlay.fixedAt ? new Date(exam.overlay.fixedAt) : null;
     return { openAt: dt && !isNaN(+dt) ? dt : null };
   }
 
-  // offset-days (default)
+  // offset-days (default/legacy)
   const base = access?.startAt ? new Date(access.startAt) : new Date();
   const days = Number(exam.overlay.offsetDays ?? 3);
   const openAt = new Date(+base + days * 86400000);
@@ -185,14 +190,17 @@ router.get("/access/status", async (req, res) => {
       openAt: openAt ? openAt.toISOString() : null,
     };
 
-    if (openAt && +openAt <= now) {
-      const forceRestart = canRestart;
-      overlay.mode =
-        status === "active" && forceRestart ? "restart" : "purchase";
-      overlay.show = true;
+    // ✅ NEW: planDayTime में सर्वर "show: true" नहीं करेगा
+    if (exam?.overlay?.mode !== "planDayTime") {
+      if (openAt && +openAt <= now) {
+        const forceRestart = canRestart;
+        overlay.mode =
+          status === "active" && forceRestart ? "restart" : "purchase";
+        overlay.show = true;
+      }
     }
 
-    // --- overlay schedule check (existing block) ---
+    // --- overlay schedule check (legacy safeguards) ---
     const ovLegacy = exam?.overlay || {};
     let forceOverlay = false;
 
@@ -221,7 +229,7 @@ router.get("/access/status", async (req, res) => {
       overlay.show = true;
       overlay.mode = "purchase";
     }
-    // --- end overlay schedule check ---
+    // --- end legacy block ---
 
     const trialDays = Number(exam?.trialDays || 3);
     const trialEnded = status === "trial" && todayDay > trialDays;
