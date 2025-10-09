@@ -1,4 +1,3 @@
-// server/routes/prep_access.js
 import express from "express";
 import multer from "multer";
 import mongoose from "mongoose";
@@ -83,26 +82,95 @@ async function grantActiveAccess({ examId, email }) {
   return doc;
 }
 
-// Compute overlay trigger time per user
-function computeOverlayAt(exam, access) {
-  if (!exam?.overlay || exam.overlay.mode === "never") return { openAt: null };
+/** -----------------------------------------------------------------
+ * Timezone helpers (no extra deps)
+ * We compare server "now" and "startAt" *in a given IANA TZ*.
+ * ------------------------------------------------------------------ */
+// Get Y/M/D/H/M parts for a Date *as seen in a timezone*
+function tzParts(date, timeZone) {
+  const fmt = new Intl.DateTimeFormat("en-GB", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+  const parts = Object.fromEntries(fmt.formatToParts(date).map(p => [p.type, p.value]));
+  return {
+    year: Number(parts.year),
+    month: Number(parts.month),
+    day: Number(parts.day),
+    hour: Number(parts.hour),
+    minute: Number(parts.minute),
+  };
+}
 
-  // When admin uses planDayTime, server does not compute openAt; client handles local time.
-  if (exam.overlay.mode === "planDayTime") {
-    return { openAt: null };
-  }
+// Strip time to local midnight in TZ (returns {year,month,day})
+function tzYMD(date, timeZone) {
+  const p = tzParts(date, timeZone);
+  return { year: p.year, month: p.month, day: p.day };
+}
+
+// Days diff between two dates at local midnight in TZ
+function daysBetweenTZ(aDate, bDate, timeZone) {
+  const a = tzYMD(aDate, timeZone);
+  const b = tzYMD(bDate, timeZone);
+  const utcA = Date.UTC(a.year, a.month - 1, a.day);
+  const utcB = Date.UTC(b.year, b.month - 1, b.day);
+  return Math.round((utcB - utcA) / 86400000);
+}
+
+// Compare HH:mm (string) against current time in TZ
+function isTimeReachedInTZ(now, hhmm, timeZone) {
+  const p = tzParts(now, timeZone);
+  const [hh, mm] = String(hhmm || "09:00").split(":").map(x => parseInt(x, 10) || 0);
+  if (p.hour > hh) return true;
+  if (p.hour < hh) return false;
+  return p.minute >= mm;
+}
+
+/** -----------------------------------------------------------------
+ * Compute overlay trigger time per user
+ * - For planDayTime: server *decides show flag* using admin TZ,
+ *   ignoring device clocks/timezones completely.
+ * ------------------------------------------------------------------ */
+function computeOverlayAt(exam, access) {
+  if (!exam?.overlay || exam.overlay.mode === "never") return { openAt: null, planTimeShow: false };
 
   const mode = exam.overlay.mode;
+
+  if (mode === "planDayTime") {
+    const tz = exam.overlay.tz || "Asia/Kolkata";
+    const showOnDay = Number(exam.overlay.showOnDay ?? 1);
+    const showAtLocal = String(exam.overlay.showAtLocal || "09:00");
+    const startAt = access?.startAt ? new Date(access.startAt) : null;
+
+    if (!startAt) return { openAt: null, planTimeShow: false };
+
+    const now = new Date();
+
+    // Day index in TZ (start day = 1)
+    const daysDone = daysBetweenTZ(startAt, now, tz);
+    const todayDay = Math.max(1, daysDone + 1);
+
+    const dayOk = todayDay >= showOnDay;
+    const timeOk = isTimeReachedInTZ(now, showAtLocal, tz);
+
+    return { openAt: null, planTimeShow: dayOk && timeOk };
+  }
+
   if (mode === "fixed-date") {
     const dt = exam.overlay.fixedAt ? new Date(exam.overlay.fixedAt) : null;
-    return { openAt: dt && !isNaN(+dt) ? dt : null };
+    return { openAt: dt && !isNaN(+dt) ? dt : null, planTimeShow: false };
   }
 
   // offset-days (default/legacy)
   const base = access?.startAt ? new Date(access.startAt) : new Date();
   const days = Number(exam.overlay.offsetDays ?? 3);
   const openAt = new Date(+base + days * 86400000);
-  return { openAt };
+  return { openAt, planTimeShow: false };
 }
 
 const router = express.Router();
@@ -128,7 +196,7 @@ router.get("/exams/:examId/meta", isAdmin, async (req, res) => {
 });
 
 // Update overlay config (and price/trialDays)
-// Persists showOnDay/showAtLocal; uses dotted $set so other overlay fields aren't wiped.
+// Also persist showOnDay, showAtLocal, and optional tz (defaults to Asia/Kolkata)
 router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
   const {
     price,
@@ -136,29 +204,32 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
     mode,
     offsetDays,
     fixedAt,
-    showOnDay,   // e.g. 1
-    showAtLocal, // e.g. "21:30"
+    showOnDay,
+    showAtLocal,
+    tz, // optional IANA tz, e.g. "Asia/Kolkata"
   } = req.body || {};
 
-  const num = (v) =>
-    v === undefined || v === null || v === "" ? undefined : Number(v);
-  const str = (v) =>
-    v === undefined || v === null ? undefined : String(v).trim();
-  const hhmmOk = (s) => typeof s === "string" && /^\d{1,2}:\d{2}$/.test(s);
-
-  const set = {
+  const update = {
     ...(price != null ? { price: Number(price) } : {}),
     ...(trialDays != null ? { trialDays: Number(trialDays) } : {}),
-    ...(mode ? { "overlay.mode": mode } : {}),
-    ...(offsetDays != null ? { "overlay.offsetDays": Number(offsetDays) } : {}),
-    ...(fixedAt ? { "overlay.fixedAt": new Date(fixedAt) } : { "overlay.fixedAt": null }),
-    ...(num(showOnDay) !== undefined ? { "overlay.showOnDay": Math.max(1, num(showOnDay)) } : {}),
-    ...(str(showAtLocal) && hhmmOk(str(showAtLocal)) ? { "overlay.showAtLocal": str(showAtLocal) } : {}),
+    overlay: {
+      ...(mode ? { mode } : {}),
+      ...(offsetDays != null ? { offsetDays: Number(offsetDays) } : {}),
+      ...(fixedAt ? { fixedAt: new Date(fixedAt) } : { fixedAt: null }),
+      ...(showOnDay != null ? { showOnDay: Number(showOnDay) } : {}),
+      ...(showAtLocal ? { showAtLocal: String(showAtLocal) } : {}),
+      ...(tz ? { tz: String(tz) } : {}), // if omitted, runtime will use default
+    },
   };
+
+  // Ensure default tz if planDayTime chosen and tz not provided
+  if (update.overlay?.mode === "planDayTime" && !("tz" in update.overlay)) {
+    update.overlay.tz = "Asia/Kolkata";
+  }
 
   const doc = await PrepExam.findOneAndUpdate(
     { examId: req.params.examId },
-    { $set: set },
+    { $set: update },
     { new: true }
   ).lean();
   res.json({ success: true, exam: doc });
@@ -175,7 +246,7 @@ router.get("/access/status", async (req, res) => {
 
     const exam = await PrepExam.findOne({ examId }).lean();
     if (!exam)
-      return res.json({ exam: null, access: { status: "none" }, overlay: {} });
+      return res.json({ exam: null, access: { status: "none" }, overlay: {}, serverNow: Date.now() });
 
     const planDays = await planDaysForExam(examId);
     const access = email
@@ -188,45 +259,51 @@ router.get("/access/status", async (req, res) => {
       todayDay = Math.min(planDays, dayIndexFrom(access.startAt));
     const canRestart = status === "active" && todayDay >= planDays;
 
-    // include overlay plan so client can auto-open at the right moment
+    // Include overlay plan (client can read for display, but server owns timing)
     const ov = exam?.overlay || null;
     if (ov && access) {
       access.overlayPlan = {
         mode: ov.mode || "planDayTime",
         showOnDay: Number(ov.showOnDay || 1),
         showAtLocal: String(ov.showAtLocal || "09:00"),
+        tz: ov.tz || "Asia/Kolkata",
       };
     }
 
     // derive overlay timing
-    const { openAt } = computeOverlayAt(exam, access);
+    const { openAt, planTimeShow } = computeOverlayAt(exam, access);
     const now = Date.now();
     let overlay = {
       show: false,
       mode: null,
       openAt: openAt ? openAt.toISOString() : null,
+      tz: exam?.overlay?.tz || "Asia/Kolkata",
     };
 
-    // Show immediately only for non-planDayTime modes
-    if (exam?.overlay?.mode !== "planDayTime") {
+    if (exam?.overlay?.mode === "planDayTime") {
+      if (planTimeShow) {
+        const forceRestart = canRestart;
+        overlay.mode = (status === "active" && forceRestart) ? "restart" : "purchase";
+        overlay.show = true;
+      }
+    } else {
       if (openAt && +openAt <= now) {
         const forceRestart = canRestart;
-        overlay.mode =
-          status === "active" && forceRestart ? "restart" : "purchase";
+        overlay.mode = (status === "active" && forceRestart) ? "restart" : "purchase";
         overlay.show = true;
       }
     }
 
-    // --- legacy overlay schedule safeguards (kept as-is) ---
+    // --- legacy overlay schedule safeguards (kept) ---
     const ovLegacy = exam?.overlay || {};
     let forceOverlay = false;
 
     if (ovLegacy.overlayMode === "afterN") {
       const startMs = Date.parse(
         access?.startedAt ||
-          access?.createdAt ||
-          access?.trialStartedAt ||
-          0
+        access?.createdAt ||
+        access?.trialStartedAt ||
+        0
       );
       if (startMs && ovLegacy.daysAfterStart > 0) {
         forceOverlay = now >= startMs + ovLegacy.daysAfterStart * 86400000;
@@ -263,9 +340,10 @@ router.get("/access/status", async (req, res) => {
         startAt: access?.startAt,
         overlayForce: access?.overlayForce || false,
         forceMode: access?.forceMode || null,
-        overlayPlan: access?.overlayPlan || null, // exposed for frontend
+        overlayPlan: access?.overlayPlan || null,
       },
       overlay,
+      serverNow: Date.now(),
     });
   } catch (e) {
     res
@@ -352,7 +430,7 @@ router.post("/access/request", upload.single("screenshot"), async (req, res) => 
           $set: {
             status: "approved",
             approvedAt: new Date(),
-            approvedBy: "admin",
+            approvedBy: "auto",
           },
         }
       );
