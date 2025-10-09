@@ -404,6 +404,68 @@ router.patch("/:examId/overlay-config", isOwner, express.json(), saveOverlayHand
 router.post("/:examId/overlay-config", isOwner, express.json(), saveOverlayHandler);
 /* ------------------------------------------------------------------------- */
 
+/* ===== Overlay Config (GET/POST) — raw DB for legacy clients ===== */
+router.get('/api/prep/exams/:examId/overlay-config', async (req, res) => {
+  try {
+    const { examId } = req.params;
+    const db = req.app.get('db');
+    const exam = await db.collection('prep_exams').findOne({ examId });
+
+    // default config if not set yet
+    const overlay = exam?.overlay || {
+      price: Number(exam?.price ?? 0),
+      trialDays: Number(exam?.trialDays ?? 3),
+      mode: 'planDayTime',         // 'planDayTime' | 'afterN' | 'fixed'
+      showOnDay: 1,                // which plan day to show on
+      showAtLocal: '09:00',        // HH:mm (admin local time)
+      daysAfterStart: 3,           // legacy support
+      fixedAt: null                // legacy support
+    };
+
+    res.json({ success: true, examId, overlay });
+  } catch (e) {
+    console.error('overlay-config GET error', e);
+    res.status(500).json({ success: false, error: 'server_error' });
+  }
+});
+
+const requireOwner = (req, res, next) => {
+  const key = req.get('X-Owner-Key');
+  if (!key || key !== process.env.OWNER_KEY) return res.status(401).json({ error: 'unauthorized' });
+  next();
+};
+
+router.post('/api/prep/exams/:examId/overlay-config', requireOwner, express.json(), async (req, res) => {
+  try {
+    const { examId } = req.params;
+    const db = req.app.get('db');
+    const b = req.body || {};
+
+    // accept both new and legacy fields; keep old ones for compatibility
+    const overlay = {
+      price: Number(b.price) || 0,
+      trialDays: Number(b.trialDays) || 0,
+      mode: ['planDayTime','afterN','fixed'].includes(b.mode) ? b.mode : 'planDayTime',
+      showOnDay: Number(b.showOnDay) || 1,
+      showAtLocal: (b.showAtLocal || '09:00').slice(0,5), // HH:mm
+      daysAfterStart: Number(b.daysAfterStart) || 0,
+      fixedAt: b.fixedAt || null,
+    };
+
+    await db.collection('prep_exams').updateOne(
+      { examId },
+      { $set: { overlay, price: overlay.price, trialDays: overlay.trialDays } },
+      { upsert: true }
+    );
+
+    res.json({ success: true });
+  } catch (e) {
+    console.error('overlay-config POST error', e);
+    res.status(500).json({ success: false, error: 'server_error' });
+  }
+});
+/* ===== /Overlay Config ===== */
+
 /* ---------------- error handler ---------------- */
 router.use((err, _req, res, _next) => {
   console.error("Exams route error:", err);
