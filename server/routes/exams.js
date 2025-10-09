@@ -124,7 +124,7 @@ router.post(
         : mt.startsWith("audio/")
         ? "audio"
         : "pdf";
-      await pushFile(f.buffer, f.mimetype, f.mimetype, typ);
+      await pushFile(f.buffer, f.originalname, f.mimetype, typ);
     }
 
     // OCR once if requested and we have at least one PDF/image
@@ -503,16 +503,17 @@ router.get("/:examId/meta", isOwner, async (req, res) => {
   });
 });
 
-// GET overlay-config (admin) — returns Day & Time shape (relative route)
-router.get("/:examId/overlay-config", isOwner, async (req, res) => {
+// GET overlay-config — now PUBLIC so the Admin panel can read without owner key
+router.get("/:examId/overlay-config", async (req, res) => {
   const exam = await Exam.findOne({ examId: req.params.examId }).lean();
   const ov = exam?.overlay || {};
+  // defaults that match the new client expectations
   const overlay = {
-    mode: ov.mode || "planDayTime",
-    showOnDay: ov.showOnDay ?? 1,
-    showAtLocal: ov.showAtLocal || "09:00",
-    daysAfterStart: ov.daysAfterStart ?? 0,
-    fixedAt: ov.fixedAt || null,
+    mode: ov.mode || "planDayTime",        // "planDayTime" | "afterN" | "fixed" | "never"
+    showOnDay: ov.showOnDay ?? 1,          // number
+    showAtLocal: ov.showAtLocal || "09:00",// HH:mm
+    daysAfterStart: ov.daysAfterStart ?? 0,// legacy/alt
+    fixedAt: ov.fixedAt || null,           // legacy/alt
   };
   res.json({
     success: true,
@@ -556,48 +557,7 @@ async function saveOverlayHandler(req, res) {
 
 router.post("/:examId/overlay-config", isOwner, express.json(), saveOverlayHandler);
 router.patch("/:examId/overlay-config", isOwner, express.json(), saveOverlayHandler);
-
-/* ===== Public absolute overlay-config routes (to fix 404 from client) ===== */
-// Owner key guard for POST (public GET)
-const ownerKeyGuard = (req, res, next) => {
-  const k = req.get("X-Owner-Key");
-  if (!k || k !== process.env.OWNER_KEY) return res.status(401).json({ error: "unauthorized" });
-  next();
-};
-
-// Public GET at absolute path used by client: /api/prep/exams/:examId/overlay-config
-router.get("/api/prep/exams/:examId/overlay-config", async (req, res) => {
-  try {
-    const exam = await Exam.findOne({ examId: req.params.examId }).lean();
-    const ov = exam?.overlay || {};
-    const overlay = {
-      mode: ov.mode || "planDayTime",
-      showOnDay: ov.showOnDay ?? 1,
-      showAtLocal: ov.showAtLocal || "09:00",
-      daysAfterStart: ov.daysAfterStart ?? 0,
-      fixedAt: ov.fixedAt || null,
-    };
-    res.json({
-      success: true,
-      examId: req.params.examId,
-      price: Number(exam?.price ?? 0),
-      trialDays: Number(exam?.trialDays ?? 3),
-      overlay,
-    });
-  } catch (e) {
-    console.error("overlay-config GET error", e);
-    res.status(500).json({ success: false, error: "server_error" });
-  }
-});
-
-// Public POST (JSON) at absolute path; guarded by X-Owner-Key
-router.post(
-  "/api/prep/exams/:examId/overlay-config",
-  express.json(),
-  ownerKeyGuard,
-  saveOverlayHandler
-);
-/* ========================================================================== */
+/* ------------------------------------------------------------------------- */
 
 /* ---------------- error handler ---------------- */
 router.use((err, _req, res, _next) => {
