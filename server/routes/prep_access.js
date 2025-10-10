@@ -655,4 +655,68 @@ router.post("/access/admin/revoke", isAdmin, async (req, res) => {
   }
 });
 
+/* ------------------------------------------------------------------
+ * ADDITIONS (safe, minimal)
+ * ------------------------------------------------------------------ */
+
+// lightweight admin guard using owner key (query/header/body)
+function isAdminLoose(req, res, next) {
+  const key =
+    req.get("X-Owner-Key") ||
+    req.query._k ||
+    (req.body && req.body._k);
+  const ok =
+    key &&
+    key === (process.env.ADMIN_KEY || process.env.VITE_OWNER_KEY || "");
+  if (!ok) return res.status(401).json({ success: false, error: "Unauthorized" });
+  next();
+}
+
+// ONE-TAP quick setter for overlay + payment (no CORS; open this URL in browser)
+router.get("/exams/:examId/overlay-quick-set", isAdminLoose, async (req, res) => {
+  try {
+    const examId = req.params.examId;
+    const {
+      price, trialDays, mode, offsetDays, fixedAt, showOnDay, showAtLocal, tz,
+      // short URL-friendly payment aliases
+      upi: upiId, upn: upiName, wa: whatsappNumber, wat: whatsappText,
+    } = req.query || {};
+
+    const overlay = {};
+    if (mode) overlay.mode = String(mode);
+    if (offsetDays != null) overlay.offsetDays = Number(offsetDays);
+    if (fixedAt) overlay.fixedAt = new Date(fixedAt);
+    if (showOnDay != null) overlay.showOnDay = Number(showOnDay);
+    if (showAtLocal) overlay.showAtLocal = String(showAtLocal);
+    if (tz) overlay.tz = String(tz);
+
+    const payment = {};
+    if (upiId) payment.upiId = String(upiId).trim();
+    if (upiName) payment.upiName = String(upiName).trim();
+    if (whatsappNumber) payment.whatsappNumber = String(whatsappNumber).trim();
+    if (whatsappText) payment.whatsappText = String(whatsappText).trim();
+    if (Object.keys(payment).length) overlay.payment = payment;
+
+    const update = {
+      ...(price != null ? { price: Number(price) } : {}),
+      ...(trialDays != null ? { trialDays: Number(trialDays) } : {}),
+      ...(Object.keys(overlay).length ? { overlay } : {}),
+    };
+
+    if (update.overlay?.mode === "planDayTime" && !("tz" in update.overlay)) {
+      update.overlay.tz = "Asia/Kolkata";
+    }
+
+    const doc = await PrepExam.findOneAndUpdate(
+      { examId },
+      { $set: update },
+      { new: true }
+    ).lean();
+
+    res.json({ success: true, exam: doc, applied: update });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e?.message || "server error" });
+  }
+});
+
 export default router;
