@@ -242,7 +242,6 @@ router.post("/import", isAdmin, upload.single("file"), async (req, res) => {
     let questions = [];
 
     if (rawText && rawText.trim()) {
-      // pasted text input
       questions = parsePlainTextToQuestions(rawText);
     } else if (req.file) {
       const ext = path.extname(req.file.originalname).toLowerCase();
@@ -284,6 +283,55 @@ router.delete("/:code", isAdmin, async (req, res) => {
     const del = await Test.findOneAndDelete({ code: req.params.code });
     if (!del) return res.status(404).json({ success: false, message: "Test not found" });
     res.json({ success: true, message: "Deleted" });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+/* =========================================================
+   🧾 PAPERS HELPERS (Admin)
+   ========================================================= */
+
+/** GET /api/testseries/papers
+ *  → [{ paper: "UP PROSECUTION OFFICER TEST SERIES", count: 12 }]
+ */
+router.get("/papers", async (_req, res) => {
+  try {
+    const out = await mongoose.model("TestSeries").aggregate([
+      { $group: { _id: "$paper", count: { $sum: 1 } } },
+      { $project: { paper: "$_id", count: 1, _id: 0 } },
+      { $sort: { paper: 1 } },
+    ]);
+    res.json({ success: true, papers: out });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+/** GET /api/testseries/by-paper/:paper
+ *  → tests in one paper (for admin views)
+ */
+router.get("/by-paper/:paper", async (req, res) => {
+  try {
+    const paper = decodeURIComponent(req.params.paper);
+    const list = await mongoose
+      .model("TestSeries")
+      .find({ paper }, "paper title code totalQuestions durationMin createdAt")
+      .sort({ createdAt: -1 });
+    res.json({ success: true, tests: list, paper });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+/** DELETE /api/testseries/paper/:paper
+ *  → Admin delete ALL tests under a paper
+ */
+router.delete("/paper/:paper", isAdmin, async (req, res) => {
+  try {
+    const paper = decodeURIComponent(req.params.paper);
+    const r = await mongoose.model("TestSeries").deleteMany({ paper });
+    res.json({ success: true, deleted: r.deletedCount || 0, paper });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
