@@ -10,11 +10,11 @@ import { fileURLToPath } from "url";
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// __dirname for ESM
+/* ---------- Resolve __dirname (for ES modules) ---------- */
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-/* ---------- CORS (updated) ---------- */
+/* ---------- CORS (robust) ---------- */
 const CLIENT_URL =
   process.env.CLIENT_URL ||
   process.env.VITE_BACKEND_URL ||
@@ -117,6 +117,7 @@ app.use((req, _res, next) => {
   "uploads/videos",
   "uploads/podcasts",
   "uploads/qr",
+  "uploads/testseries",
 ].forEach((rel) => {
   const full = path.join(__dirname, rel);
   if (!fs.existsSync(full)) fs.mkdirSync(full, { recursive: true });
@@ -163,6 +164,8 @@ import prepRoutes from "./routes/prep.js";
 import prepAccessRoutes from "./routes/prep_access.js";
 /* ✅ NEW: Files (GridFS) API */
 import filesRoutes from "./routes/files.js";
+/* ✅ NEW: Test Series API */
+import testseriesRoutes from "./routes/testseries.js";
 
 app.use("/api/articles", articleRoutes);
 app.use("/api/banners", bannerRoutes);
@@ -181,6 +184,8 @@ app.use("/api/prep", prepRoutes);
 app.use("/api/prep", prepAccessRoutes);
 /* ✅ Mount GridFS files routes */
 app.use("/api/files", filesRoutes);
+/* ✅ Mount Test Series routes */
+app.use("/api/testseries", testseriesRoutes);
 
 /* ---------- Health/probes ---------- */
 app.get("/api/access/status", (_req, res) => res.json({ access: false }));
