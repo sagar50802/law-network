@@ -1,4 +1,4 @@
-import express from "express"; 
+import express from "express";
 import multer from "multer";
 import mongoose from "mongoose";
 import PrepExam from "../models/PrepExam.js";
@@ -305,8 +305,9 @@ router.get("/exams/:examId/meta", isAdmin, async (req, res) => {
 });
 
 // === UPDATED ===
-// Update overlay config (and price/trialDays) + payment/proof fields
+// Update overlay config (and price/trialDays) + payment/proof fields (accepts flat or nested payment)
 router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
+  // Flat fields (new editor)
   const {
     price,
     trialDays,
@@ -317,12 +318,25 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
     showAtLocal,
     tz,
 
-    // NEW: payment/proof config (flat fields)
-    upiId,            // e.g. "7767045080@ptyes"
-    upiName,          // optional display name
-    whatsappNumber,   // e.g. "+9199xxxxxxx" or "9199xxxxxxx"
-    whatsappText,     // optional default message
+    // flat payment fields (optional)
+    upiId,
+    upiName,
+    whatsappNumber,
+    whatsappText,
   } = req.body || {};
+
+  // Also accept legacy nested format: payment: { upiId, upiName, whatsappNumber, whatsappText, waPhone, waText }
+  const p = (req.body && req.body.payment) || {};
+
+  // Resolve effective values (flat > nested > legacy names)
+  const effUpiId          = (upiId ?? p.upiId) ? sanitizeUpiId(upiId ?? p.upiId) : "";
+  const effUpiName        = (upiName ?? p.upiName) ? sanitizeText(upiName ?? p.upiName) : "";
+  const effWhatsappNumber = (whatsappNumber ?? p.whatsappNumber ?? p.waPhone)
+                              ? sanitizePhone(whatsappNumber ?? p.whatsappNumber ?? p.waPhone)
+                              : "";
+  const effWhatsappText   = (whatsappText ?? p.whatsappText ?? p.waText)
+                              ? sanitizeText(whatsappText ?? p.whatsappText ?? p.waText)
+                              : "";
 
   const update = {
     ...(price != null ? { price: Number(price) } : {}),
@@ -335,20 +349,21 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
       ...(showAtLocal ? { showAtLocal: String(showAtLocal) } : {}),
       ...(tz ? { tz: String(tz) } : {}),
 
-      // NEW: save payment/proof in overlay.payment
-      ...(upiId || upiName || whatsappNumber || whatsappText
+      // Write overlay.payment if any payment field is present (from either format)
+      ...((effUpiId || effUpiName || effWhatsappNumber || effWhatsappText)
         ? {
             payment: {
-              ...(upiId ? { upiId: String(upiId).trim() } : {}),
-              ...(upiName ? { upiName: String(upiName).trim() } : {}),
-              ...(whatsappNumber ? { whatsappNumber: String(whatsappNumber).trim() } : {}),
-              ...(whatsappText ? { whatsappText: String(whatsappText).trim() } : {}),
+              ...(effUpiId ? { upiId: effUpiId } : {}),
+              ...(effUpiName ? { upiName: effUpiName } : {}),
+              ...(effWhatsappNumber ? { whatsappNumber: effWhatsappNumber } : {}),
+              ...(effWhatsappText ? { whatsappText: effWhatsappText } : {}),
             },
           }
         : {}),
     },
   };
 
+  // Ensure default TZ when planDayTime is chosen without tz
   if (update.overlay?.mode === "planDayTime" && !("tz" in update.overlay)) {
     update.overlay.tz = "Asia/Kolkata";
   }
@@ -406,7 +421,7 @@ router.get("/access/status", async (req, res) => {
       tz: exam?.overlay?.tz || "Asia/Kolkata",
     };
 
-    // === NEW: include payment/proof + course info for client buttons ===
+    // NEW: include payment/proof + course info for client buttons
     const pay = exam?.overlay?.payment || {};
     overlay.payment = {
       courseName: exam?.name || String(examId),
@@ -416,7 +431,6 @@ router.get("/access/status", async (req, res) => {
       whatsappNumber: pay.whatsappNumber || "",
       whatsappText: pay.whatsappText || "",
     };
-    // === end NEW block ===
 
     if (exam?.overlay?.mode === "planDayTime") {
       if (planTimeShow) {
