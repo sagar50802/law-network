@@ -1,9 +1,37 @@
 import express from "express";
 import { isAdmin } from "./utils.js";
 import PlagiarismReport from "../models/PlagiarismReport.js";
-import PDFDocument from "pdfkit"; // ✅ Added for report export
+import PDFDocument from "pdfkit";
+import fs from "fs";
+import path from "path";
+import cron from "node-cron";
 
 const router = express.Router();
+
+/* -----------------------------------------------------------
+   ⚙️ Auto-Delete Mechanism (delete files older than 30 min)
+----------------------------------------------------------- */
+const UPLOAD_DIR = path.join(process.cwd(), "server", "uploads", "plagiarism");
+
+// Create folder if missing
+if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+
+// Every 15 min → delete files older than 30 min
+cron.schedule("*/15 * * * *", () => {
+  const now = Date.now();
+  fs.readdir(UPLOAD_DIR, (err, files) => {
+    if (err) return;
+    for (const f of files) {
+      const full = path.join(UPLOAD_DIR, f);
+      fs.stat(full, (err, stat) => {
+        if (err) return;
+        if (now - stat.mtimeMs > 30 * 60 * 1000) {
+          fs.unlink(full, () => {});
+        }
+      });
+    }
+  });
+});
 
 /* -----------------------------------------------------------
    🧠 Simple helpers
@@ -27,7 +55,7 @@ function similarityScore(textA, textB) {
   return (intersection.size / union.size) * 100;
 }
 
-// Detect grammar and style issues (simple NLP rules)
+// Detect grammar and style issues
 function detectGrammarIssues(text) {
   const issues = [];
   const rules = [
@@ -41,7 +69,7 @@ function detectGrammarIssues(text) {
     if (r.regex.test(text)) issues.push(r.suggestion);
   });
 
-  // Also flag overly long sentences (>25 words)
+  // Flag overly long sentences (>25 words)
   splitSentences(text).forEach((s) => {
     if (s.split(" ").length > 25)
       issues.push("Long sentence: " + s.slice(0, 40) + "...");
@@ -60,19 +88,15 @@ router.post("/check", async (req, res) => {
       return res.status(400).json({ error: "Text is too short for analysis." });
     }
 
-    // Compare with past entries
     const past = await PlagiarismReport.find();
     let maxMatch = 0;
-
     for (const prev of past) {
       const score = similarityScore(text, prev.text || "");
       if (score > maxMatch) maxMatch = score;
     }
 
-    // Grammar + style
     const grammarIssues = detectGrammarIssues(text);
 
-    // Split and color sentences
     const sentences = splitSentences(text).map((s) => {
       let type = "unique";
       if (grammarIssues.some((g) => s.includes(g.split(":")[1]?.trim())))
@@ -138,7 +162,7 @@ router.delete("/:id", isAdmin, async (req, res) => {
 });
 
 /* -----------------------------------------------------------
-   🧩 GET /api/plagiarism/report/:id  → Generate PDF report
+   🧩 GET /api/plagiarism/report/:id → Generate PDF report
 ----------------------------------------------------------- */
 router.get("/report/:id", async (req, res) => {
   try {
@@ -146,7 +170,6 @@ router.get("/report/:id", async (req, res) => {
     const report = await PlagiarismReport.findById(id);
     if (!report) return res.status(404).json({ error: "Report not found" });
 
-    // Prepare PDF response
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader(
       "Content-Disposition",
@@ -156,14 +179,14 @@ router.get("/report/:id", async (req, res) => {
     const doc = new PDFDocument({ margin: 40, size: "A4" });
     doc.pipe(res);
 
-    /* ---------- Header ---------- */
+    // Header
     doc
       .fontSize(22)
       .fillColor("#4B0082")
       .text("LawNetwork - Plagiarism & Grammar Report", { align: "center" })
       .moveDown(1);
 
-    /* ---------- Basic Info ---------- */
+    // Basic Info
     doc
       .fontSize(12)
       .fillColor("#000")
@@ -171,7 +194,7 @@ router.get("/report/:id", async (req, res) => {
       .text(`Date: ${new Date(report.createdAt).toLocaleString()}`)
       .moveDown(0.5);
 
-    /* ---------- Scores ---------- */
+    // Scores
     doc
       .fontSize(14)
       .fillColor("#4B0082")
@@ -190,7 +213,7 @@ router.get("/report/:id", async (req, res) => {
 
     doc.moveDown(1);
 
-    /* ---------- Sentence Highlights ---------- */
+    // Sentence Highlights
     doc
       .fontSize(14)
       .fillColor("#4B0082")
@@ -206,7 +229,7 @@ router.get("/report/:id", async (req, res) => {
       doc.moveDown(0.3).fontSize(11).fillColor(color).text(`• ${m.sentence}`);
     });
 
-    /* ---------- Suggestions ---------- */
+    // Suggestions
     doc
       .moveDown(1)
       .fontSize(14)
