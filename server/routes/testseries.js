@@ -133,21 +133,18 @@ async function readAnyToText(file) {
 }
 
 /* =========================================================
-   🚀 PUBLIC ROUTES (Viewer)
+   🚀 PUBLIC & ADMIN ROUTES — NON-PARAM FIRST (avoids /:code catch)
    ========================================================= */
 
 /** GET /api/testseries
- *  → List all papers & their tests
+ *  → List all papers & their tests (grouped)
  */
-router.get("/", async (req, res) => {
+router.get("/", async (_req, res) => {
   try {
     const all = await Test.find(
       {},
       "paper title code totalQuestions durationMin"
-    ).sort({
-      paper: 1,
-      createdAt: -1,
-    });
+    ).sort({ paper: 1, createdAt: -1 });
     const grouped = {};
     all.forEach((t) => {
       if (!grouped[t.paper]) grouped[t.paper] = [];
@@ -160,7 +157,7 @@ router.get("/", async (req, res) => {
 });
 
 /** GET /api/testseries/results (Admin-only) */
-router.get("/results", isAdmin, async (req, res) => {
+router.get("/results", isAdmin, async (_req, res) => {
   try {
     const results = await Result.find().sort({ createdAt: -1 });
     res.json({ success: true, results });
@@ -169,63 +166,49 @@ router.get("/results", isAdmin, async (req, res) => {
   }
 });
 
-/** GET /api/testseries/:code → Intro details */
-router.get("/:code", async (req, res) => {
+/** GET /api/testseries/tests
+ *  → Flat list for admin tables
+ */
+router.get("/tests", async (_req, res) => {
   try {
-    const t = await Test.findOne({ code: req.params.code });
-    if (!t)
-      return res
-        .status(404)
-        .json({ success: false, message: "Test not found" });
-    const { title, durationMin, totalQuestions, paper } = t;
-    res.json({ success: true, test: { title, durationMin, totalQuestions, paper } });
+    const list = await Test.find(
+      {},
+      "paper title code totalQuestions durationMin createdAt"
+    ).sort({ paper: 1, createdAt: -1 });
+    res.json({ success: true, tests: list });
   } catch (err) {
+    console.error("GET /testseries/tests error", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-/** GET /api/testseries/:code/play → Full questions */
-router.get("/:code/play", async (req, res) => {
+/** GET /api/testseries/papers
+ *  → [{ paper, count }] for dropdowns/filters
+ */
+router.get("/papers", async (_req, res) => {
   try {
-    const t = await Test.findOne({ code: req.params.code });
-    if (!t)
-      return res
-        .status(404)
-        .json({ success: false, message: "Test not found" });
-    res.json({ success: true, questions: t.questions });
+    const agg = await Test.aggregate([
+      { $group: { _id: "$paper", count: { $sum: 1 } } },
+      { $project: { _id: 0, paper: "$_id", count: 1 } },
+      { $sort: { paper: 1 } },
+    ]);
+    res.json({ success: true, papers: agg });
   } catch (err) {
+    console.error("GET /testseries/papers error", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-/** POST /api/testseries/:code/submit → Evaluate */
-router.post("/:code/submit", async (req, res) => {
+/** DELETE /api/testseries/paper/:paper
+ *  → Delete all tests under a paper (admin)
+ */
+router.delete("/paper/:paper", isAdmin, async (req, res) => {
   try {
-    const { answers, user } = req.body || {};
-    const test = await Test.findOne({ code: req.params.code });
-    if (!test)
-      return res
-        .status(404)
-        .json({ success: false, message: "Test not found" });
-
-    let score = 0;
-    for (const q of test.questions) {
-      const ans = answers?.[q.qno];
-      if (!ans) continue;
-      if (ans === q.correct) score += q.marks;
-      else score -= q.negative;
-    }
-
-    const r = await Result.create({
-      testCode: test.code,
-      user,
-      answers,
-      score,
-      timeTakenSec: req.body.timeTakenSec || 0,
-    });
-
-    res.json({ success: true, score, resultId: r._id });
+    const paper = req.params.paper;
+    const out = await Test.deleteMany({ paper });
+    res.json({ success: true, deleted: out.deletedCount || 0 });
   } catch (err) {
+    console.error("DELETE /testseries/paper/:paper error", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
@@ -234,19 +217,14 @@ router.post("/:code/submit", async (req, res) => {
 router.get("/result/:id", async (req, res) => {
   try {
     const r = await Result.findById(req.params.id);
-    if (!r)
-      return res
-        .status(404)
-        .json({ success: false, message: "Result not found" });
+    if (!r) return res.status(404).json({ success: false, message: "Result not found" });
     res.json({ success: true, result: r });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-/* =========================================================
-   🔒 ADMIN IMPORT
-   ========================================================= */
+/** POST /api/testseries/import (Admin) */
 router.post("/import", isAdmin, upload.single("file"), async (req, res) => {
   try {
     const { paper, title, code, rawText } = req.body;
@@ -278,78 +256,76 @@ router.post("/import", isAdmin, upload.single("file"), async (req, res) => {
       questions,
     });
 
-    res.json({
-      success: true,
-      message: "Imported successfully",
-      test: testDoc,
-    });
+    res.json({ success: true, message: "Imported successfully", test: testDoc });
   } catch (err) {
     console.error("Import error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-/** DELETE /api/testseries/:code → Delete one test */
+/* =========================================================
+   🚀 PARAM ROUTES (placed LAST so they don't swallow others)
+   ========================================================= */
+
+/** GET /api/testseries/:code/play → Full questions */
+router.get("/:code/play", async (req, res) => {
+  try {
+    const t = await Test.findOne({ code: req.params.code });
+    if (!t) return res.status(404).json({ success: false, message: "Test not found" });
+    res.json({ success: true, questions: t.questions });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+/** POST /api/testseries/:code/submit → Evaluate */
+router.post("/:code/submit", async (req, res) => {
+  try {
+    const { answers, user } = req.body || {};
+    const test = await Test.findOne({ code: req.params.code });
+    if (!test) return res.status(404).json({ success: false, message: "Test not found" });
+
+    let score = 0;
+    for (const q of test.questions) {
+      const ans = answers?.[q.qno];
+      if (!ans) continue;
+      if (ans === q.correct) score += q.marks;
+      else score -= q.negative;
+    }
+
+    const r = await Result.create({
+      testCode: test.code,
+      user,
+      answers,
+      score,
+      timeTakenSec: req.body.timeTakenSec || 0,
+    });
+
+    res.json({ success: true, score, resultId: r._id });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+/** GET /api/testseries/:code → Intro details */
+router.get("/:code", async (req, res) => {
+  try {
+    const t = await Test.findOne({ code: req.params.code });
+    if (!t) return res.status(404).json({ success: false, message: "Test not found" });
+    const { title, durationMin, totalQuestions, paper } = t;
+    res.json({ success: true, test: { title, durationMin, totalQuestions, paper } });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+/** DELETE /api/testseries/:code → Delete one test (admin) */
 router.delete("/:code", isAdmin, async (req, res) => {
   try {
     const del = await Test.findOneAndDelete({ code: req.params.code });
-    if (!del)
-      return res
-        .status(404)
-        .json({ success: false, message: "Test not found" });
+    if (!del) return res.status(404).json({ success: false, message: "Test not found" });
     res.json({ success: true, message: "Deleted" });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-/* =========================================================
-   📋 ADMIN LISTING HELPERS
-   ========================================================= */
-
-/** GET /api/testseries/tests
- *  → Flat list for admin table
- */
-router.get("/tests", async (req, res) => {
-  try {
-    const list = await Test.find(
-      {},
-      "paper title code totalQuestions durationMin createdAt"
-    ).sort({ paper: 1, createdAt: -1 });
-    res.json({ success: true, tests: list });
-  } catch (err) {
-    console.error("GET /testseries/tests error", err);
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-/** GET /api/testseries/papers
- *  → [{ paper, count }] for dropdowns/filters
- */
-router.get("/papers", async (req, res) => {
-  try {
-    const agg = await Test.aggregate([
-      { $group: { _id: "$paper", count: { $sum: 1 } } },
-      { $project: { _id: 0, paper: "$_id", count: 1 } },
-      { $sort: { paper: 1 } },
-    ]);
-    res.json({ success: true, papers: agg });
-  } catch (err) {
-    console.error("GET /testseries/papers error", err);
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
-
-/** DELETE /api/testseries/paper/:paper
- *  → Delete all tests under a paper
- */
-router.delete("/paper/:paper", isAdmin, async (req, res) => {
-  try {
-    const paper = req.params.paper;
-    const out = await Test.deleteMany({ paper });
-    res.json({ success: true, deleted: out.deletedCount || 0 });
-  } catch (err) {
-    console.error("DELETE /testseries/paper/:paper error", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
