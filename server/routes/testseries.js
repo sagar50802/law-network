@@ -60,8 +60,7 @@ const ResultSchema = new mongoose.Schema(
 );
 
 const Test = mongoose.models.TestSeries || mongoose.model("TestSeries", TestSchema);
-const Result =
-  mongoose.models.TestResult || mongoose.model("TestResult", ResultSchema);
+const Result = mongoose.models.TestResult || mongoose.model("TestResult", ResultSchema);
 
 /* =========================================================
    🚀 PUBLIC ROUTES (Viewer)
@@ -88,6 +87,27 @@ router.get("/", async (req, res) => {
     res.status(500).json({ success: false, message: err.message });
   }
 });
+
+/* =========================================================
+   🔒 ADMIN (READ-ONLY) RESULTS LIST
+   Place BEFORE '/:code' so it doesn't get swallowed.
+   ========================================================= */
+
+/** GET /api/testseries/results
+ *  → Admin view all results
+ */
+router.get("/results", isAdmin, async (req, res) => {
+  try {
+    const results = await Result.find().sort({ createdAt: -1 });
+    res.json({ success: true, results });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+/* =========================================================
+   🚀 PUBLIC ROUTES (continued)
+   ========================================================= */
 
 /** GET /api/testseries/:code
  *  → Fetch one test intro details (for TestIntro)
