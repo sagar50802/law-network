@@ -3,7 +3,7 @@ import multer from "multer";
 import path from "path";
 import fs from "fs";
 import mongoose from "mongoose";
-import { isAdmin } from "./utils.js"; // already exists in your repo
+import { isAdmin } from "./utils.js";
 
 const router = express.Router();
 
@@ -15,19 +15,17 @@ if (!fs.existsSync(UP_DIR)) fs.mkdirSync(UP_DIR, { recursive: true });
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, UP_DIR),
   filename: (req, file, cb) => {
-    const safe = file.originalname
-      .replace(/\s+/g, "_")
-      .replace(/[^\w.\-]/g, "");
+    const safe = file.originalname.replace(/\s+/g, "_").replace(/[^\w.\-]/g, "");
     cb(null, Date.now() + "_" + safe);
   },
 });
 const upload = multer({ storage });
 
-/* ---------- Mongoose schema ---------- */
+/* ---------- Mongoose Schemas ---------- */
 const TestSchema = new mongoose.Schema(
   {
     code: { type: String, unique: true, required: true },
-    paper: { type: String, required: true }, // e.g. "Paper 1"
+    paper: { type: String, required: true },
     title: { type: String, required: true },
     durationMin: { type: Number, default: 120 },
     totalQuestions: { type: Number, default: 150 },
@@ -48,11 +46,8 @@ const TestSchema = new mongoose.Schema(
 const ResultSchema = new mongoose.Schema(
   {
     testCode: String,
-    user: {
-      email: String,
-      name: String,
-    },
-    answers: Object, // { qno: "A" }
+    user: { email: String, name: String },
+    answers: Object,
     score: Number,
     timeTakenSec: Number,
   },
@@ -63,11 +58,80 @@ const Test = mongoose.models.TestSeries || mongoose.model("TestSeries", TestSche
 const Result = mongoose.models.TestResult || mongoose.model("TestResult", ResultSchema);
 
 /* =========================================================
+   🔧 HELPERS
+   ========================================================= */
+function parsePlainTextToQuestions(text) {
+  const lines = String(text).split(/\r?\n/);
+  const out = [];
+  let current = null;
+
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) continue;
+
+    const qMatch = line.match(/^(\d+)\.\s*(.*)$/);
+    if (qMatch) {
+      if (current) out.push(current);
+      current = { qno: parseInt(qMatch[1], 10), text: qMatch[2], options: [] };
+      continue;
+    }
+
+    if (/^\([a-d]\)/i.test(line)) {
+      current?.options.push(line);
+      continue;
+    }
+
+    if (/^ans\s*:?\s*\(([a-d])\)/i.test(line)) {
+      const m = line.match(/\(([a-d])\)/i);
+      if (m) current.correct = m[1].toUpperCase();
+      continue;
+    }
+  }
+
+  if (current) out.push(current);
+  return out;
+}
+
+function normalizeJSONQuestions(obj) {
+  const arr = Array.isArray(obj?.questions) ? obj.questions : (Array.isArray(obj) ? obj : []);
+  return arr.map((q, i) => ({
+    qno: Number(q.qno ?? i + 1),
+    text: String(q.text ?? ""),
+    options: Array.isArray(q.options) ? q.options.map(String) : [],
+    correct: q.correct ? String(q.correct).toUpperCase().trim() : undefined,
+    marks: Number(q.marks ?? 1),
+    negative: Number(q.negative ?? 0.33),
+  }));
+}
+
+async function readAnyToText(file) {
+  const p = file?.path;
+  const name = file?.originalname || "";
+  const ext = path.extname(name).toLowerCase();
+  if (!p) return "";
+
+  if (ext === ".json") return fs.readFileSync(p, "utf8");
+  if (ext === ".txt") return fs.readFileSync(p, "utf8");
+
+  if (ext === ".docx") {
+    try {
+      const mammoth = await import("mammoth");
+      const { value } = await mammoth.extractRawText({ path: p });
+      return value || "";
+    } catch (e) {
+      throw new Error("DOCX read failed — ensure 'mammoth' is installed");
+    }
+  }
+
+  return fs.readFileSync(p, "utf8");
+}
+
+/* =========================================================
    🚀 PUBLIC ROUTES (Viewer)
    ========================================================= */
 
 /** GET /api/testseries
- *  → List all papers & their tests (for dashboard)
+ *  → List all papers & their tests
  */
 router.get("/", async (req, res) => {
   try {
@@ -75,7 +139,6 @@ router.get("/", async (req, res) => {
       paper: 1,
       createdAt: -1,
     });
-    // Group by paper
     const grouped = {};
     all.forEach((t) => {
       if (!grouped[t.paper]) grouped[t.paper] = [];
@@ -83,18 +146,12 @@ router.get("/", async (req, res) => {
     });
     res.json({ success: true, papers: grouped });
   } catch (err) {
-    console.error("GET /testseries error", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-/* =========================================================
-   🔒 ADMIN (READ-ONLY) RESULTS LIST
-   Place BEFORE '/:code' so it doesn't get swallowed.
-   ========================================================= */
-
 /** GET /api/testseries/results
- *  → Admin view all results
+ *  → Admin-only list of all results
  */
 router.get("/results", isAdmin, async (req, res) => {
   try {
@@ -105,12 +162,8 @@ router.get("/results", isAdmin, async (req, res) => {
   }
 });
 
-/* =========================================================
-   🚀 PUBLIC ROUTES (continued)
-   ========================================================= */
-
 /** GET /api/testseries/:code
- *  → Fetch one test intro details (for TestIntro)
+ *  → Fetch intro details
  */
 router.get("/:code", async (req, res) => {
   try {
@@ -119,13 +172,12 @@ router.get("/:code", async (req, res) => {
     const { title, durationMin, totalQuestions, paper } = t;
     res.json({ success: true, test: { title, durationMin, totalQuestions, paper } });
   } catch (err) {
-    console.error("GET /testseries/:code", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
 /** GET /api/testseries/:code/play
- *  → Fetch full questions (for TestPlayer)
+ *  → Fetch full questions
  */
 router.get("/:code/play", async (req, res) => {
   try {
@@ -164,13 +216,12 @@ router.post("/:code/submit", async (req, res) => {
 
     res.json({ success: true, score, resultId: r._id });
   } catch (err) {
-    console.error("Submit test error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
 /** GET /api/testseries/result/:id
- *  → Fetch a saved result (for ResultScreen)
+ *  → Fetch saved result
  */
 router.get("/result/:id", async (req, res) => {
   try {
@@ -183,35 +234,32 @@ router.get("/result/:id", async (req, res) => {
 });
 
 /* =========================================================
-   🔒 ADMIN ROUTES
+   🔒 ADMIN IMPORT (Extended)
    ========================================================= */
-
-/** POST /api/testseries/import
- *  → Admin bulk import (text file or JSON)
- */
 router.post("/import", isAdmin, upload.single("file"), async (req, res) => {
   try {
-    const { paper, title, code } = req.body;
-    if (!req.file) return res.status(400).json({ success: false, message: "No file uploaded" });
+    const { paper, title, code, rawText } = req.body;
+    let questions = [];
 
-    const text = fs.readFileSync(req.file.path, "utf8");
-    const lines = text.split(/\r?\n/).filter(Boolean);
-    const questions = [];
+    if (rawText && rawText.trim()) {
+      // pasted text input
+      questions = parsePlainTextToQuestions(rawText);
+    } else if (req.file) {
+      const ext = path.extname(req.file.originalname).toLowerCase();
 
-    let current = null;
-    for (const line of lines) {
-      const qMatch = line.match(/^(\d+)\.\s*(.*)$/);
-      if (qMatch) {
-        if (current) questions.push(current);
-        current = { qno: parseInt(qMatch[1]), text: qMatch[2], options: [] };
-      } else if (/^\([a-d]\)/i.test(line)) {
-        current?.options.push(line.trim());
-      } else if (/^ans/i.test(line)) {
-        const m = line.match(/\(([a-d])\)/i);
-        if (m) current.correct = m[1].toUpperCase();
+      if (ext === ".json") {
+        const json = JSON.parse(await readAnyToText(req.file));
+        questions = normalizeJSONQuestions(json);
+      } else {
+        const text = await readAnyToText(req.file);
+        questions = parsePlainTextToQuestions(text);
       }
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: "Provide rawText or upload a file (.txt, .json, .docx)",
+      });
     }
-    if (current) questions.push(current);
 
     const testDoc = await Test.create({
       code: code || `T${Date.now()}`,
