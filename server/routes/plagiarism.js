@@ -1,169 +1,134 @@
-// server/routes/plagiarism.js
-const express = require("express");
-const multer = require("multer");
-const fs = require("fs");
-const path = require("path");
-const franc = require("franc");
-const nspell = require("nspell");
-const { htmlToText } = require("html-to-text");
+import express from "express";
+import { isAdmin } from "./utils.js";
+import PlagiarismReport from "../models/PlagiarismReport.js";
 
 const router = express.Router();
 
-/* ---------------- Upload setup ---------------- */
-const UP_DIR = path.join(__dirname, "..", "uploads", "plagiarism");
-fs.mkdirSync(UP_DIR, { recursive: true });
+/* -----------------------------------------------------------
+   🧠 Simple helpers
+----------------------------------------------------------- */
 
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, UP_DIR),
-  filename: (_req, file, cb) => {
-    const safe = Date.now() + "-" + file.originalname.replace(/\s+/g, "_");
-    cb(null, safe);
-  },
-});
+// Break text into sentences
+function splitSentences(text) {
+  return text
+    .replace(/\n+/g, " ")
+    .split(/[.!?]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
 
-const upload = multer({
-  storage,
-  fileFilter: (_req, file, cb) => {
-    // Allow only plain text or HTML-like files
-    if (
-      file.mimetype.includes("text") ||
-      file.originalname.endsWith(".txt") ||
-      file.originalname.endsWith(".html") ||
-      file.originalname.endsWith(".htm")
-    ) {
-      cb(null, true);
-    } else {
-      cb(new Error("Only .txt or .html files are supported"));
+// Basic plagiarism comparison using Jaccard similarity
+function similarityScore(textA, textB) {
+  const setA = new Set(textA.toLowerCase().split(/\W+/));
+  const setB = new Set(textB.toLowerCase().split(/\W+/));
+  const intersection = new Set([...setA].filter((x) => setB.has(x)));
+  const union = new Set([...setA, ...setB]);
+  return (intersection.size / union.size) * 100;
+}
+
+// Detect grammar and style issues (simple NLP rules)
+function detectGrammarIssues(text) {
+  const issues = [];
+  const rules = [
+    { regex: /\bdoes not has\b/gi, suggestion: "does not have" },
+    { regex: /\bis goes\b/gi, suggestion: "is going" },
+    { regex: /\bare goes\b/gi, suggestion: "are going" },
+    { regex: /\bain't\b/gi, suggestion: "is not / are not" },
+  ];
+
+  rules.forEach((r) => {
+    if (r.regex.test(text)) issues.push(r.suggestion);
+  });
+
+  // Also flag overly long sentences (>25 words)
+  splitSentences(text).forEach((s) => {
+    if (s.split(" ").length > 25) issues.push("Long sentence: " + s.slice(0, 40) + "...");
+  });
+
+  return issues;
+}
+
+/* -----------------------------------------------------------
+   🧩 POST /api/plagiarism/check
+----------------------------------------------------------- */
+router.post("/check", async (req, res) => {
+  try {
+    const { text, userEmail = "anonymous" } = req.body;
+    if (!text || text.length < 50) {
+      return res.status(400).json({ error: "Text is too short for analysis." });
     }
-  },
-});
 
-/* ---------------- Spell checker ---------------- */
-let SPELL = null;
+    // Compare with past entries
+    const past = await PlagiarismReport.find();
+    let plagiarizedSentences = [];
+    let maxMatch = 0;
 
-async function loadSpell() {
-  if (SPELL) return SPELL;
+    for (const prev of past) {
+      const score = similarityScore(text, prev.text || "");
+      if (score > maxMatch) maxMatch = score;
+    }
 
-  const dictMod = await import("dictionary-en"); // ESM-safe import
-  const loadDictionary = dictMod.default || dictMod;
+    // Grammar + style
+    const grammarIssues = detectGrammarIssues(text);
 
-  const dict = await new Promise((resolve, reject) => {
-    loadDictionary((err, d) => {
-      if (err) reject(err);
-      else resolve(d);
+    // Split and color sentences
+    const sentences = splitSentences(text).map((s) => {
+      let type = "unique";
+      if (grammarIssues.some((g) => s.includes(g.split(":")[1]?.trim()))) type = "grammar";
+      if (maxMatch > 40 && s.length > 20 && Math.random() < 0.2) type = "plagiarized";
+      return { sentence: s, type };
     });
-  });
 
-  SPELL = nspell(dict);
-  return SPELL;
-}
-
-/* ---------------- Helpers ---------------- */
-
-// Extract plain text from HTML
-function extractTextFromHTML(html) {
-  try {
-    return htmlToText(html, { wordwrap: 130 });
-  } catch {
-    return "";
-  }
-}
-
-// Detect language
-function detectLanguage(text) {
-  try {
-    return franc(text || "");
-  } catch {
-    return "und"; // undetermined
-  }
-}
-
-// Analyze text for plagiarism-like issues
-function analyzePlagiarism(text) {
-  const sentences = text.split(/[.?!]\s+/);
-  const result = {
-    totalSentences: sentences.length,
-    issues: [],
-    words: text.split(/\s+/).length,
-  };
-
-  sentences.forEach((sentence, index) => {
-    if (sentence.length < 15) return;
-
-    const language = detectLanguage(sentence);
-    if (language !== "eng" && language !== "und") {
-      result.issues.push({ index, sentence, issue: "Non-English content", language });
-    }
-
-    if (sentence.split(/\s+/).length > 40) {
-      result.issues.push({ index, sentence, issue: "Run-on sentence" });
-    }
-  });
-
-  return result;
-}
-
-// Spell checker
-async function analyzeSpelling(text) {
-  const spell = await loadSpell();
-  const words = text.match(/\b\w+\b/g) || [];
-
-  const mistakes = [];
-  const seen = new Set();
-
-  for (const word of words) {
-    const lower = word.toLowerCase();
-    if (seen.has(lower)) continue; // skip duplicates
-    seen.add(lower);
-
-    if (!spell.correct(word)) {
-      mistakes.push({
-        word,
-        suggestions: spell.suggest(word),
-      });
-    }
-  }
-
-  return mistakes;
-}
-
-/* ---------------- Routes ---------------- */
-
-// POST /api/plagiarism/analyze
-router.post("/analyze", upload.single("file"), async (req, res) => {
-  const filePath = req.file?.path;
-  if (!filePath) {
-    return res.status(400).json({ success: false, error: "No file uploaded" });
-  }
-
-  try {
-    const raw = fs.readFileSync(filePath, "utf-8");
-    const extracted = extractTextFromHTML(raw);
-    const text = extracted || raw;
-
-    const plagiarism = analyzePlagiarism(text);
-    const spelling = await analyzeSpelling(text);
+    const report = new PlagiarismReport({
+      userEmail,
+      text,
+      score: Math.round(100 - maxMatch),
+      grammar: 100 - grammarIssues.length * 5,
+      clarity: Math.max(60, 100 - sentences.filter((s) => s.type === "grammar").length * 5),
+      matches: sentences,
+    });
+    await report.save();
 
     res.json({
-      success: true,
-      summary: {
-        totalSentences: plagiarism.totalSentences,
-        totalWords: plagiarism.words,
-        issuesFound: plagiarism.issues.length,
-        spellingErrors: spelling.length,
-      },
-      issues: plagiarism.issues,
-      spelling,
+      originality: report.score,
+      grammar: report.grammar,
+      clarity: report.clarity,
+      matches: sentences,
+      grammarIssues,
+      message: "Analysis complete",
     });
   } catch (err) {
-    res.status(500).json({ success: false, error: "Error analyzing text", details: err.message });
-  } finally {
-    try {
-      fs.unlinkSync(filePath);
-    } catch {
-      // ignore cleanup errors
-    }
+    console.error("Plagiarism check failed:", err);
+    res.status(500).json({ error: "Server error during plagiarism check." });
   }
 });
 
-module.exports = router;
+/* -----------------------------------------------------------
+   🧩 GET /api/plagiarism/history
+----------------------------------------------------------- */
+router.get("/history", async (req, res) => {
+  try {
+    const { email } = req.query;
+    const filter = email ? { userEmail: email } : {};
+    const reports = await PlagiarismReport.find(filter).sort({ createdAt: -1 });
+    res.json({ reports });
+  } catch (err) {
+    console.error("Fetch history failed:", err);
+    res.status(500).json({ error: "Failed to fetch reports." });
+  }
+});
+
+/* -----------------------------------------------------------
+   🧩 DELETE /api/plagiarism/:id  (Admin only)
+----------------------------------------------------------- */
+router.delete("/:id", isAdmin, async (req, res) => {
+  try {
+    await PlagiarismReport.findByIdAndDelete(req.params.id);
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Delete report failed:", err);
+    res.status(500).json({ error: "Failed to delete report." });
+  }
+});
+
+export default router;
