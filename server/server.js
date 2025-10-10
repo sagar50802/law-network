@@ -1,4 +1,3 @@
-// server/server.js
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
@@ -166,6 +165,8 @@ import prepAccessRoutes from "./routes/prep_access.js";
 import filesRoutes from "./routes/files.js";
 /* ✅ NEW: Test Series API */
 import testseriesRoutes from "./routes/testseries.js";
+/* ✅ NEW: Plagiarism API */
+import plagiarismRoutes from "./routes/plagiarism.js";
 
 app.use("/api/articles", articleRoutes);
 app.use("/api/banners", bannerRoutes);
@@ -186,6 +187,8 @@ app.use("/api/prep", prepAccessRoutes);
 app.use("/api/files", filesRoutes);
 /* ✅ Mount Test Series routes */
 app.use("/api/testseries", testseriesRoutes);
+/* ✅ Mount Plagiarism routes */
+app.use("/api/plagiarism", plagiarismRoutes);
 
 /* ---------- Health/probes ---------- */
 app.get("/api/access/status", (_req, res) => res.json({ access: false }));
