@@ -54,8 +54,10 @@ const ResultSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-const Test = mongoose.models.TestSeries || mongoose.model("TestSeries", TestSchema);
-const Result = mongoose.models.TestResult || mongoose.model("TestResult", ResultSchema);
+const Test =
+  mongoose.models.TestSeries || mongoose.model("TestSeries", TestSchema);
+const Result =
+  mongoose.models.TestResult || mongoose.model("TestResult", ResultSchema);
 
 /* =========================================================
    🔧 HELPERS
@@ -93,7 +95,11 @@ function parsePlainTextToQuestions(text) {
 }
 
 function normalizeJSONQuestions(obj) {
-  const arr = Array.isArray(obj?.questions) ? obj.questions : (Array.isArray(obj) ? obj : []);
+  const arr = Array.isArray(obj?.questions)
+    ? obj.questions
+    : Array.isArray(obj)
+    ? obj
+    : [];
   return arr.map((q, i) => ({
     qno: Number(q.qno ?? i + 1),
     text: String(q.text ?? ""),
@@ -135,7 +141,10 @@ async function readAnyToText(file) {
  */
 router.get("/", async (req, res) => {
   try {
-    const all = await Test.find({}, "paper title code totalQuestions durationMin").sort({
+    const all = await Test.find(
+      {},
+      "paper title code totalQuestions durationMin"
+    ).sort({
       paper: 1,
       createdAt: -1,
     });
@@ -150,9 +159,7 @@ router.get("/", async (req, res) => {
   }
 });
 
-/** GET /api/testseries/results
- *  → Admin-only list of all results
- */
+/** GET /api/testseries/results (Admin-only) */
 router.get("/results", isAdmin, async (req, res) => {
   try {
     const results = await Result.find().sort({ createdAt: -1 });
@@ -162,13 +169,14 @@ router.get("/results", isAdmin, async (req, res) => {
   }
 });
 
-/** GET /api/testseries/:code
- *  → Fetch intro details
- */
+/** GET /api/testseries/:code → Intro details */
 router.get("/:code", async (req, res) => {
   try {
     const t = await Test.findOne({ code: req.params.code });
-    if (!t) return res.status(404).json({ success: false, message: "Test not found" });
+    if (!t)
+      return res
+        .status(404)
+        .json({ success: false, message: "Test not found" });
     const { title, durationMin, totalQuestions, paper } = t;
     res.json({ success: true, test: { title, durationMin, totalQuestions, paper } });
   } catch (err) {
@@ -176,27 +184,29 @@ router.get("/:code", async (req, res) => {
   }
 });
 
-/** GET /api/testseries/:code/play
- *  → Fetch full questions
- */
+/** GET /api/testseries/:code/play → Full questions */
 router.get("/:code/play", async (req, res) => {
   try {
     const t = await Test.findOne({ code: req.params.code });
-    if (!t) return res.status(404).json({ success: false, message: "Test not found" });
+    if (!t)
+      return res
+        .status(404)
+        .json({ success: false, message: "Test not found" });
     res.json({ success: true, questions: t.questions });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-/** POST /api/testseries/:code/submit
- *  → Submit answers + calculate score
- */
+/** POST /api/testseries/:code/submit → Evaluate */
 router.post("/:code/submit", async (req, res) => {
   try {
     const { answers, user } = req.body || {};
     const test = await Test.findOne({ code: req.params.code });
-    if (!test) return res.status(404).json({ success: false, message: "Test not found" });
+    if (!test)
+      return res
+        .status(404)
+        .json({ success: false, message: "Test not found" });
 
     let score = 0;
     for (const q of test.questions) {
@@ -220,13 +230,14 @@ router.post("/:code/submit", async (req, res) => {
   }
 });
 
-/** GET /api/testseries/result/:id
- *  → Fetch saved result
- */
+/** GET /api/testseries/result/:id → Fetch saved result */
 router.get("/result/:id", async (req, res) => {
   try {
     const r = await Result.findById(req.params.id);
-    if (!r) return res.status(404).json({ success: false, message: "Result not found" });
+    if (!r)
+      return res
+        .status(404)
+        .json({ success: false, message: "Result not found" });
     res.json({ success: true, result: r });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -234,7 +245,7 @@ router.get("/result/:id", async (req, res) => {
 });
 
 /* =========================================================
-   🔒 ADMIN IMPORT (Extended)
+   🔒 ADMIN IMPORT
    ========================================================= */
 router.post("/import", isAdmin, upload.single("file"), async (req, res) => {
   try {
@@ -245,7 +256,6 @@ router.post("/import", isAdmin, upload.single("file"), async (req, res) => {
       questions = parsePlainTextToQuestions(rawText);
     } else if (req.file) {
       const ext = path.extname(req.file.originalname).toLowerCase();
-
       if (ext === ".json") {
         const json = JSON.parse(await readAnyToText(req.file));
         questions = normalizeJSONQuestions(json);
@@ -268,20 +278,25 @@ router.post("/import", isAdmin, upload.single("file"), async (req, res) => {
       questions,
     });
 
-    res.json({ success: true, message: "Imported successfully", test: testDoc });
+    res.json({
+      success: true,
+      message: "Imported successfully",
+      test: testDoc,
+    });
   } catch (err) {
     console.error("Import error:", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-/** DELETE /api/testseries/:code
- *  → Admin delete test
- */
+/** DELETE /api/testseries/:code → Delete one test */
 router.delete("/:code", isAdmin, async (req, res) => {
   try {
     const del = await Test.findOneAndDelete({ code: req.params.code });
-    if (!del) return res.status(404).json({ success: false, message: "Test not found" });
+    if (!del)
+      return res
+        .status(404)
+        .json({ success: false, message: "Test not found" });
     res.json({ success: true, message: "Deleted" });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -289,50 +304,52 @@ router.delete("/:code", isAdmin, async (req, res) => {
 });
 
 /* =========================================================
-   🧾 PAPERS HELPERS (Admin)
+   📋 ADMIN LISTING HELPERS
    ========================================================= */
 
-/** GET /api/testseries/papers
- *  → [{ paper: "UP PROSECUTION OFFICER TEST SERIES", count: 12 }]
+/** GET /api/testseries/tests
+ *  → Flat list for admin table
  */
-router.get("/papers", async (_req, res) => {
+router.get("/tests", async (req, res) => {
   try {
-    const out = await mongoose.model("TestSeries").aggregate([
-      { $group: { _id: "$paper", count: { $sum: 1 } } },
-      { $project: { paper: "$_id", count: 1, _id: 0 } },
-      { $sort: { paper: 1 } },
-    ]);
-    res.json({ success: true, papers: out });
+    const list = await Test.find(
+      {},
+      "paper title code totalQuestions durationMin createdAt"
+    ).sort({ paper: 1, createdAt: -1 });
+    res.json({ success: true, tests: list });
   } catch (err) {
+    console.error("GET /testseries/tests error", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-/** GET /api/testseries/by-paper/:paper
- *  → tests in one paper (for admin views)
+/** GET /api/testseries/papers
+ *  → [{ paper, count }] for dropdowns/filters
  */
-router.get("/by-paper/:paper", async (req, res) => {
+router.get("/papers", async (req, res) => {
   try {
-    const paper = decodeURIComponent(req.params.paper);
-    const list = await mongoose
-      .model("TestSeries")
-      .find({ paper }, "paper title code totalQuestions durationMin createdAt")
-      .sort({ createdAt: -1 });
-    res.json({ success: true, tests: list, paper });
+    const agg = await Test.aggregate([
+      { $group: { _id: "$paper", count: { $sum: 1 } } },
+      { $project: { _id: 0, paper: "$_id", count: 1 } },
+      { $sort: { paper: 1 } },
+    ]);
+    res.json({ success: true, papers: agg });
   } catch (err) {
+    console.error("GET /testseries/papers error", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
 /** DELETE /api/testseries/paper/:paper
- *  → Admin delete ALL tests under a paper
+ *  → Delete all tests under a paper
  */
 router.delete("/paper/:paper", isAdmin, async (req, res) => {
   try {
-    const paper = decodeURIComponent(req.params.paper);
-    const r = await mongoose.model("TestSeries").deleteMany({ paper });
-    res.json({ success: true, deleted: r.deletedCount || 0, paper });
+    const paper = req.params.paper;
+    const out = await Test.deleteMany({ paper });
+    res.json({ success: true, deleted: out.deletedCount || 0 });
   } catch (err) {
+    console.error("DELETE /testseries/paper/:paper error", err);
     res.status(500).json({ success: false, message: err.message });
   }
 });
