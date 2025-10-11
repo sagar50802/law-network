@@ -177,7 +177,7 @@ function computeOverlayAt(exam, access) {
     return { openAt: dt && !isNaN(+dt) ? dt : null, planTimeShow: false };
   }
 
-  // offset-days (legacy/new default)
+  // offset-days (default)
   const base = access?.startAt ? new Date(access.startAt) : new Date();
   const days = Number(exam.overlay.offsetDays ?? 3);
   const openAt = new Date(+base + days * 86400000);
@@ -249,36 +249,21 @@ router.get("/exams/:examId/meta", isAdmin, async (req, res) => {
 
 /* ------------- PATCH overlay config + payment (BOTH shapes accepted) ------------- */
 
+// A. PATCH handler — writes overlay.payment (flat or nested {payment:{...}})
 router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
   const {
-    price,
-    trialDays,
-    mode,
-    offsetDays,          // for "offset-days"
-    fixedAt,             // for "fixed-date"
-    showOnDay,           // for "planDayTime"
-    showAtLocal,         // for "planDayTime"
-    tz,                  // optional
-
-    // flat payment fields
-    upiId,
-    upiName,
-    whatsappNumber,
-    whatsappText,
+    price, trialDays, mode, offsetDays, fixedAt, showOnDay, showAtLocal, tz,
+    upiId, upiName, whatsappNumber, whatsappText,
+    payment: p = {},
   } = req.body || {};
 
-  // also accept nested: { payment: { ... } }
-  const p = (req.body && req.body.payment) || {};
-
-  // resolve effective payment values (flat > nested > legacy aliases)
-  const effUpiId          = (upiId ?? p.upiId) ? sanitizeUpiId(upiId ?? p.upiId) : "";
-  const effUpiName        = (upiName ?? p.upiName) ? sanitizeText(upiName ?? p.upiName) : "";
-  const effWhatsappNumber = (whatsappNumber ?? p.whatsappNumber ?? p.waPhone)
-                              ? sanitizePhone(whatsappNumber ?? p.whatsappNumber ?? p.waPhone)
-                              : "";
-  const effWhatsappText   = (whatsappText ?? p.whatsappText ?? p.waText)
-                              ? sanitizeText(whatsappText ?? p.whatsappText ?? p.waText)
-                              : "";
+  // effective payment (accept flat or nested)
+  const eff = {
+    upiId:          sanitizeUpiId((upiId ?? p.upiId) || ""),
+    upiName:        sanitizeText((upiName ?? p.upiName) || ""),
+    whatsappNumber: sanitizePhone((whatsappNumber ?? p.whatsappNumber ?? p.waPhone) || ""),
+    whatsappText:   sanitizeText((whatsappText ?? p.whatsappText  ?? p.waText)   || ""),
+  };
 
   const update = {
     ...(price != null ? { price: Number(price) } : {}),
@@ -290,21 +275,9 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
       ...(showOnDay != null ? { showOnDay: Number(showOnDay) } : {}),
       ...(showAtLocal ? { showAtLocal: String(showAtLocal) } : {}),
       ...(tz ? { tz: String(tz) } : {}),
-      // write overlay.payment if any value provided
-      ...((effUpiId || effUpiName || effWhatsappNumber || effWhatsappText)
-        ? {
-            payment: {
-              ...(effUpiId ? { upiId: effUpiId } : {}),
-              ...(effUpiName ? { upiName: effUpiName } : {}),
-              ...(effWhatsappNumber ? { whatsappNumber: effWhatsappNumber } : {}),
-              ...(effWhatsappText ? { whatsappText: effWhatsappText } : {}),
-            },
-          }
-        : {}),
+      ...(Object.values(eff).some(Boolean) ? { payment: eff } : {}),
     },
   };
-
-  // default TZ for planDayTime if not set
   if (update.overlay?.mode === "planDayTime" && !("tz" in update.overlay)) {
     update.overlay.tz = "Asia/Kolkata";
   }
@@ -322,6 +295,7 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
 /*                                   Status                                   */
 /* -------------------------------------------------------------------------- */
 
+// B. GET /access/status — returns overlay.payment for client buttons
 router.get("/access/status", async (req, res) => {
   try {
     const { examId, email } = req.query || {};
@@ -362,6 +336,9 @@ router.get("/access/status", async (req, res) => {
     // decide overlay timing (server-side)
     const { openAt, planTimeShow } = computeOverlayAt(exam, access);
     const now = Date.now();
+
+    // include payment for client buttons
+    const pay = exam?.overlay?.payment || {};
     const overlay = {
       show: false,
       mode: null,
@@ -370,10 +347,10 @@ router.get("/access/status", async (req, res) => {
       payment: {
         courseName: exam?.name || String(examId),
         priceINR: Number(exam?.price || 0),
-        upiId: exam?.overlay?.payment?.upiId || "",
-        upiName: exam?.overlay?.payment?.upiName || "",
-        whatsappNumber: exam?.overlay?.payment?.whatsappNumber || "",
-        whatsappText: exam?.overlay?.payment?.whatsappText || "",
+        upiId: pay.upiId || "",
+        upiName: pay.upiName || "",
+        whatsappNumber: pay.whatsappNumber || "",
+        whatsappText: pay.whatsappText || "",
       },
     };
 
