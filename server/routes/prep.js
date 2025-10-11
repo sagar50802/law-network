@@ -248,23 +248,37 @@ router.get("/exams/:examId/overlay-config", async (req, res) => {
   }
 });
 
-// Save overlay config (expects JSON). Also mirrors price/trialDays on the exam doc.
+/**
+ * Save overlay config (expects JSON).
+ * Mirrors price/trialDays on exam doc.
+ * IMPORTANT: This version PRESERVES overlay.payment unless the caller explicitly sends a payment object.
+ */
 router.post("/exams/:examId/overlay-config", isAdmin, express.json(), async (req, res) => {
   try {
     const { examId } = req.params;
     const b = req.body || {};
 
+    // Load current exam so we can keep existing overlay.payment if not provided
+    const current = await PrepExam.findOne({ examId }).lean();
+
     const modeList = ["planDayTime", "afterN", "fixed", "never"];
-    const overlay = {
-      mode: modeList.includes(b.mode) ? b.mode : "planDayTime",
-      showOnDay: Number(b.showOnDay) || 1,
-      showAtLocal: String(b.showAtLocal || "09:00").slice(0, 5),
-      daysAfterStart: Number(b.daysAfterStart) || 0,
-      fixedAt: b.fixedAt || null
+    const nextOverlayCore = {
+      mode: modeList.includes(b.mode) ? b.mode : (current?.overlay?.mode || "planDayTime"),
+      showOnDay: Number(b.showOnDay ?? current?.overlay?.showOnDay ?? 1),
+      showAtLocal: String((b.showAtLocal ?? current?.overlay?.showAtLocal ?? "09:00")).slice(0, 5),
+      daysAfterStart: Number(b.daysAfterStart ?? current?.overlay?.daysAfterStart ?? 0),
+      fixedAt: (b.fixedAt ?? current?.overlay?.fixedAt) || null
     };
 
-    const price = Number(b.price) || 0;
-    const trialDays = Number(b.trialDays) || 0;
+    // If caller sends payment (either overlay.payment or payment), use it; else keep existing.
+    const nextPayment =
+      (b.overlay && b.overlay.payment) ? b.overlay.payment :
+      (b.payment ? b.payment : current?.overlay?.payment);
+
+    const overlay = nextPayment ? { ...nextOverlayCore, payment: nextPayment } : nextOverlayCore;
+
+    const price = Number(b.price ?? current?.price ?? 0);
+    const trialDays = Number(b.trialDays ?? current?.trialDays ?? 0);
 
     await PrepExam.updateOne(
       { examId },
