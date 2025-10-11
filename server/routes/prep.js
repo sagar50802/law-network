@@ -276,6 +276,8 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
       ...(tz ? { tz: String(tz) } : {}),
       ...(Object.values(eff).some(Boolean) ? { payment: eff } : {}),
     },
+    // mirror flat payment for legacy readers (harmless)
+    ...(Object.values(eff).some(Boolean) ? { payment: eff } : {}),
   };
   if (update.overlay?.mode === "planDayTime" && !("tz" in update.overlay)) {
     update.overlay.tz = "Asia/Kolkata";
@@ -288,6 +290,56 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
   ).lean();
 
   res.json({ success: true, exam: doc });
+});
+
+/* ------------------------- QUICK SET (owner-key URL) ----------------------- */
+
+// light guard that accepts ?_k=OWNER_KEY or header X-Owner-Key
+function isAdminLoose(req, res, next) {
+  const key = req.get("X-Owner-Key") || req.query._k || (req.body && req.body._k);
+  const ok = key && key === (process.env.ADMIN_KEY || process.env.VITE_OWNER_KEY || "");
+  if (!ok) return res.status(401).json({ success: false, error: "Unauthorized" });
+  next();
+}
+
+// Example:
+// /api/prep/exams/upapo/overlay-quick-set?_k=OWNER&price=3000&mode=offset-days&offsetDays=0&upi=7767@bank&wa=9162...
+router.get("/exams/:examId/overlay-quick-set", isAdminLoose, async (req, res) => {
+  const examId = req.params.examId;
+  const {
+    price, trialDays, mode, offsetDays, fixedAt, showOnDay, showAtLocal, tz,
+    upi: upiId, upn: upiName, wa: whatsappNumber, wat: whatsappText,
+  } = req.query || {};
+
+  const payment = {};
+  if (upiId) payment.upiId = sanitizeUpiId(upiId);
+  if (upiName) payment.upiName = sanitizeText(upiName);
+  if (whatsappNumber) payment.whatsappNumber = sanitizePhone(whatsappNumber);
+  if (whatsappText) payment.whatsappText = sanitizeText(whatsappText);
+
+  const overlay = {};
+  if (mode) overlay.mode = String(mode);
+  if (offsetDays != null) overlay.offsetDays = Number(offsetDays);
+  if (fixedAt) overlay.fixedAt = new Date(fixedAt);
+  if (showOnDay != null) overlay.showOnDay = Number(showOnDay);
+  if (showAtLocal) overlay.showAtLocal = String(showAtLocal);
+  if (tz) overlay.tz = String(tz);
+  if (Object.keys(payment).length) overlay.payment = payment;
+
+  if (overlay.mode === "planDayTime" && !overlay.tz) overlay.tz = "Asia/Kolkata";
+
+  const update = {
+    ...(price != null ? { price: Number(price) } : {}),
+    ...(trialDays != null ? { trialDays: Number(trialDays) } : {}),
+    ...(Object.keys(overlay).length ? { overlay } : {}),
+    ...(Object.keys(payment).length ? { payment } : {}),
+  };
+
+  const doc = await PrepExam.findOneAndUpdate(
+    { examId }, { $set: update }, { new: true }
+  ).lean();
+
+  res.json({ success: true, exam: doc, applied: update });
 });
 
 /* -------------------------------------------------------------------------- */
@@ -321,11 +373,28 @@ router.get("/access/status", async (req, res) => {
     if (access?.startAt) todayDay = Math.min(planDays, dayIndexFrom(access.startAt));
     const canRestart = status === "active" && todayDay >= planDays;
 
+    // include plan hints (non-authoritative)
+    const ov = exam?.overlay || {};
+    if (ov && access) {
+      access.overlayPlan = {
+        mode: ov.mode || "planDayTime",
+        showOnDay: Number(ov.showOnDay || 1),
+        showAtLocal: String(ov.showAtLocal || "09:00"),
+        tz: ov.tz || "Asia/Kolkata",
+      };
+    }
+
+    // decide overlay timing (server-side)
+    const { openAt, planTimeShow } = computeOverlayAt(exam, access);
+    const now = Date.now();
+
     // include payment for client buttons
-    const pay = exam?.overlay?.payment || {};
+    const pay = exam?.overlay?.payment || exam?.payment || {};
     const overlay = {
-      show: true, // client decides UI
-      mode: status === "active" && canRestart ? "restart" : "purchase",
+      show: false,
+      mode: null,
+      openAt: openAt ? openAt.toISOString() : null,
+      tz: exam?.overlay?.tz || "Asia/Kolkata",
       payment: {
         courseName: exam?.name || String(examId),
         priceINR: Number(exam?.price || 0),
@@ -336,10 +405,59 @@ router.get("/access/status", async (req, res) => {
       },
     };
 
+    if (exam?.overlay?.mode === "planDayTime") {
+      if (planTimeShow) {
+        overlay.mode = status === "active" && canRestart ? "restart" : "purchase";
+        overlay.show = true;
+      }
+    } else {
+      if (openAt && +openAt <= now) {
+        overlay.mode = status === "active" && canRestart ? "restart" : "purchase";
+        overlay.show = true;
+      }
+    }
+
+    // legacy compatibility
+    const ovLegacy = exam?.overlay || {};
+    let forceOverlay = false;
+    if (ovLegacy.overlayMode === "afterN") {
+      const startMs = Date.parse(
+        access?.startedAt || access?.createdAt || access?.trialStartedAt || 0
+      );
+      if (startMs && ovLegacy.daysAfterStart > 0) {
+        forceOverlay = now >= startMs + ovLegacy.daysAfterStart * 86400000;
+      }
+    }
+    if (ovLegacy.overlayMode === "fixed") {
+      const fixedMs = Date.parse(ovLegacy.fixedAt || 0);
+      if (fixedMs) forceOverlay = now >= fixedMs;
+    }
+    if (forceOverlay) {
+      overlay.show = true;
+      overlay.mode = "purchase";
+      if (access) {
+        access.overlayForce = true;
+        access.forceMode = "purchase";
+      }
+    }
+
+    const trialDays = Number(exam?.trialDays || 3);
+    const trialEnded = status === "trial" && todayDay > trialDays;
+
     res.json({
       success: true,
-      exam: { examId: exam.examId, name: exam.name, price: exam.price },
-      access: { status, planDays, todayDay, canRestart, startAt: access?.startAt },
+      exam,
+      access: {
+        status,
+        planDays,
+        todayDay,
+        canRestart,
+        trialEnded,
+        startAt: access?.startAt,
+        overlayForce: access?.overlayForce || false,
+        forceMode: access?.forceMode || null,
+        overlayPlan: access?.overlayPlan || null,
+      },
       overlay,
       serverNow: Date.now(),
     });
@@ -410,11 +528,11 @@ router.post("/access/request", upload.single("screenshot"), async (req, res) => 
     });
 
     if (autoGrant) {
-      const pd = await planDaysForExam(examId);
+      const planDays = await planDaysForExam(examId);
       const now = new Date();
       await PrepAccess.findOneAndUpdate(
         { examId, userEmail: email },
-        { $set: { status: "active", planDays: pd, startAt: now }, $inc: { cycle: 1 } },
+        { $set: { status: "active", planDays, startAt: now }, $inc: { cycle: 1 } },
         { upsert: true, new: true }
       );
       await PrepAccessRequest.updateOne(
@@ -457,11 +575,11 @@ router.post("/access/admin/approve", isAdmin, async (req, res) => {
       return res.json({ success: true, request: ar });
     }
 
-    const pd = await planDaysForExam(ar.examId);
+    const planDays = await planDaysForExam(ar.examId);
     const now = new Date();
     await PrepAccess.findOneAndUpdate(
       { examId: ar.examId, userEmail: ar.userEmail },
-      { $set: { status: "active", planDays: pd, startAt: now }, $inc: { cycle: 1 } },
+      { $set: { status: "active", planDays, startAt: now }, $inc: { cycle: 1 } },
       { upsert: true, new: true }
     );
 
@@ -613,48 +731,6 @@ router.delete("/templates/:id", isAdmin, async (req, res) => {
   } catch (e) {
     res.status(500).json({ success: false, error: e?.message || "server error" });
   }
-});
-
-/* --------------------------- REQUIRED small additions ---------------------- */
-/* These two endpoints were missing; the client calls them on the prep page.  */
-/* When they 404, the UI assumes config is missing and keeps buttons disabled. */
-
-async function computeTodayDay(examId, email) {
-  const now = new Date();
-  const access = email
-    ? await PrepAccess.findOne({ examId, userEmail: email, status: "active" }).lean()
-    : null;
-
-  let planDays = 1;
-  if (access?.planDays) planDays = Number(access.planDays) || 1;
-  else {
-    const days = await PrepModule.find({ examId }).distinct("dayIndex");
-    planDays = days.length ? Math.max(...days.map(Number)) : 1;
-  }
-  if (!access) return 1;
-
-  const start = new Date(access.startAt || now);
-  const d = Math.floor((now - start) / 86400000) + 1;
-  return Math.max(1, Math.min(planDays, d));
-}
-
-// summary
-router.get("/user/summary", async (req, res) => {
-  const { examId, email } = req.query || {};
-  if (!examId) return res.status(400).json({ success: false, error: "examId required" });
-  const planDays = (await PrepModule.find({ examId }).distinct("dayIndex"))
-    .map(Number).filter(Number.isFinite).reduce((m, v) => Math.max(m, v), 1) || 1;
-  const todayDay = await computeTodayDay(examId, email);
-  res.json({ success: true, planDays, todayDay });
-});
-
-// today (modules of computed day)
-router.get("/user/today", async (req, res) => {
-  const { examId, email } = req.query || {};
-  if (!examId) return res.status(400).json({ success: false, error: "examId required" });
-  const day = await computeTodayDay(examId, email);
-  const items = await PrepModule.find({ examId, dayIndex: day }).sort({ releaseAt: 1, slotMin: 1 }).lean();
-  res.json({ success: true, items, todayDay: day });
 });
 
 /* -------------------------------------------------------------------------- */
