@@ -33,8 +33,8 @@ const TestSchema = new mongoose.Schema(
       {
         qno: Number,
         text: String,
-        options: [String],
-        correct: String,             // A/B/C/D (uppercase)
+        options: [String], // raw lines like (a) text
+        correct: String,   // normalized A..E
         marks: { type: Number, default: 1 },
         negative: { type: Number, default: 0.33 },
       },
@@ -47,7 +47,7 @@ const ResultSchema = new mongoose.Schema(
   {
     testCode: String,
     user: { email: String, name: String },
-    answers: Object,        // { [qno]: "A"/"B"/... }
+    answers: Object, // { [qno]: "A"/"B"/... }
     score: Number,
     timeTakenSec: Number,
   },
@@ -63,14 +63,28 @@ const Result = mongoose.models.TestResult || mongoose.model("TestResult", Result
 function normLetter(v) {
   if (v == null) return undefined;
   let s = String(v).trim().toUpperCase();
-  const num = Number(s);
-  if (!isNaN(num) && num >= 1 && num <= 4) return String.fromCharCode(64 + num);
+
+  // 1..5 → A..E
+  const n = Number(s);
+  if (!isNaN(n) && n >= 1 && n <= 5) return String.fromCharCode(64 + n);
+
+  // remove noise like (b), Option b
   s = s.replace(/^\(|\)$/g, "");
   s = s.replace(/^OPTION\s*/i, "");
-  s = s.replace(/[^A-D]/g, "");
+  s = s.replace(/[^A-E]/g, "");
   return s ? s[0] : undefined;
 }
 
+/**
+ * Parse plain text question file like:
+ * 10. Question
+ * (a) optA
+ * (b) optB
+ * (c) optC
+ * (d) optD
+ * Ans. (b)
+ * [optional explanation lines...]
+ */
 function parsePlainTextToQuestions(text) {
   const lines = String(text).split(/\r?\n/);
   const out = [];
@@ -87,21 +101,23 @@ function parsePlainTextToQuestions(text) {
       continue;
     }
 
-    if (/^\([a-d]\)/i.test(line)) {
+    // option lines
+    if (/^\([a-e]\)/i.test(line)) {
       current?.options.push(line);
       continue;
     }
 
-    if (/^ans?\s*:?\s*\(?([a-d1-4])\)?/i.test(line)) {
-      const m = line.match(/^ans?\s*:?\s*\(?([a-d1-4])\)?/i);
-      if (m) current.correct = normLetter(m[1]);
+    // answer line
+    const aMatch = line.match(/^ans(?:wer)?\s*[.:]?\s*\(?([a-e1-5])\)?/i);
+    if (aMatch) {
+      current && (current.correct = normLetter(aMatch[1]));
       continue;
     }
   }
 
   if (current) out.push(current);
 
-  // Final cleanup/normalization
+  // normalize
   return out.map((q, i) => ({
     qno: Number(q.qno ?? i + 1),
     text: String(q.text ?? ""),
@@ -120,17 +136,11 @@ function normalizeJSONQuestions(obj) {
     : [];
 
   return arr.map((q, i) => {
-    // Accept a variety of "correct" shapes: "b", "(B)", 2, "Option C", full option text, etc.
     let correct = normLetter(q.correct);
-
-    // If correct provided as full option string, try to detect its index.
     if (!correct && Array.isArray(q.options)) {
-      const opts = q.options.map(String);
-      const raw = String(q.correct || "").trim();
-      const idx = opts.findIndex(
-        (o) => o.trim().toUpperCase() === raw.toUpperCase()
-      );
-      if (idx >= 0 && idx < 4) correct = String.fromCharCode(65 + idx);
+      const raw = String(q.correct || "").trim().toUpperCase();
+      const idx = q.options.map(String).findIndex((o) => o.trim().toUpperCase() === raw);
+      if (idx >= 0) correct = String.fromCharCode(65 + idx);
     }
 
     return {
@@ -146,31 +156,28 @@ function normalizeJSONQuestions(obj) {
 
 async function readAnyToText(file) {
   const p = file?.path;
-  const name = file?.originalname || "";
-  const ext = path.extname(name).toLowerCase();
+  const ext = path.extname(file?.originalname || "").toLowerCase();
   if (!p) return "";
-
-  if (ext === ".json") return fs.readFileSync(p, "utf8");
-  if (ext === ".txt") return fs.readFileSync(p, "utf8");
-
+  if (ext === ".json" || ext === ".txt") return fs.readFileSync(p, "utf8");
   if (ext === ".docx") {
     const mammoth = await import("mammoth");
     const { value } = await mammoth.extractRawText({ path: p });
     return value || "";
   }
-
   return fs.readFileSync(p, "utf8");
 }
 
 /* =========================================================
-   Public & Admin routes  (non-param first)
+   Public/Admin routes
    ========================================================= */
 
-// GET /api/testseries  → grouped by paper
+// list grouped by paper
 router.get("/", async (_req, res) => {
   try {
-    const all = await Test.find({}, "paper title code totalQuestions durationMin")
-      .sort({ paper: 1, createdAt: -1 });
+    const all = await Test.find({}, "paper title code totalQuestions durationMin").sort({
+      paper: 1,
+      createdAt: -1,
+    });
     const grouped = {};
     for (const t of all) {
       if (!grouped[t.paper]) grouped[t.paper] = [];
@@ -182,7 +189,6 @@ router.get("/", async (_req, res) => {
   }
 });
 
-// GET /api/testseries/results (admin)
 router.get("/results", isAdmin, async (_req, res) => {
   try {
     const results = await Result.find().sort({ createdAt: -1 });
@@ -192,7 +198,6 @@ router.get("/results", isAdmin, async (_req, res) => {
   }
 });
 
-// GET /api/testseries/tests → flat list for admin table
 router.get("/tests", async (_req, res) => {
   try {
     const list = await Test.find(
@@ -205,7 +210,6 @@ router.get("/tests", async (_req, res) => {
   }
 });
 
-// GET /api/testseries/papers → [{paper, count}]
 router.get("/papers", async (_req, res) => {
   try {
     const agg = await Test.aggregate([
@@ -219,7 +223,6 @@ router.get("/papers", async (_req, res) => {
   }
 });
 
-// DELETE /api/testseries/paper/:paper → delete all tests under a paper
 router.delete("/paper/:paper", isAdmin, async (req, res) => {
   try {
     const out = await Test.deleteMany({ paper: req.params.paper });
@@ -229,18 +232,26 @@ router.delete("/paper/:paper", isAdmin, async (req, res) => {
   }
 });
 
-// GET /api/testseries/result/:id
 router.get("/result/:id", async (req, res) => {
   try {
     const r = await Result.findById(req.params.id);
     if (!r) return res.status(404).json({ success: false, message: "Result not found" });
-    res.json({ success: true, result: r });
+
+    // include question set for review
+    const t = await Test.findOne({ code: r.testCode });
+    const questions = t?.questions?.map((q) => ({
+      qno: q.qno,
+      text: q.text,
+      options: q.options,
+      correct: normLetter(q.correct),
+    })) || [];
+
+    res.json({ success: true, result: r, questions });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// POST /api/testseries/import (admin)
 router.post("/import", isAdmin, upload.single("file"), async (req, res) => {
   try {
     const { paper, title, code, rawText } = req.body;
@@ -264,7 +275,6 @@ router.post("/import", isAdmin, upload.single("file"), async (req, res) => {
       });
     }
 
-    // Final normalization of answers (defense-in-depth)
     questions = questions.map((q, i) => ({
       qno: Number(q.qno ?? i + 1),
       text: String(q.text ?? ""),
@@ -290,10 +300,9 @@ router.post("/import", isAdmin, upload.single("file"), async (req, res) => {
 });
 
 /* =========================================================
-   Param routes (put LAST so they don’t swallow others)
+   Param routes
    ========================================================= */
 
-// GET /api/testseries/:code/play → full question set (with normalized keys)
 router.get("/:code/play", async (req, res) => {
   try {
     const t = await Test.findOne({ code: req.params.code });
@@ -303,9 +312,7 @@ router.get("/:code/play", async (req, res) => {
       qno: Number(q.qno ?? i + 1),
       text: String(q.text ?? ""),
       options: Array.isArray(q.options) ? q.options.map(String) : [],
-      correct: normLetter(q.correct),   // expose normalized answer for review
-      marks: Number(q.marks ?? 1),
-      negative: Number(q.negative ?? 0.33),
+      correct: normLetter(q.correct), // visible for answer review
     }));
 
     res.json({ success: true, questions });
@@ -314,7 +321,6 @@ router.get("/:code/play", async (req, res) => {
   }
 });
 
-// POST /api/testseries/:code/submit → evaluate with normalization
 router.post("/:code/submit", async (req, res) => {
   try {
     const { answers, user } = req.body || {};
@@ -324,7 +330,7 @@ router.post("/:code/submit", async (req, res) => {
     let score = 0;
     for (const q of test.questions) {
       const correct = normLetter(q.correct);
-      if (!correct) continue; // unanswered key doesn't affect score
+      if (!correct) continue;
       const pick = normLetter(answers?.[q.qno]);
       if (!pick) continue;
       if (pick === correct) score += Number(q.marks ?? 1);
@@ -345,7 +351,6 @@ router.post("/:code/submit", async (req, res) => {
   }
 });
 
-// GET /api/testseries/:code → intro details
 router.get("/:code", async (req, res) => {
   try {
     const t = await Test.findOne({ code: req.params.code });
@@ -357,7 +362,6 @@ router.get("/:code", async (req, res) => {
   }
 });
 
-// DELETE /api/testseries/:code (admin) → delete one test
 router.delete("/:code", isAdmin, async (req, res) => {
   try {
     const del = await Test.findOneAndDelete({ code: req.params.code });
