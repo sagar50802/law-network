@@ -540,30 +540,74 @@ router.post("/access/start-trial", async (req, res) => {
   }
 });
 
-// Access request
-router.post("/access/request", upload.single("screenshot"), async (req, res) => {
+/* ------------------------------------------------------------------
+ * UPDATED: Access request — intent optional, flexible file fields
+ * ------------------------------------------------------------------ */
+
+// Accept proof under several possible field names
+function firstFile(req, ...names) {
+  for (const n of names) {
+    const f = req.files?.[n]?.[0];
+    if (f) return f;
+  }
+  if (req.file) return req.file; // single-file mode
+  return null;
+}
+
+// Multer that tolerates multiple field names (used only if content-type is multipart)
+const acceptProofUpload = upload.fields([
+  { name: "screenshot", maxCount: 1 },
+  { name: "file",       maxCount: 1 },
+  { name: "image",      maxCount: 1 },
+  { name: "proof",      maxCount: 1 },
+]);
+
+// Access request (accepts JSON or multipart; intent optional)
+router.post("/access/request", acceptProofUpload, async (req, res) => {
   try {
-    const { examId, email, intent, note } = req.body || {};
-    if (!examId || !email || !intent)
+    // Works for both JSON and multipart bodies
+    const {
+      examId,
+      email,
+      intent: intentIn,     // optional now
+      note,
+      name,                 // optional — from popup
+      phone,                // optional — from popup
+      planKey, planLabel, planPrice // optional, tolerated
+    } = req.body || {};
+
+    if (!examId || !email) {
       return res
         .status(400)
-        .json({ success: false, error: "examId, email, intent required" });
+        .json({ success: false, error: "examId & email required" });
+    }
 
+    // Default/normalize intent if not sent by client
+    let intent = (intentIn || "").trim();
+    if (!intent) {
+      const existing = await PrepAccess.findOne({ examId, userEmail: email }).lean();
+      intent = existing && existing.status === "active" ? "restart" : "purchase";
+    }
+
+    // Optional proof file (support multiple field names)
     let screenshotUrl = "";
-    if (req.file?.buffer?.length) {
+    const f = firstFile(req, "screenshot", "file", "image", "proof");
+    if (f?.buffer?.length) {
       const saved = await storeBuffer({
-        buffer: req.file.buffer,
-        filename: req.file.originalname || "payment.jpg",
-        mime: req.file.mimetype || "application/octet-stream",
+        buffer: f.buffer,
+        filename: f.originalname || "payment.jpg",
+        mime: f.mimetype || "application/octet-stream",
         bucket: "prep-proof",
       });
       screenshotUrl = saved.url;
     }
 
+    // Price snapshot + auto-grant flag
     const exam = await PrepExam.findOne({ examId }).lean();
-    const price = Number(exam?.price || 0);
+    const priceAt = Number(exam?.price || planPrice || 0);
     const autoGrant = !!exam?.autoGrantRestart;
 
+    // Create the access request (now storing name/phone in meta)
     const reqDoc = await PrepAccessRequest.create({
       examId,
       userEmail: email,
@@ -571,26 +615,30 @@ router.post("/access/request", upload.single("screenshot"), async (req, res) => 
       screenshotUrl,
       note,
       status: "pending",
-      priceAt: price,
+      priceAt,
+      meta: {
+        name: sanitizeText(name),
+        phone: sanitizePhone(phone),
+        planKey: sanitizeText(planKey),
+        planLabel: sanitizeText(planLabel),
+        planPrice: Number(planPrice || 0) || undefined,
+      },
     });
 
+    // Optional auto-grant flow (unchanged)
     if (autoGrant) {
       await grantActiveAccess({ examId, email });
       await PrepAccessRequest.updateOne(
         { _id: reqDoc._id },
-        {
-          $set: {
-            status: "approved",
-            approvedAt: new Date(),
-            approvedBy: "auto",
-          },
-        }
+        { $set: { status: "approved", approvedAt: new Date(), approvedBy: "auto" } }
       );
       return res.json({ success: true, approved: true, request: reqDoc });
     }
 
+    // Normal path: pending for admin review
     res.json({ success: true, approved: false, request: reqDoc });
   } catch (e) {
+    console.error("[prep] /access/request failed:", e);
     res.status(500).json({ success: false, error: e?.message || "server error" });
   }
 });
