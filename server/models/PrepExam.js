@@ -1,31 +1,54 @@
-// server/models/PrepExam.js
+// models/PrepExam.js
 import mongoose from "mongoose";
 
-const ExamSchema = new mongoose.Schema(
+const PaymentSchema = new mongoose.Schema(
   {
-    examId: { type: String, unique: true, index: true },
-    name: { type: String, required: true },
-    scheduleMode: { type: String, default: "cohort" }, // only cohort now
-
-    // --- Existing optional fields (non-breaking) ---
-    price: { type: Number, default: 0 }, // e.g., ₹499
-    autoGrantRestart: { type: Boolean, default: false }, // owner toggle
-    trialDays: { type: Number, default: 3 }, // free trial days before payment
-
-    // --- NEW: overlay trigger configuration (admin-controlled) ---
-    overlay: {
-      mode: {
-        type: String,
-        enum: ["never", "offset-days", "fixed-date"],
-        default: "offset-days",
-      },
-      offsetDays: { type: Number, default: 3 }, // used when mode = offset-days
-      fixedAt: { type: Date, default: null },   // used when mode = fixed-date
-    },
-    // --------------------------------------------------------------
+    upiId: String,
+    upiName: String,
+    whatsappNumber: String,
+    whatsappText: String,
   },
-  { timestamps: true }
+  { _id: false, strict: false }            // allow extra keys if needed
 );
 
-// Use existing model if already compiled (for hot reload safety)
-export default mongoose.models.PrepExam || mongoose.model("PrepExam", ExamSchema);
+const OverlaySchema = new mongoose.Schema(
+  {
+    mode: String,               // "offset-days" | "fixed-date" | "planDayTime" | "never"
+    offsetDays: Number,
+    fixedAt: Date,
+    showOnDay: Number,
+    showAtLocal: String,
+    tz: String,
+
+    // ✅ KEY PART: keep payment inside overlay
+    payment: { type: PaymentSchema, default: {} },
+
+    // legacy fields (harmless to keep)
+    overlayMode: String,
+    daysAfterStart: Number,
+  },
+  { _id: false, strict: false }            // don't drop unknowns
+);
+
+const PrepExamSchema = new mongoose.Schema(
+  {
+    examId:   { type: String, index: true, unique: true, required: true },
+    name:     { type: String, required: true },
+
+    price:    { type: Number, default: 0 },
+    trialDays:{ type: Number, default: 3 },
+
+    overlay:  { type: OverlaySchema, default: {} },
+
+    // ✅ optional mirror for older code
+    payment:  { type: PaymentSchema, default: {} },
+
+    // anything else the app might stash
+    overlayUI: { type: mongoose.Schema.Types.Mixed, default: {} },
+    scheduleMode: { type: String, default: "cohort" },
+  },
+  { timestamps: true, strict: false }      // be forgiving at the root
+);
+
+export default mongoose.models.PrepExam ||
+  mongoose.model("PrepExam", PrepExamSchema);
