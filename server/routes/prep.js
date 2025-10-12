@@ -407,6 +407,14 @@ router.get("/user/today", async (req, res) => {
 /*                                 User flows                                 */
 /* -------------------------------------------------------------------------- */
 
+/** Small helper: same upload fields reused by all submit endpoints */
+const acceptProofUpload = upload.fields([
+  { name: "screenshot", maxCount: 1 },
+  { name: "file",       maxCount: 1 },
+  { name: "image",      maxCount: 1 },
+  { name: "proof",      maxCount: 1 },
+]);
+
 // Be permissive about field names and files coming from various clients
 function firstFile(req, ...fieldNames) {
   for (const name of fieldNames) {
@@ -418,91 +426,97 @@ function firstFile(req, ...fieldNames) {
   return null;
 }
 
-router.post(
-  "/access/request",
-  upload.fields([{ name: "screenshot", maxCount: 1 }, { name: "file", maxCount: 1 }, { name: "image", maxCount: 1 }, { name: "proof", maxCount: 1 }]),
-  async (req, res) => {
-    try {
-      const {
-        examId,
-        email,
-        intent: intentIn,
-        note,
-        name,
-        phone,
-        // plan info (optional)
-        planKey, planLabel, planPrice,
-        type, id, // ignored; tolerated
-      } = req.body || {};
+/** The original /access/request body wrapped in a function so we can alias paths */
+async function submitAccessRequest(req, res) {
+  try {
+    const {
+      examId,
+      email,
+      intent: intentIn,
+      note,
+      name,
+      phone,
+      // plan info (optional)
+      planKey, planLabel, planPrice,
+      type, id, // ignored; tolerated
+    } = req.body || {};
 
-      if (!examId || !email) {
-        return res.status(400).json({ success: false, error: "examId & email required" });
-      }
-
-      // default intent if missing
-      let intent = sanitizeText(intentIn);
-      if (!intent) {
-        // If user already finished plan, treat as restart, else purchase
-        const access = await PrepAccess.findOne({ examId, userEmail: email }).lean();
-        intent = access && access.status === "active" ? "restart" : "purchase";
-      }
-
-      // save screenshot if present (accept several field names)
-      let screenshotUrl = "";
-      const f = firstFile(req, "screenshot", "file", "image", "proof");
-      if (f?.buffer?.length) {
-        const saved = await storeBuffer({
-          buffer: f.buffer,
-          filename: f.originalname || "payment.jpg",
-          mime: f.mimetype || "application/octet-stream",
-          bucket: "prep-proof",
-        });
-        screenshotUrl = saved.url;
-      }
-
-      const exam = await PrepExam.findOne({ examId }).lean();
-      const price = Number(exam?.price || planPrice || 0);
-      const autoGrant = !!exam?.autoGrantRestart;
-
-      const reqDoc = await PrepAccessRequest.create({
-        examId,
-        userEmail: email,
-        intent,
-        screenshotUrl,
-        note,
-        status: "pending",
-        priceAt: price,
-        meta: {
-          name: sanitizeText(name),
-          phone: sanitizePhone(phone),
-          planKey: sanitizeText(planKey),
-          planLabel: sanitizeText(planLabel),
-          planPrice: Number(planPrice || 0) || undefined,
-        },
-      });
-
-      if (autoGrant) {
-        const pd = await planDaysForExam(examId);
-        const now = new Date();
-        await PrepAccess.findOneAndUpdate(
-          { examId, userEmail: email },
-          { $set: { status: "active", planDays: pd, startAt: now }, $inc: { cycle: 1 } },
-          { upsert: true, new: true }
-        );
-        await PrepAccessRequest.updateOne(
-          { _id: reqDoc._id },
-          { $set: { status: "approved", approvedAt: new Date(), approvedBy: "auto" } }
-        );
-        return res.json({ success: true, approved: true, id: reqDoc._id, request: reqDoc });
-      }
-
-      res.json({ success: true, approved: false, id: reqDoc._id, request: reqDoc });
-    } catch (e) {
-      console.error("[prep] access/request failed:", e);
-      res.status(500).json({ success: false, error: e?.message || "server error" });
+    if (!examId || !email) {
+      return res.status(400).json({ success: false, error: "examId & email required" });
     }
+
+    // default intent if missing
+    let intent = sanitizeText(intentIn);
+    if (!intent) {
+      // If user already finished plan, treat as restart, else purchase
+      const access = await PrepAccess.findOne({ examId, userEmail: email }).lean();
+      intent = access && access.status === "active" ? "restart" : "purchase";
+    }
+
+    // save screenshot if present (accept several field names)
+    let screenshotUrl = "";
+    const f = firstFile(req, "screenshot", "file", "image", "proof");
+    if (f?.buffer?.length) {
+      const saved = await storeBuffer({
+        buffer: f.buffer,
+        filename: f.originalname || "payment.jpg",
+        mime: f.mimetype || "application/octet-stream",
+        bucket: "prep-proof",
+      });
+      screenshotUrl = saved.url;
+    }
+
+    const exam = await PrepExam.findOne({ examId }).lean();
+    const price = Number(exam?.price || planPrice || 0);
+    const autoGrant = !!exam?.autoGrantRestart;
+
+    const reqDoc = await PrepAccessRequest.create({
+      examId,
+      userEmail: email,
+      intent,
+      screenshotUrl,
+      note,
+      status: "pending",
+      priceAt: price,
+      meta: {
+        name: sanitizeText(name),
+        phone: sanitizePhone(phone),
+        planKey: sanitizeText(planKey),
+        planLabel: sanitizeText(planLabel),
+        planPrice: Number(planPrice || 0) || undefined,
+      },
+    });
+
+    if (autoGrant) {
+      const pd = await planDaysForExam(examId);
+      const now = new Date();
+      await PrepAccess.findOneAndUpdate(
+        { examId, userEmail: email },
+        { $set: { status: "active", planDays: pd, startAt: now }, $inc: { cycle: 1 } },
+        { upsert: true, new: true }
+      );
+      await PrepAccessRequest.updateOne(
+        { _id: reqDoc._id },
+        { $set: { status: "approved", approvedAt: new Date(), approvedBy: "auto" } }
+      );
+      return res.json({ success: true, approved: true, id: reqDoc._id, request: reqDoc });
+    }
+
+    res.json({ success: true, approved: false, id: reqDoc._id, request: reqDoc });
+  } catch (e) {
+    console.error("[prep] access/request failed:", e);
+    res.status(500).json({ success: false, error: e?.message || "server error" });
   }
-);
+}
+
+/* ----------------------------- Submit endpoints ---------------------------- */
+
+// Your original endpoint (kept)
+router.post("/access/request", acceptProofUpload, submitAccessRequest);
+
+// Aliases used by other client UIs (QR overlay / legacy popup)
+router.post("/user/request", acceptProofUpload, submitAccessRequest);
+router.post("/submissions",  acceptProofUpload, submitAccessRequest);
 
 /* ----------------------------- Admin: requests ----------------------------- */
 
