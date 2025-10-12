@@ -200,7 +200,7 @@ async function buildAccessStatusPayload(examId, email) {
     },
   };
 
-  // ✅ HARD BLOCK #1: Overlay mode is "never"
+  // ===== HARD BLOCK A: admin selected "Never"
   if (exam?.overlay?.mode === "never") {
     return {
       success: true,
@@ -217,11 +217,11 @@ async function buildAccessStatusPayload(examId, email) {
     };
   }
 
-  // compute schedule-based visibility
+  // compute schedule-based visibility (for non-"never" modes)
   const { openAt, planTimeShow } = computeOverlayAt(exam, access);
   overlay.openAt = openAt ? openAt.toISOString() : null;
 
-  // ✅ HARD BLOCK #2: During trial period, never show the pay/restart overlay
+  // ===== HARD BLOCK B: while inside trial, do not show overlay
   const stillInTrial = status === "trial" && todayDay <= trialDays;
   if (!stillInTrial) {
     if (exam?.overlay?.mode === "planDayTime") {
@@ -234,6 +234,32 @@ async function buildAccessStatusPayload(examId, email) {
         overlay.mode = status === "active" && canRestart ? "restart" : "purchase";
         overlay.show = true;
       }
+    }
+  }
+
+  // ===== LEGACY compatibility: apply ONLY when modern overlay.mode is missing
+  if (!exam?.overlay?.mode) {
+    const ovLegacy = exam?.overlay || {};
+    let forceOverlay = false;
+    const now = Date.now();
+
+    if (ovLegacy.overlayMode === "afterN") {
+      const startMs = Date.parse(
+        access?.startedAt || access?.createdAt || access?.trialStartedAt || 0
+      );
+      if (startMs && ovLegacy.daysAfterStart > 0) {
+        forceOverlay = now >= startMs + ovLegacy.daysAfterStart * 86400000;
+      }
+    }
+
+    if (ovLegacy.overlayMode === "fixed") {
+      const fixedMs = Date.parse(ovLegacy.fixedAt || 0);
+      if (fixedMs) forceOverlay = now >= fixedMs;
+    }
+
+    if (forceOverlay && !stillInTrial) {
+      overlay.show = true;
+      overlay.mode = "purchase";
     }
   }
 
@@ -322,7 +348,7 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
   const {
     price, trialDays, mode, offsetDays, fixedAt, showOnDay, showAtLocal, tz,
     upiId, upiName, whatsappNumber, whatsappText,
-    autoGrantRestart, // NEW: allow toggling auto-grant from editor
+    autoGrantRestart,
     payment: p = {},
   } = req.body || {};
 
@@ -332,7 +358,6 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
     whatsappNumber: sanitizePhone((whatsappNumber ?? p.whatsappNumber ?? p.waPhone) || ""),
     whatsappText:   sanitizeText((whatsappText ?? p.whatsappText  ?? p.waText)   || ""),
   };
-
   const hasPay = Object.values(eff).some(Boolean);
 
   const update = {
@@ -342,16 +367,15 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
     overlay: {
       ...(mode ? { mode } : {}),
       ...(offsetDays != null ? { offsetDays: Number(offsetDays) } : {}),
-      ...(fixedAt ? { fixedAt: new Date(fixedAt) } : { fixedAt: null } ),
+      ...(fixedAt ? { fixedAt: new Date(fixedAt) } : { fixedAt: null }),
       ...(showOnDay != null ? { showOnDay: Number(showOnDay) } : {}),
       ...(showAtLocal ? { showAtLocal: String(showAtLocal) } : {}),
       ...(tz ? { tz: String(tz) } : {}),
       ...(hasPay ? { payment: eff } : {}),
     },
-
-    // mirror payment at root for legacy clients
-    ...(hasPay ? { payment: eff } : {}),
+    ...(hasPay ? { payment: eff } : {}), // mirror for legacy clients
   };
+
   if (update.overlay?.mode === "planDayTime" && !("tz" in update.overlay)) {
     update.overlay.tz = "Asia/Kolkata";
   }
@@ -369,7 +393,7 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
 /*                                   Status                                   */
 /* -------------------------------------------------------------------------- */
 
-// Canonical status endpoint (client may use this directly)
+// Canonical status endpoint
 router.get("/access/status", async (req, res) => {
   try {
     const { examId, email } = req.query || {};
@@ -383,7 +407,7 @@ router.get("/access/status", async (req, res) => {
   }
 });
 
-/* ---------- Legacy aliases expected by your popup (return SAME payload) ---- */
+/* ---------- Legacy aliases expected by your popup (same payload) ----------- */
 
 router.get("/user/summary", async (req, res) => {
   try {
@@ -392,7 +416,7 @@ router.get("/user/summary", async (req, res) => {
       return res.status(400).json({ success: false, error: "examId required" });
 
     const payload = await buildAccessStatusPayload(examId, email);
-    res.json(payload); // includes overlay.payment
+    res.json(payload);
   } catch (e) {
     res.status(500).json({ success: false, error: e?.message || "server error" });
   }
@@ -404,7 +428,6 @@ router.get("/user/today", async (req, res) => {
     if (!examId)
       return res.status(400).json({ success: false, error: "examId required" });
 
-    // modules for today's computed day
     const status = await buildAccessStatusPayload(examId, email);
     const day = status?.access?.todayDay || 1;
 
@@ -701,7 +724,7 @@ router.post(
 router.delete("/templates/:id", isAdmin, async (req, res) => {
   try {
     const r = await PrepModule.findByIdAndDelete(req.params.id);
-  if (!r) return res.status(404).json({ success: false, error: "Not found" });
+    if (!r) return res.status(404).json({ success: false, error: "Not found" });
     res.json({ success: true, removed: r._id });
   } catch (e) {
     res.status(500).json({ success: false, error: e?.message || "server error" });
