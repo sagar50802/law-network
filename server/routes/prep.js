@@ -46,7 +46,12 @@ async function storeBuffer({ buffer, filename, mime, bucket = "prep" }) {
   const contentType = mime || "application/octet-stream";
 
   // Try R2 first
-  if (R2?.r2Enabled?.() && typeof R2.uploadBuffer === "function") {
+  if (
+    R2 &&
+    typeof R2.r2Enabled === "function" &&
+    R2.r2Enabled() &&
+    typeof R2.uploadBuffer === "function"
+  ) {
     try {
       const key = `${bucket}/${name}`;
       const url = await R2.uploadBuffer(key, buffer, contentType);
@@ -180,15 +185,18 @@ async function buildAccessStatusPayload(examId, email) {
   let status = access?.status || "none";
   let todayDay = 1;
   if (access?.startAt) todayDay = Math.min(planDays, dayIndexFrom(access.startAt));
-  const trialDays = Number(exam?.trialDays ?? 3);
   const canRestart = status === "active" && todayDay >= planDays;
 
-  // default overlay payload + payment info for client
+  // compute overlay timing
+  const { openAt, planTimeShow } = computeOverlayAt(exam, access);
+  const now = Date.now();
+
+  // pack payment info for client
   const pay = exam?.overlay?.payment || {};
   const overlay = {
     show: false,
     mode: null,
-    openAt: null,
+    openAt: openAt ? openAt.toISOString() : null,
     tz: exam?.overlay?.tz || "Asia/Kolkata",
     payment: {
       courseName: exam?.name || String(examId),
@@ -200,66 +208,15 @@ async function buildAccessStatusPayload(examId, email) {
     },
   };
 
-  // ===== HARD BLOCK A: admin selected "Never"
-  if (exam?.overlay?.mode === "never") {
-    return {
-      success: true,
-      exam: { examId: exam.examId, name: exam.name, price: exam.price },
-      access: {
-        status,
-        planDays,
-        todayDay,
-        canRestart,
-        startAt: access?.startAt || null,
-      },
-      overlay, // show=false
-      serverNow: Date.now(),
-    };
-  }
-
-  // compute schedule-based visibility (for non-"never" modes)
-  const { openAt, planTimeShow } = computeOverlayAt(exam, access);
-  overlay.openAt = openAt ? openAt.toISOString() : null;
-
-  // ===== HARD BLOCK B: while inside trial, do not show overlay
-  const stillInTrial = status === "trial" && todayDay <= trialDays;
-  if (!stillInTrial) {
-    if (exam?.overlay?.mode === "planDayTime") {
-      if (planTimeShow) {
-        overlay.mode = status === "active" && canRestart ? "restart" : "purchase";
-        overlay.show = true;
-      }
-    } else {
-      if (openAt && +new Date(openAt) <= Date.now()) {
-        overlay.mode = status === "active" && canRestart ? "restart" : "purchase";
-        overlay.show = true;
-      }
-    }
-  }
-
-  // ===== LEGACY compatibility: apply ONLY when modern overlay.mode is missing
-  if (!exam?.overlay?.mode) {
-    const ovLegacy = exam?.overlay || {};
-    let forceOverlay = false;
-    const now = Date.now();
-
-    if (ovLegacy.overlayMode === "afterN") {
-      const startMs = Date.parse(
-        access?.startedAt || access?.createdAt || access?.trialStartedAt || 0
-      );
-      if (startMs && ovLegacy.daysAfterStart > 0) {
-        forceOverlay = now >= startMs + ovLegacy.daysAfterStart * 86400000;
-      }
-    }
-
-    if (ovLegacy.overlayMode === "fixed") {
-      const fixedMs = Date.parse(ovLegacy.fixedAt || 0);
-      if (fixedMs) forceOverlay = now >= fixedMs;
-    }
-
-    if (forceOverlay && !stillInTrial) {
+  if (exam?.overlay?.mode === "planDayTime") {
+    if (planTimeShow) {
+      overlay.mode = status === "active" && canRestart ? "restart" : "purchase";
       overlay.show = true;
-      overlay.mode = "purchase";
+    }
+  } else {
+    if (openAt && +new Date(openAt) <= now) {
+      overlay.mode = status === "active" && canRestart ? "restart" : "purchase";
+      overlay.show = true;
     }
   }
 
@@ -329,14 +286,13 @@ router.delete("/exams/:examId", isAdmin, async (req, res) => {
 router.get("/exams/:examId/meta", isAdmin, async (req, res) => {
   const exam = await PrepExam.findOne({ examId: req.params.examId }).lean();
   if (!exam) return res.status(404).json({ success: false, message: "Exam not found" });
-  const { price = 0, trialDays = 3, overlay = {}, payment = {}, autoGrantRestart = false } = exam;
+  const { price = 0, trialDays = 3, overlay = {}, payment = {} } = exam;
   res.json({
     success: true,
     price,
     trialDays,
     overlay,
     payment, // legacy root
-    autoGrantRestart: !!autoGrantRestart,
     name: exam.name,
     examId: exam.examId,
   });
@@ -348,7 +304,6 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
   const {
     price, trialDays, mode, offsetDays, fixedAt, showOnDay, showAtLocal, tz,
     upiId, upiName, whatsappNumber, whatsappText,
-    autoGrantRestart,
     payment: p = {},
   } = req.body || {};
 
@@ -358,12 +313,10 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
     whatsappNumber: sanitizePhone((whatsappNumber ?? p.whatsappNumber ?? p.waPhone) || ""),
     whatsappText:   sanitizeText((whatsappText ?? p.whatsappText  ?? p.waText)   || ""),
   };
-  const hasPay = Object.values(eff).some(Boolean);
 
   const update = {
     ...(price != null ? { price: Number(price) } : {}),
     ...(trialDays != null ? { trialDays: Number(trialDays) } : {}),
-    ...(autoGrantRestart != null ? { autoGrantRestart: !!autoGrantRestart } : {}),
     overlay: {
       ...(mode ? { mode } : {}),
       ...(offsetDays != null ? { offsetDays: Number(offsetDays) } : {}),
@@ -371,11 +324,12 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
       ...(showOnDay != null ? { showOnDay: Number(showOnDay) } : {}),
       ...(showAtLocal ? { showAtLocal: String(showAtLocal) } : {}),
       ...(tz ? { tz: String(tz) } : {}),
-      ...(hasPay ? { payment: eff } : {}),
+      ...(Object.values(eff).some(Boolean) ? { payment: eff } : {}),
     },
-    ...(hasPay ? { payment: eff } : {}), // mirror for legacy clients
-  };
 
+    // ✅ mirror at root for legacy readers
+    ...(Object.values(eff).some(Boolean) ? { payment: eff } : {}),
+  };
   if (update.overlay?.mode === "planDayTime" && !("tz" in update.overlay)) {
     update.overlay.tz = "Asia/Kolkata";
   }
@@ -393,7 +347,7 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
 /*                                   Status                                   */
 /* -------------------------------------------------------------------------- */
 
-// Canonical status endpoint
+// Canonical status endpoint (client may use this directly)
 router.get("/access/status", async (req, res) => {
   try {
     const { examId, email } = req.query || {};
@@ -407,8 +361,9 @@ router.get("/access/status", async (req, res) => {
   }
 });
 
-/* ---------- Legacy aliases expected by your popup (same payload) ----------- */
+/* ---------- Legacy aliases expected by your popup (return SAME payload) ---- */
 
+// GET /api/prep/user/summary?examId=...&email=...
 router.get("/user/summary", async (req, res) => {
   try {
     const { examId, email } = req.query || {};
@@ -416,18 +371,20 @@ router.get("/user/summary", async (req, res) => {
       return res.status(400).json({ success: false, error: "examId required" });
 
     const payload = await buildAccessStatusPayload(examId, email);
-    res.json(payload);
+    res.json(payload); // includes overlay.payment (upiId, upiName, whatsappNumber, whatsappText)
   } catch (e) {
     res.status(500).json({ success: false, error: e?.message || "server error" });
   }
 });
 
+// GET /api/prep/user/today?examId=...&email=...
 router.get("/user/today", async (req, res) => {
   try {
     const { examId, email } = req.query || {};
     if (!examId)
       return res.status(400).json({ success: false, error: "examId required" });
 
+    // modules for today's computed day
     const status = await buildAccessStatusPayload(examId, email);
     const day = status?.access?.todayDay || 1;
 
@@ -445,54 +402,51 @@ router.get("/user/today", async (req, res) => {
 /*                                 User flows                                 */
 /* -------------------------------------------------------------------------- */
 
-/** Only run multer if Content-Type is multipart; otherwise skip (so JSON works). */
-function maybeMulter(fields) {
-  const mw = upload.fields(fields);
-  return (req, res, next) => {
-    const ct = req.headers["content-type"] || "";
-    if (/multipart\/form-data/i.test(ct)) return mw(req, res, next);
-    next();
-  };
-}
-
-// choose the first available file from common field names
-function firstFile(req, ...names) {
-  for (const n of names) { const f = req.files?.[n]?.[0]; if (f) return f; }
-  if (req.file) return req.file;
-  return null;
-}
-
-// shared submit handler
-async function submitAccessRequest(req, res) {
+router.post("/access/start-trial", async (req, res) => {
   try {
-    const b = req.body || {};
-    const examId = sanitizeText(b.examId);
-    const email  = sanitizeText(b.email);
+    const { examId, email } = req.body || {};
     if (!examId || !email)
-      return res.status(400).json({ success:false, error:"examId & email required" });
+      return res.status(400).json({ success: false, error: "examId & email required" });
 
-    // intent defaults if missing
-    let intent = sanitizeText(b.intent);
-    if (!intent) {
-      const access = await PrepAccess.findOne({ examId, userEmail: email }).lean();
-      intent = access && access.status === "active" ? "restart" : "purchase";
+    const planDays = await planDaysForExam(examId);
+    const now = new Date();
+
+    const existing = await PrepAccess.findOne({ examId, userEmail: email }).lean();
+    if (existing && existing.status === "active") {
+      return res.json({ success: true, access: existing, message: "already active" });
     }
 
-    // screenshot optional
+    const doc = await PrepAccess.findOneAndUpdate(
+      { examId, userEmail: email },
+      { $set: { status: "trial", planDays, startAt: now } },
+      { upsert: true, new: true }
+    );
+    res.json({ success: true, access: doc });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e?.message || "server error" });
+  }
+});
+
+// user submits payment proof (screenshot optional)
+router.post("/access/request", upload.single("screenshot"), async (req, res) => {
+  try {
+    const { examId, email, intent, note } = req.body || {};
+    if (!examId || !email || !intent)
+      return res.status(400).json({ success: false, error: "examId, email, intent required" });
+
     let screenshotUrl = "";
-    const f = firstFile(req, "screenshot","file","image","proof");
-    if (f?.buffer?.length) {
+    if (req.file?.buffer?.length) {
       const saved = await storeBuffer({
-        buffer: f.buffer,
-        filename: f.originalname || "payment.jpg",
-        mime: f.mimetype || "application/octet-stream",
+        buffer: req.file.buffer,
+        filename: req.file.originalname || "payment.jpg",
+        mime: req.file.mimetype || "application/octet-stream",
         bucket: "prep-proof",
       });
       screenshotUrl = saved.url;
     }
 
     const exam = await PrepExam.findOne({ examId }).lean();
-    const priceAt = Number(b.planPrice || exam?.price || 0);
+    const price = Number(exam?.price || 0);
     const autoGrant = !!exam?.autoGrantRestart;
 
     const reqDoc = await PrepAccessRequest.create({
@@ -500,16 +454,9 @@ async function submitAccessRequest(req, res) {
       userEmail: email,
       intent,
       screenshotUrl,
-      note: sanitizeText(b.note),
+      note,
       status: "pending",
-      priceAt,
-      meta: {
-        name: sanitizeText(b.name),
-        phone: sanitizePhone(b.phone),
-        planKey: sanitizeText(b.planKey),
-        planLabel: sanitizeText(b.planLabel),
-        planPrice: Number(b.planPrice || 0) || undefined,
-      },
+      priceAt: price,
     });
 
     if (autoGrant) {
@@ -517,34 +464,21 @@ async function submitAccessRequest(req, res) {
       const now = new Date();
       await PrepAccess.findOneAndUpdate(
         { examId, userEmail: email },
-        { $set: { status:"active", planDays:pd, startAt:now }, $inc: { cycle:1 } },
-        { upsert:true, new:true }
+        { $set: { status: "active", planDays: pd, startAt: now }, $inc: { cycle: 1 } },
+        { upsert: true, new: true }
       );
       await PrepAccessRequest.updateOne(
         { _id: reqDoc._id },
-        { $set: { status:"approved", approvedAt:new Date(), approvedBy:"auto" } }
+        { $set: { status: "approved", approvedAt: new Date(), approvedBy: "auto" } }
       );
-      return res.json({ success:true, approved:true, id:reqDoc._id, request:reqDoc });
+      return res.json({ success: true, approved: true, request: reqDoc });
     }
 
-    res.json({ success:true, approved:false, id:reqDoc._id, request:reqDoc });
+    res.json({ success: true, approved: false, request: reqDoc });
   } catch (e) {
-    console.error("[prep] access/request failed:", e);
-    res.status(500).json({ success:false, error:e?.message || "server error" });
+    res.status(500).json({ success: false, error: e?.message || "server error" });
   }
-}
-
-/* Submit endpoints (all call the same handler) */
-const proofFields = [
-  { name:"screenshot", maxCount:1 },
-  { name:"file",       maxCount:1 },
-  { name:"image",      maxCount:1 },
-  { name:"proof",      maxCount:1 },
-];
-
-router.post("/access/request", maybeMulter(proofFields), submitAccessRequest);
-router.post("/user/request",  maybeMulter(proofFields), submitAccessRequest);
-router.post("/submissions",   maybeMulter(proofFields), submitAccessRequest);
+});
 
 /* ----------------------------- Admin: requests ----------------------------- */
 
@@ -554,7 +488,7 @@ router.get("/access/requests", isAdmin, async (req, res) => {
     const q = {};
     if (examId) q.examId = examId;
     if (status) q.status = status;
-    const items = await PrepAccessRequest.find(q).sort({ createdAt: -1 }).limit(200).lean();
+    const items = await PrepAccessRequest.find(q).sort({ createdAt: -1 }).limit(100).lean();
     res.json({ success: true, items });
   } catch (e) {
     res.status(500).json({ success: false, error: e?.message || "server error" });
