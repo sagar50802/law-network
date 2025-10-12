@@ -97,9 +97,7 @@ async function grantActiveAccess({ examId, email }) {
 
 /** -----------------------------------------------------------------
  * Timezone helpers (no extra deps)
- * We compare server "now" and "startAt" *in a given IANA TZ*.
  * ------------------------------------------------------------------ */
-// Get Y/M/D/H/M parts for a Date *as seen in a timezone*
 function tzParts(date, timeZone) {
   const fmt = new Intl.DateTimeFormat("en-GB", {
     timeZone,
@@ -110,7 +108,7 @@ function tzParts(date, timeZone) {
     minute: "2-digit",
     hour12: false,
   });
-  const parts = Object.fromEntries(fmt.formatToParts(date).map(p => [p.type, p.value]));
+  const parts = Object.fromEntries(fmt.formatToParts(date).map((p) => [p.type, p.value]));
   return {
     year: Number(parts.year),
     month: Number(parts.month),
@@ -119,14 +117,10 @@ function tzParts(date, timeZone) {
     minute: Number(parts.minute),
   };
 }
-
-// Strip time to local midnight in TZ (returns {year,month,day})
 function tzYMD(date, timeZone) {
   const p = tzParts(date, timeZone);
   return { year: p.year, month: p.month, day: p.day };
 }
-
-// Days diff between two dates at local midnight in TZ
 function daysBetweenTZ(aDate, bDate, timeZone) {
   const a = tzYMD(aDate, timeZone);
   const b = tzYMD(bDate, timeZone);
@@ -134,11 +128,11 @@ function daysBetweenTZ(aDate, bDate, timeZone) {
   const utcB = Date.UTC(b.year, b.month - 1, b.day);
   return Math.round((utcB - utcA) / 86400000);
 }
-
-// Compare HH:mm (string) against current time in TZ
 function isTimeReachedInTZ(now, hhmm, timeZone) {
   const p = tzParts(now, timeZone);
-  const [hh, mm] = String(hhmm || "09:00").split(":").map(x => parseInt(x, 10) || 0);
+  const [hh, mm] = String(hhmm || "09:00")
+    .split(":")
+    .map((x) => parseInt(x, 10) || 0);
   if (p.hour > hh) return true;
   if (p.hour < hh) return false;
   return p.minute >= mm;
@@ -146,11 +140,10 @@ function isTimeReachedInTZ(now, hhmm, timeZone) {
 
 /** -----------------------------------------------------------------
  * Compute overlay trigger time per user
- * - For planDayTime: server *decides show flag* using admin TZ,
- *   ignoring device clocks/timezones completely.
  * ------------------------------------------------------------------ */
 function computeOverlayAt(exam, access) {
-  if (!exam?.overlay || exam.overlay.mode === "never") return { openAt: null, planTimeShow: false };
+  if (!exam?.overlay || exam.overlay.mode === "never")
+    return { openAt: null, planTimeShow: false };
 
   const mode = exam.overlay.mode;
 
@@ -163,8 +156,6 @@ function computeOverlayAt(exam, access) {
     if (!startAt) return { openAt: null, planTimeShow: false };
 
     const now = new Date();
-
-    // Day index in TZ (start day = 1)
     const daysDone = daysBetweenTZ(startAt, now, tz);
     const todayDay = Math.max(1, daysDone + 1);
 
@@ -194,9 +185,7 @@ const router = express.Router();
 
 // === Simple list of exams for the dropdown (admin) ===
 router.get("/exams", isAdmin, async (req, res) => {
-  const rows = await PrepExam.find({}, { examId: 1, name: 1 })
-    .sort({ name: 1 })
-    .lean();
+  const rows = await PrepExam.find({}, { examId: 1, name: 1 }).sort({ name: 1 }).lean();
   res.json({ success: true, exams: rows || [] });
 });
 
@@ -273,12 +262,7 @@ router.post(
       ...(priceINR ? { price: Number(priceINR) } : {}),
     };
 
-    const doc = await PrepExam.findOneAndUpdate(
-      { examId },
-      { $set: update },
-      { new: true }
-    ).lean();
-
+    const doc = await PrepExam.findOneAndUpdate({ examId }, { $set: update }, { new: true }).lean();
     res.json({ success: true, exam: doc });
   }
 );
@@ -290,24 +274,21 @@ router.post(
 // Get exam meta (price/trialDays/overlay) for admin UI
 router.get("/exams/:examId/meta", isAdmin, async (req, res) => {
   const exam = await PrepExam.findOne({ examId: req.params.examId }).lean();
-  if (!exam)
-    return res.status(404).json({ success: false, message: "Exam not found" });
+  if (!exam) return res.status(404).json({ success: false, message: "Exam not found" });
   const { price = 0, trialDays = 3, overlay = {}, payment = {} } = exam;
   res.json({
     success: true,
     price,
     trialDays,
     overlay,
-    payment,  // <-- expose for admin UI
+    payment, // <-- expose for admin UI
     name: exam.name,
     examId: exam.examId,
   });
 });
 
-// === UPDATED ===
-// Update overlay config (and price/trialDays) + payment/proof fields (accepts flat or nested payment)
+// Update overlay config (and price/trialDays) + payment fields
 router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
-  // Flat fields (new editor)
   const {
     price,
     trialDays,
@@ -328,15 +309,14 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
   // Also accept legacy nested format: payment: { upiId, upiName, whatsappNumber, whatsappText, waPhone, waText }
   const p = (req.body && req.body.payment) || {};
 
-  // Resolve effective values (flat > nested > legacy names)
-  const effUpiId          = (upiId ?? p.upiId) ? sanitizeUpiId(upiId ?? p.upiId) : "";
-  const effUpiName        = (upiName ?? p.upiName) ? sanitizeText(upiName ?? p.upiName) : "";
+  const effUpiId = (upiId ?? p.upiId) ? sanitizeUpiId(upiId ?? p.upiId) : "";
+  const effUpiName = (upiName ?? p.upiName) ? sanitizeText(upiName ?? p.upiName) : "";
   const effWhatsappNumber = (whatsappNumber ?? p.whatsappNumber ?? p.waPhone)
-                              ? sanitizePhone(whatsappNumber ?? p.whatsappNumber ?? p.waPhone)
-                              : "";
-  const effWhatsappText   = (whatsappText ?? p.whatsappText ?? p.waText)
-                              ? sanitizeText(whatsappText ?? p.whatsappText ?? p.waText)
-                              : "";
+    ? sanitizePhone(whatsappNumber ?? p.whatsappNumber ?? p.waPhone)
+    : "";
+  const effWhatsappText = (whatsappText ?? p.whatsappText ?? p.waText)
+    ? sanitizeText(whatsappText ?? p.whatsappText ?? p.waText)
+    : "";
 
   const update = {
     ...(price != null ? { price: Number(price) } : {}),
@@ -348,8 +328,6 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
       ...(showOnDay != null ? { showOnDay: Number(showOnDay) } : {}),
       ...(showAtLocal ? { showAtLocal: String(showAtLocal) } : {}),
       ...(tz ? { tz: String(tz) } : {}),
-
-      // Write overlay.payment if any payment field is present (from either format)
       ...((effUpiId || effUpiName || effWhatsappNumber || effWhatsappText)
         ? {
             payment: {
@@ -368,11 +346,7 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
     update.overlay.tz = "Asia/Kolkata";
   }
 
-  const doc = await PrepExam.findOneAndUpdate(
-    { examId: req.params.examId },
-    { $set: update },
-    { new: true }
-  ).lean();
+  const doc = await PrepExam.findOneAndUpdate({ examId: req.params.examId }, { $set: update }, { new: true }).lean();
   res.json({ success: true, exam: doc });
 });
 
@@ -382,22 +356,18 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
 router.get("/access/status", async (req, res) => {
   try {
     const { examId, email } = req.query || {};
-    if (!examId)
-      return res.status(400).json({ success: false, error: "examId required" });
+    if (!examId) return res.status(400).json({ success: false, error: "examId required" });
 
     const exam = await PrepExam.findOne({ examId }).lean();
     if (!exam)
       return res.json({ exam: null, access: { status: "none" }, overlay: {}, serverNow: Date.now() });
 
     const planDays = await planDaysForExam(examId);
-    const access = email
-      ? await PrepAccess.findOne({ examId, userEmail: email }).lean()
-      : null;
+    const access = email ? await PrepAccess.findOne({ examId, userEmail: email }).lean() : null;
 
     let status = access?.status || "none";
     let todayDay = 1;
-    if (access?.startAt)
-      todayDay = Math.min(planDays, dayIndexFrom(access.startAt));
+    if (access?.startAt) todayDay = Math.min(planDays, dayIndexFrom(access.startAt));
     const canRestart = status === "active" && todayDay >= planDays;
 
     // Include overlay plan (client can read for display, but server owns timing)
@@ -411,7 +381,7 @@ router.get("/access/status", async (req, res) => {
       };
     }
 
-    // derive overlay timing
+    // derive overlay timing (modern)
     const { openAt, planTimeShow } = computeOverlayAt(exam, access);
     const now = Date.now();
     let overlay = {
@@ -434,46 +404,43 @@ router.get("/access/status", async (req, res) => {
 
     if (exam?.overlay?.mode === "planDayTime") {
       if (planTimeShow) {
-        const forceRestart = canRestart;
-        overlay.mode = (status === "active" && forceRestart) ? "restart" : "purchase";
+        overlay.mode = status === "active" && canRestart ? "restart" : "purchase";
         overlay.show = true;
       }
-    } else {
+    } else if (exam?.overlay?.mode && exam.overlay.mode !== "never") {
       if (openAt && +openAt <= now) {
-        const forceRestart = canRestart;
-        overlay.mode = (status === "active" && forceRestart) ? "restart" : "purchase";
+        overlay.mode = status === "active" && canRestart ? "restart" : "purchase";
         overlay.show = true;
       }
     }
 
-    // --- legacy overlay schedule safeguards (kept) ---
-    const ovLegacy = exam?.overlay || {};
-    let forceOverlay = false;
+    // --- legacy overlay schedule safeguards (ONLY when modern mode missing) ---
+    if (!exam?.overlay?.mode) {
+      const ovLegacy = exam?.overlay || {};
+      let forceOverlay = false;
 
-    if (ovLegacy.overlayMode === "afterN") {
-      const startMs = Date.parse(
-        access?.startedAt ||
-        access?.createdAt ||
-        access?.trialStartedAt ||
-        0
-      );
-      if (startMs && ovLegacy.daysAfterStart > 0) {
-        forceOverlay = now >= startMs + ovLegacy.daysAfterStart * 86400000;
+      if (ovLegacy.overlayMode === "afterN") {
+        const startMs = Date.parse(
+          access?.startedAt || access?.createdAt || access?.trialStartedAt || 0
+        );
+        if (startMs && ovLegacy.daysAfterStart > 0) {
+          forceOverlay = now >= startMs + ovLegacy.daysAfterStart * 86400000;
+        }
       }
-    }
 
-    if (ovLegacy.overlayMode === "fixed") {
-      const fixedMs = Date.parse(ovLegacy.fixedAt || 0);
-      if (fixedMs) forceOverlay = now >= fixedMs;
-    }
-
-    if (forceOverlay) {
-      if (access) {
-        access.overlayForce = true;
-        access.forceMode = "purchase";
+      if (ovLegacy.overlayMode === "fixed") {
+        const fixedMs = Date.parse(ovLegacy.fixedAt || 0);
+        if (fixedMs) forceOverlay = now >= fixedMs;
       }
-      overlay.show = true;
-      overlay.mode = "purchase";
+
+      if (forceOverlay) {
+        if (access) {
+          access.overlayForce = true;
+          access.forceMode = "purchase";
+        }
+        overlay.show = true;
+        overlay.mode = "purchase";
+      }
     }
     // --- end legacy block ---
 
@@ -498,9 +465,7 @@ router.get("/access/status", async (req, res) => {
       serverNow: Date.now(),
     });
   } catch (e) {
-    res
-      .status(500)
-      .json({ success: false, error: e?.message || "server error" });
+    res.status(500).json({ success: false, error: e?.message || "server error" });
   }
 });
 
@@ -513,9 +478,7 @@ router.post("/access/start-trial", async (req, res) => {
   try {
     const { examId, email } = req.body || {};
     if (!examId || !email)
-      return res
-        .status(400)
-        .json({ success: false, error: "examId & email required" });
+      return res.status(400).json({ success: false, error: "examId & email required" });
 
     const planDays = await planDaysForExam(examId);
     const now = new Date();
@@ -557,9 +520,9 @@ function firstFile(req, ...names) {
 // Multer that tolerates multiple field names (used only if content-type is multipart)
 const acceptProofUpload = upload.fields([
   { name: "screenshot", maxCount: 1 },
-  { name: "file",       maxCount: 1 },
-  { name: "image",      maxCount: 1 },
-  { name: "proof",      maxCount: 1 },
+  { name: "file", maxCount: 1 },
+  { name: "image", maxCount: 1 },
+  { name: "proof", maxCount: 1 },
 ]);
 
 // Access request (accepts JSON or multipart; intent optional)
@@ -569,11 +532,13 @@ router.post("/access/request", acceptProofUpload, async (req, res) => {
     const {
       examId,
       email,
-      intent: intentIn,     // optional now
+      intent: intentIn, // optional now
       note,
-      name,                 // optional — from popup
-      phone,                // optional — from popup
-      planKey, planLabel, planPrice // optional, tolerated
+      name, // optional — from popup
+      phone, // optional — from popup
+      planKey,
+      planLabel,
+      planPrice, // optional, tolerated
     } = req.body || {};
 
     if (!examId || !email) {
@@ -650,10 +615,7 @@ router.get("/access/requests", isAdmin, async (req, res) => {
     const q = {};
     if (examId) q.examId = examId;
     if (status) q.status = status;
-    const items = await PrepAccessRequest.find(q)
-      .sort({ createdAt: -1 })
-      .limit(100)
-      .lean();
+    const items = await PrepAccessRequest.find(q).sort({ createdAt: -1 }).limit(100).lean();
     res.json({ success: true, items });
   } catch (e) {
     res.status(500).json({ success: false, error: e?.message || "server error" });
@@ -665,8 +627,7 @@ router.post("/access/admin/approve", isAdmin, async (req, res) => {
   try {
     const { requestId, approve = true } = req.body || {};
     const ar = await PrepAccessRequest.findById(requestId);
-    if (!ar)
-      return res.status(404).json({ success: false, error: "request not found" });
+    if (!ar) return res.status(404).json({ success: false, error: "request not found" });
 
     if (!approve) {
       ar.status = "rejected";
@@ -690,9 +651,7 @@ router.post("/access/admin/revoke", isAdmin, async (req, res) => {
   try {
     const { examId, email } = req.body || {};
     if (!examId || !email)
-      return res
-        .status(400)
-        .json({ success: false, error: "examId & email required" });
+      return res.status(400).json({ success: false, error: "examId & email required" });
     const r = await PrepAccess.updateOne(
       { examId, userEmail: email },
       { $set: { status: "revoked" } }
@@ -709,13 +668,8 @@ router.post("/access/admin/revoke", isAdmin, async (req, res) => {
 
 // lightweight admin guard using owner key (query/header/body)
 function isAdminLoose(req, res, next) {
-  const key =
-    req.get("X-Owner-Key") ||
-    req.query._k ||
-    (req.body && req.body._k);
-  const ok =
-    key &&
-    key === (process.env.ADMIN_KEY || process.env.VITE_OWNER_KEY || "");
+  const key = req.get("X-Owner-Key") || req.query._k || (req.body && req.body._k);
+  const ok = key && key === (process.env.ADMIN_KEY || process.env.VITE_OWNER_KEY || "");
   if (!ok) return res.status(401).json({ success: false, error: "Unauthorized" });
   next();
 }
@@ -725,9 +679,19 @@ router.get("/exams/:examId/overlay-quick-set", isAdminLoose, async (req, res) =>
   try {
     const examId = req.params.examId;
     const {
-      price, trialDays, mode, offsetDays, fixedAt, showOnDay, showAtLocal, tz,
+      price,
+      trialDays,
+      mode,
+      offsetDays,
+      fixedAt,
+      showOnDay,
+      showAtLocal,
+      tz,
       // short URL-friendly payment aliases
-      upi: upiId, upn: upiName, wa: whatsappNumber, wat: whatsappText,
+      upi: upiId,
+      upn: upiName,
+      wa: whatsappNumber,
+      wat: whatsappText,
     } = req.query || {};
 
     const overlay = {};
@@ -755,11 +719,7 @@ router.get("/exams/:examId/overlay-quick-set", isAdminLoose, async (req, res) =>
       update.overlay.tz = "Asia/Kolkata";
     }
 
-    const doc = await PrepExam.findOneAndUpdate(
-      { examId },
-      { $set: update },
-      { new: true }
-    ).lean();
+    const doc = await PrepExam.findOneAndUpdate({ examId }, { $set: update }, { new: true }).lean();
 
     res.json({ success: true, exam: doc, applied: update });
   } catch (e) {
