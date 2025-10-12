@@ -46,12 +46,7 @@ async function storeBuffer({ buffer, filename, mime, bucket = "prep" }) {
   const contentType = mime || "application/octet-stream";
 
   // Try R2 first
-  if (
-    R2 &&
-    typeof R2.r2Enabled === "function" &&
-    R2.r2Enabled() &&
-    typeof R2.uploadBuffer === "function"
-  ) {
+  if (R2?.r2Enabled?.() && typeof R2.uploadBuffer === "function") {
     try {
       const key = `${bucket}/${name}`;
       const url = await R2.uploadBuffer(key, buffer, contentType);
@@ -325,7 +320,7 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
     overlay: {
       ...(mode ? { mode } : {}),
       ...(offsetDays != null ? { offsetDays: Number(offsetDays) } : {}),
-      ...(fixedAt ? { fixedAt: new Date(fixedAt) } : { fixedAt: null }),
+      ...(fixedAt ? { fixedAt: new Date(fixedAt) } : { fixedAt: null } ),
       ...(showOnDay != null ? { showOnDay: Number(showOnDay) } : {}),
       ...(showAtLocal ? { showAtLocal: String(showAtLocal) } : {}),
       ...(tz ? { tz: String(tz) } : {}),
@@ -368,7 +363,6 @@ router.get("/access/status", async (req, res) => {
 
 /* ---------- Legacy aliases expected by your popup (return SAME payload) ---- */
 
-// GET /api/prep/user/summary?examId=...&email=...
 router.get("/user/summary", async (req, res) => {
   try {
     const { examId, email } = req.query || {};
@@ -382,7 +376,6 @@ router.get("/user/summary", async (req, res) => {
   }
 });
 
-// GET /api/prep/user/today?examId=...&email=...
 router.get("/user/today", async (req, res) => {
   try {
     const { examId, email } = req.query || {};
@@ -407,55 +400,42 @@ router.get("/user/today", async (req, res) => {
 /*                                 User flows                                 */
 /* -------------------------------------------------------------------------- */
 
-/** Small helper: same upload fields reused by all submit endpoints */
-const acceptProofUpload = upload.fields([
-  { name: "screenshot", maxCount: 1 },
-  { name: "file",       maxCount: 1 },
-  { name: "image",      maxCount: 1 },
-  { name: "proof",      maxCount: 1 },
-]);
+/** Only run multer if Content-Type is multipart; otherwise skip (so JSON works). */
+function maybeMulter(fields) {
+  const mw = upload.fields(fields);
+  return (req, res, next) => {
+    const ct = req.headers["content-type"] || "";
+    if (/multipart\/form-data/i.test(ct)) return mw(req, res, next);
+    next();
+  };
+}
 
-// Be permissive about field names and files coming from various clients
-function firstFile(req, ...fieldNames) {
-  for (const name of fieldNames) {
-    const f = req.files?.[name]?.[0];
-    if (f) return f;
-  }
-  // single file mode (upload.single) style
+// choose the first available file from common field names
+function firstFile(req, ...names) {
+  for (const n of names) { const f = req.files?.[n]?.[0]; if (f) return f; }
   if (req.file) return req.file;
   return null;
 }
 
-/** The original /access/request body wrapped in a function so we can alias paths */
+// shared submit handler
 async function submitAccessRequest(req, res) {
   try {
-    const {
-      examId,
-      email,
-      intent: intentIn,
-      note,
-      name,
-      phone,
-      // plan info (optional)
-      planKey, planLabel, planPrice,
-      type, id, // ignored; tolerated
-    } = req.body || {};
+    const b = req.body || {};
+    const examId = sanitizeText(b.examId);
+    const email  = sanitizeText(b.email);
+    if (!examId || !email)
+      return res.status(400).json({ success:false, error:"examId & email required" });
 
-    if (!examId || !email) {
-      return res.status(400).json({ success: false, error: "examId & email required" });
-    }
-
-    // default intent if missing
-    let intent = sanitizeText(intentIn);
+    // intent defaults if missing
+    let intent = sanitizeText(b.intent);
     if (!intent) {
-      // If user already finished plan, treat as restart, else purchase
       const access = await PrepAccess.findOne({ examId, userEmail: email }).lean();
       intent = access && access.status === "active" ? "restart" : "purchase";
     }
 
-    // save screenshot if present (accept several field names)
+    // screenshot optional
     let screenshotUrl = "";
-    const f = firstFile(req, "screenshot", "file", "image", "proof");
+    const f = firstFile(req, "screenshot","file","image","proof");
     if (f?.buffer?.length) {
       const saved = await storeBuffer({
         buffer: f.buffer,
@@ -467,7 +447,7 @@ async function submitAccessRequest(req, res) {
     }
 
     const exam = await PrepExam.findOne({ examId }).lean();
-    const price = Number(exam?.price || planPrice || 0);
+    const priceAt = Number(b.planPrice || exam?.price || 0);
     const autoGrant = !!exam?.autoGrantRestart;
 
     const reqDoc = await PrepAccessRequest.create({
@@ -475,15 +455,15 @@ async function submitAccessRequest(req, res) {
       userEmail: email,
       intent,
       screenshotUrl,
-      note,
+      note: sanitizeText(b.note),
       status: "pending",
-      priceAt: price,
+      priceAt,
       meta: {
-        name: sanitizeText(name),
-        phone: sanitizePhone(phone),
-        planKey: sanitizeText(planKey),
-        planLabel: sanitizeText(planLabel),
-        planPrice: Number(planPrice || 0) || undefined,
+        name: sanitizeText(b.name),
+        phone: sanitizePhone(b.phone),
+        planKey: sanitizeText(b.planKey),
+        planLabel: sanitizeText(b.planLabel),
+        planPrice: Number(b.planPrice || 0) || undefined,
       },
     });
 
@@ -492,31 +472,34 @@ async function submitAccessRequest(req, res) {
       const now = new Date();
       await PrepAccess.findOneAndUpdate(
         { examId, userEmail: email },
-        { $set: { status: "active", planDays: pd, startAt: now }, $inc: { cycle: 1 } },
-        { upsert: true, new: true }
+        { $set: { status:"active", planDays:pd, startAt:now }, $inc: { cycle:1 } },
+        { upsert:true, new:true }
       );
       await PrepAccessRequest.updateOne(
         { _id: reqDoc._id },
-        { $set: { status: "approved", approvedAt: new Date(), approvedBy: "auto" } }
+        { $set: { status:"approved", approvedAt:new Date(), approvedBy:"auto" } }
       );
-      return res.json({ success: true, approved: true, id: reqDoc._id, request: reqDoc });
+      return res.json({ success:true, approved:true, id:reqDoc._id, request:reqDoc });
     }
 
-    res.json({ success: true, approved: false, id: reqDoc._id, request: reqDoc });
+    res.json({ success:true, approved:false, id:reqDoc._id, request:reqDoc });
   } catch (e) {
     console.error("[prep] access/request failed:", e);
-    res.status(500).json({ success: false, error: e?.message || "server error" });
+    res.status(500).json({ success:false, error:e?.message || "server error" });
   }
 }
 
-/* ----------------------------- Submit endpoints ---------------------------- */
+/* Submit endpoints (all call the same handler) */
+const proofFields = [
+  { name:"screenshot", maxCount:1 },
+  { name:"file",       maxCount:1 },
+  { name:"image",      maxCount:1 },
+  { name:"proof",      maxCount:1 },
+];
 
-// Your original endpoint (kept)
-router.post("/access/request", acceptProofUpload, submitAccessRequest);
-
-// Aliases used by other client UIs (QR overlay / legacy popup)
-router.post("/user/request", acceptProofUpload, submitAccessRequest);
-router.post("/submissions",  acceptProofUpload, submitAccessRequest);
+router.post("/access/request", maybeMulter(proofFields), submitAccessRequest);
+router.post("/user/request",  maybeMulter(proofFields), submitAccessRequest);
+router.post("/submissions",   maybeMulter(proofFields), submitAccessRequest);
 
 /* ----------------------------- Admin: requests ----------------------------- */
 
@@ -696,7 +679,7 @@ router.post(
 router.delete("/templates/:id", isAdmin, async (req, res) => {
   try {
     const r = await PrepModule.findByIdAndDelete(req.params.id);
-    if (!r) return res.status(404).json({ success: false, error: "Not found" });
+  if (!r) return res.status(404).json({ success: false, error: "Not found" });
     res.json({ success: true, removed: r._id });
   } catch (e) {
     res.status(500).json({ success: false, error: e?.message || "server error" });
