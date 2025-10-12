@@ -147,8 +147,10 @@ async function buildAccessStatusPayload(examId, email) {
   const canRestart = status === "active" && todayDay >= planDays;
 
   const pay = exam?.overlay?.payment || {};
-  const overlay = {
-    show:false, mode:null, openAt:null, tz: exam?.overlay?.tz || "Asia/Kolkata",
+  const baseOverlay = {
+    show:false, mode:null, openAt:null,
+    tz: exam?.overlay?.tz || "Asia/Kolkata",
+    hardDisabled: false, // default
     payment: {
       courseName: exam?.name || String(examId),
       priceINR: Number(exam?.price || 0),
@@ -157,22 +159,23 @@ async function buildAccessStatusPayload(examId, email) {
     },
   };
 
-  // ✅ HARD BLOCK #A: if admin selected "never", do not show overlay at all
+  // ---------- HARD BLOCK: overlay "never" ----------
   if (exam?.overlay?.mode === "never") {
     return {
-      success:true,
+      success: true,
       exam: { examId: exam.examId, name: exam.name, price: exam.price, overlay: exam.overlay },
       access: { status, planDays, todayDay, canRestart, startAt: access?.startAt || null },
-      overlay, // show=false
+      overlay: { ...baseOverlay, show:false, mode:null, openAt:null, hardDisabled: true },
       serverNow: Date.now(),
     };
   }
+  // --------------------------------------------------
 
   // compute schedule
   const { openAt, planTimeShow } = computeOverlayAt(exam, access);
-  overlay.openAt = openAt ? openAt.toISOString() : null;
+  const overlay = { ...baseOverlay, openAt: openAt ? openAt.toISOString() : null };
 
-  // ✅ HARD BLOCK #B: never show during trial window
+  // never show during trial window
   const inTrial = status === "trial" && todayDay <= trialDays;
 
   if (!inTrial) {
