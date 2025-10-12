@@ -326,6 +326,9 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
       ...(tz ? { tz: String(tz) } : {}),
       ...(Object.values(eff).some(Boolean) ? { payment: eff } : {}),
     },
+
+    // ✅ mirror at root for legacy readers
+    ...(Object.values(eff).some(Boolean) ? { payment: eff } : {}),
   };
   if (update.overlay?.mode === "planDayTime" && !("tz" in update.overlay)) {
     update.overlay.tz = "Asia/Kolkata";
