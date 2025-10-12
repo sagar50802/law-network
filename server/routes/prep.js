@@ -180,18 +180,15 @@ async function buildAccessStatusPayload(examId, email) {
   let status = access?.status || "none";
   let todayDay = 1;
   if (access?.startAt) todayDay = Math.min(planDays, dayIndexFrom(access.startAt));
+  const trialDays = Number(exam?.trialDays ?? 3);
   const canRestart = status === "active" && todayDay >= planDays;
 
-  // compute overlay timing
-  const { openAt, planTimeShow } = computeOverlayAt(exam, access);
-  const now = Date.now();
-
-  // pack payment info for client
+  // default overlay payload + payment info for client
   const pay = exam?.overlay?.payment || {};
   const overlay = {
     show: false,
     mode: null,
-    openAt: openAt ? openAt.toISOString() : null,
+    openAt: null,
     tz: exam?.overlay?.tz || "Asia/Kolkata",
     payment: {
       courseName: exam?.name || String(examId),
@@ -203,15 +200,40 @@ async function buildAccessStatusPayload(examId, email) {
     },
   };
 
-  if (exam?.overlay?.mode === "planDayTime") {
-    if (planTimeShow) {
-      overlay.mode = status === "active" && canRestart ? "restart" : "purchase";
-      overlay.show = true;
-    }
-  } else {
-    if (openAt && +new Date(openAt) <= now) {
-      overlay.mode = status === "active" && canRestart ? "restart" : "purchase";
-      overlay.show = true;
+  // ✅ HARD BLOCK #1: Overlay mode is "never"
+  if (exam?.overlay?.mode === "never") {
+    return {
+      success: true,
+      exam: { examId: exam.examId, name: exam.name, price: exam.price },
+      access: {
+        status,
+        planDays,
+        todayDay,
+        canRestart,
+        startAt: access?.startAt || null,
+      },
+      overlay, // show=false
+      serverNow: Date.now(),
+    };
+  }
+
+  // compute schedule-based visibility
+  const { openAt, planTimeShow } = computeOverlayAt(exam, access);
+  overlay.openAt = openAt ? openAt.toISOString() : null;
+
+  // ✅ HARD BLOCK #2: During trial period, never show the pay/restart overlay
+  const stillInTrial = status === "trial" && todayDay <= trialDays;
+  if (!stillInTrial) {
+    if (exam?.overlay?.mode === "planDayTime") {
+      if (planTimeShow) {
+        overlay.mode = status === "active" && canRestart ? "restart" : "purchase";
+        overlay.show = true;
+      }
+    } else {
+      if (openAt && +new Date(openAt) <= Date.now()) {
+        overlay.mode = status === "active" && canRestart ? "restart" : "purchase";
+        overlay.show = true;
+      }
     }
   }
 
@@ -327,7 +349,7 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
       ...(hasPay ? { payment: eff } : {}),
     },
 
-    // ✅ mirror payment at root for legacy clients
+    // mirror payment at root for legacy clients
     ...(hasPay ? { payment: eff } : {}),
   };
   if (update.overlay?.mode === "planDayTime" && !("tz" in update.overlay)) {
