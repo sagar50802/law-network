@@ -643,6 +643,150 @@ router.post("/access/request", acceptProofUpload, async (req, res) => {
   }
 });
 
+/* ----------- ADDED LEGACY ALIASES (same behavior as /access/request) ----------- */
+router.post("/user/request", acceptProofUpload, async (req, res) => {
+  try {
+    const {
+      examId,
+      email,
+      intent: intentIn,
+      note,
+      name,
+      phone,
+      planKey, planLabel, planPrice
+    } = req.body || {};
+
+    if (!examId || !email) {
+      return res.status(400).json({ success: false, error: "examId & email required" });
+    }
+
+    let intent = (intentIn || "").trim();
+    if (!intent) {
+      const existing = await PrepAccess.findOne({ examId, userEmail: email }).lean();
+      intent = existing && existing.status === "active" ? "restart" : "purchase";
+    }
+
+    let screenshotUrl = "";
+    const f = firstFile(req, "screenshot", "file", "image", "proof");
+    if (f?.buffer?.length) {
+      const saved = await storeBuffer({
+        buffer: f.buffer,
+        filename: f.originalname || "payment.jpg",
+        mime: f.mimetype || "application/octet-stream",
+        bucket: "prep-proof",
+      });
+      screenshotUrl = saved.url;
+    }
+
+    const exam = await PrepExam.findOne({ examId }).lean();
+    const priceAt = Number(exam?.price || planPrice || 0);
+    const autoGrant = !!exam?.autoGrantRestart;
+
+    const reqDoc = await PrepAccessRequest.create({
+      examId,
+      userEmail: email,
+      intent,
+      screenshotUrl,
+      note,
+      status: "pending",
+      priceAt,
+      meta: {
+        name: sanitizeText(name),
+        phone: sanitizePhone(phone),
+        planKey: sanitizeText(planKey),
+        planLabel: sanitizeText(planLabel),
+        planPrice: Number(planPrice || 0) || undefined,
+      },
+    });
+
+    if (autoGrant) {
+      await grantActiveAccess({ examId, email });
+      await PrepAccessRequest.updateOne(
+        { _id: reqDoc._id },
+        { $set: { status: "approved", approvedAt: new Date(), approvedBy: "auto" } }
+      );
+      return res.json({ success: true, approved: true, request: reqDoc });
+    }
+
+    res.json({ success: true, approved: false, request: reqDoc });
+  } catch (e) {
+    console.error("[prep] /user/request failed:", e);
+    res.status(500).json({ success: false, error: e?.message || "server error" });
+  }
+});
+
+router.post("/submissions", acceptProofUpload, async (req, res) => {
+  try {
+    const {
+      examId,
+      email,
+      intent: intentIn,
+      note,
+      name,
+      phone,
+      planKey, planLabel, planPrice
+    } = req.body || {};
+
+    if (!examId || !email) {
+      return res.status(400).json({ success: false, error: "examId & email required" });
+    }
+
+    let intent = (intentIn || "").trim();
+    if (!intent) {
+      const existing = await PrepAccess.findOne({ examId, userEmail: email }).lean();
+      intent = existing && existing.status === "active" ? "restart" : "purchase";
+    }
+
+    let screenshotUrl = "";
+    const f = firstFile(req, "screenshot", "file", "image", "proof");
+    if (f?.buffer?.length) {
+      const saved = await storeBuffer({
+        buffer: f.buffer,
+        filename: f.originalname || "payment.jpg",
+        mime: f.mimetype || "application/octet-stream",
+        bucket: "prep-proof",
+      });
+      screenshotUrl = saved.url;
+    }
+
+    const exam = await PrepExam.findOne({ examId }).lean();
+    const priceAt = Number(exam?.price || planPrice || 0);
+    const autoGrant = !!exam?.autoGrantRestart;
+
+    const reqDoc = await PrepAccessRequest.create({
+      examId,
+      userEmail: email,
+      intent,
+      screenshotUrl,
+      note,
+      status: "pending",
+      priceAt,
+      meta: {
+        name: sanitizeText(name),
+        phone: sanitizePhone(phone),
+        planKey: sanitizeText(planKey),
+        planLabel: sanitizeText(planLabel),
+        planPrice: Number(planPrice || 0) || undefined,
+      },
+    });
+
+    if (autoGrant) {
+      await grantActiveAccess({ examId, email });
+      await PrepAccessRequest.updateOne(
+        { _id: reqDoc._id },
+        { $set: { status: "approved", approvedAt: new Date(), approvedBy: "auto" } }
+      );
+      return res.json({ success: true, approved: true, request: reqDoc });
+    }
+
+    res.json({ success: true, approved: false, request: reqDoc });
+  } catch (e) {
+    console.error("[prep] /submissions failed:", e);
+    res.status(500).json({ success: false, error: e?.message || "server error" });
+  }
+});
+/* ------------------------- END LEGACY ALIASES ------------------------- */
+
 // Admin list requests
 router.get("/access/requests", isAdmin, async (req, res) => {
   try {
