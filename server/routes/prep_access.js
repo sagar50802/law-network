@@ -1,43 +1,48 @@
+// server/routes/prep_access.js
+// LawNetwork Prep — Access, Overlay/Payment, Requests (full & complete)
+
 import express from "express";
 import multer from "multer";
 import mongoose from "mongoose";
+import { isAdmin } from "./utils.js";
+
 import PrepExam from "../models/PrepExam.js";
 import PrepModule from "../models/PrepModule.js";
 import PrepAccess from "../models/PrepAccess.js";
 import PrepAccessRequest from "../models/PrepAccessRequest.js";
-import { isAdmin } from "./utils.js";
 
+/* ------------------------------------------------------------------ */
+/* Uploads (memory)                                                    */
+/* ------------------------------------------------------------------ */
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 12 * 1024 * 1024 },
+  limits: { fileSize: 20 * 1024 * 1024 },
 });
 
+/* ------------------------------------------------------------------ */
+/* Small helpers                                                       */
+/* ------------------------------------------------------------------ */
 function truthy(v) {
   return ["true", "1", "on", "yes"].includes(String(v).trim().toLowerCase());
 }
 function safeName(filename = "file") {
   return String(filename).replace(/\s+/g, "_").replace(/[^\w.\-]/g, "");
 }
-function sanitizeUpiId(v) {
-  if (!v) return "";
-  return String(v).trim(); // you can tighten later if you want
+function sanitizeText(v) {
+  return v ? String(v).trim() : "";
 }
 function sanitizePhone(v) {
-  if (!v) return "";
-  // keep digits and leading +
-  return String(v).trim().replace(/[^\d+]/g, "");
+  return v ? String(v).trim().replace(/[^\d+]/g, "") : "";
 }
-function sanitizeText(v) {
-  if (!v) return "";
-  return String(v).trim();
+function sanitizeUpiId(v) {
+  return v ? String(v).trim() : "";
 }
 
+/* ------------------------------------------------------------------ */
+/* Optional R2, fallback GridFS                                        */
+/* ------------------------------------------------------------------ */
 let R2 = null;
-try {
-  R2 = await import("../utils/r2.js");
-} catch {
-  R2 = null;
-}
+try { R2 = await import("../utils/r2.js"); } catch { R2 = null; }
 
 function grid(bucket) {
   const db = mongoose.connection?.db;
@@ -48,20 +53,17 @@ function grid(bucket) {
 async function storeBuffer({ buffer, filename, mime, bucket = "prep" }) {
   const name = safeName(filename || "file");
   const contentType = mime || "application/octet-stream";
-  if (
-    R2 &&
-    typeof R2.r2Enabled === "function" &&
-    R2.r2Enabled() &&
-    typeof R2.uploadBuffer === "function"
-  ) {
+
+  if (R2?.r2Enabled?.() && typeof R2.uploadBuffer === "function") {
     try {
       const key = `${bucket}/${name}`;
       const url = await R2.uploadBuffer(key, buffer, contentType);
       return { url, via: "r2" };
     } catch (e) {
-      console.warn("[access] R2 upload failed, fallback GridFS:", e.message);
+      console.warn("[prep_access] R2 upload failed → GridFS fallback:", e.message);
     }
   }
+
   const g = grid(bucket);
   if (!g) throw Object.assign(new Error("DB not connected"), { status: 503 });
   const id = await new Promise((resolve, reject) => {
@@ -73,9 +75,9 @@ async function storeBuffer({ buffer, filename, mime, bucket = "prep" }) {
   return { url: `/api/files/${bucket}/${String(id)}`, via: "gridfs" };
 }
 
-/* ------------------------------------------------------------------
- * Helpers
- * ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ */
+/* Plan math + timezone helpers                                        */
+/* ------------------------------------------------------------------ */
 async function planDaysForExam(examId) {
   const days = await PrepModule.find({ examId }).distinct("dayIndex");
   if (!days.length) return 1;
@@ -84,6 +86,66 @@ async function planDaysForExam(examId) {
 function dayIndexFrom(startAt, now = new Date()) {
   return Math.max(1, Math.floor((now - new Date(startAt)) / 86400000) + 1);
 }
+
+function tzParts(date, timeZone) {
+  const fmt = new Intl.DateTimeFormat("en-GB", {
+    timeZone, year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: false,
+  });
+  const parts = Object.fromEntries(fmt.formatToParts(date).map(p => [p.type, p.value]));
+  return {
+    year: +parts.year, month: +parts.month, day: +parts.day,
+    hour: +parts.hour, minute: +parts.minute
+  };
+}
+function tzYMD(date, timeZone) { const p = tzParts(date, timeZone); return { year:p.year, month:p.month, day:p.day }; }
+function daysBetweenTZ(aDate, bDate, timeZone) {
+  const a = tzYMD(aDate, timeZone), b = tzYMD(bDate, timeZone);
+  return Math.round((Date.UTC(b.year,b.month-1,b.day) - Date.UTC(a.year,a.month-1,a.day)) / 86400000);
+}
+function isTimeReachedInTZ(now, hhmm, timeZone) {
+  const p = tzParts(now, timeZone);
+  const [hh, mm] = String(hhmm || "09:00").split(":").map(x => parseInt(x, 10) || 0);
+  if (p.hour > hh) return true;
+  if (p.hour < hh) return false;
+  return p.minute >= mm;
+}
+
+/* ------------------------------------------------------------------ */
+/* Overlay timing                                                      */
+/* ------------------------------------------------------------------ */
+function computeOverlayAt(exam, access) {
+  if (!exam?.overlay || exam.overlay.mode === "never") {
+    return { openAt: null, planTimeShow: false };
+  }
+
+  const mode = exam.overlay.mode;
+
+  if (mode === "planDayTime") {
+    const tz = exam.overlay.tz || "Asia/Kolkata";
+    const showOnDay = Number(exam.overlay.showOnDay ?? 1);
+    const showAtLocal = String(exam.overlay.showAtLocal || "09:00");
+    const startAt = access?.startAt ? new Date(access.startAt) : null;
+    if (!startAt) return { openAt: null, planTimeShow: false };
+    const now = new Date();
+    const todayDay = Math.max(1, daysBetweenTZ(startAt, now, tz) + 1);
+    return { openAt: null, planTimeShow: (todayDay >= showOnDay) && isTimeReachedInTZ(now, showAtLocal, tz) };
+  }
+
+  if (mode === "fixed-date") {
+    const dt = exam.overlay.fixedAt ? new Date(exam.overlay.fixedAt) : null;
+    return { openAt: dt && !isNaN(+dt) ? dt : null, planTimeShow: false };
+  }
+
+  // "offset-days" (default) — openAt = startAt + N days
+  const base = access?.startAt ? new Date(access.startAt) : new Date();
+  const days = Number(exam.overlay.offsetDays ?? 3);
+  return { openAt: new Date(+base + days * 86400000), planTimeShow: false };
+}
+
+/* ------------------------------------------------------------------ */
+/* Grant helper                                                        */
+/* ------------------------------------------------------------------ */
 async function grantActiveAccess({ examId, email }) {
   const planDays = await planDaysForExam(examId);
   const now = new Date();
@@ -95,126 +157,41 @@ async function grantActiveAccess({ examId, email }) {
   return doc;
 }
 
-/** -----------------------------------------------------------------
- * Timezone helpers (no extra deps)
- * ------------------------------------------------------------------ */
-function tzParts(date, timeZone) {
-  const fmt = new Intl.DateTimeFormat("en-GB", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  });
-  const parts = Object.fromEntries(fmt.formatToParts(date).map((p) => [p.type, p.value]));
-  return {
-    year: Number(parts.year),
-    month: Number(parts.month),
-    day: Number(parts.day),
-    hour: Number(parts.hour),
-    minute: Number(parts.minute),
-  };
-}
-function tzYMD(date, timeZone) {
-  const p = tzParts(date, timeZone);
-  return { year: p.year, month: p.month, day: p.day };
-}
-function daysBetweenTZ(aDate, bDate, timeZone) {
-  const a = tzYMD(aDate, timeZone);
-  const b = tzYMD(bDate, timeZone);
-  const utcA = Date.UTC(a.year, a.month - 1, a.day);
-  const utcB = Date.UTC(b.year, b.month - 1, b.day);
-  return Math.round((utcB - utcA) / 86400000);
-}
-function isTimeReachedInTZ(now, hhmm, timeZone) {
-  const p = tzParts(now, timeZone);
-  const [hh, mm] = String(hhmm || "09:00")
-    .split(":")
-    .map((x) => parseInt(x, 10) || 0);
-  if (p.hour > hh) return true;
-  if (p.hour < hh) return false;
-  return p.minute >= mm;
-}
-
-/** -----------------------------------------------------------------
- * Compute overlay trigger time per user
- * ------------------------------------------------------------------ */
-function computeOverlayAt(exam, access) {
-  if (!exam?.overlay || exam.overlay.mode === "never")
-    return { openAt: null, planTimeShow: false };
-
-  const mode = exam.overlay.mode;
-
-  if (mode === "planDayTime") {
-    const tz = exam.overlay.tz || "Asia/Kolkata";
-    const showOnDay = Number(exam.overlay.showOnDay ?? 1);
-    const showAtLocal = String(exam.overlay.showAtLocal || "09:00");
-    const startAt = access?.startAt ? new Date(access.startAt) : null;
-
-    if (!startAt) return { openAt: null, planTimeShow: false };
-
-    const now = new Date();
-    const daysDone = daysBetweenTZ(startAt, now, tz);
-    const todayDay = Math.max(1, daysDone + 1);
-
-    const dayOk = todayDay >= showOnDay;
-    const timeOk = isTimeReachedInTZ(now, showAtLocal, tz);
-
-    return { openAt: null, planTimeShow: dayOk && timeOk };
-  }
-
-  if (mode === "fixed-date") {
-    const dt = exam.overlay.fixedAt ? new Date(exam.overlay.fixedAt) : null;
-    return { openAt: dt && !isNaN(+dt) ? dt : null, planTimeShow: false };
-  }
-
-  // offset-days (default/legacy)
-  const base = access?.startAt ? new Date(access.startAt) : new Date();
-  const days = Number(exam.overlay.offsetDays ?? 3);
-  const openAt = new Date(+base + days * 86400000);
-  return { openAt, planTimeShow: false };
-}
-
+/* ------------------------------------------------------------------ */
+/* Router                                                              */
+/* ------------------------------------------------------------------ */
 const router = express.Router();
 
-/* ------------------------------------------------------------------
- * ADMIN: Overlay UI endpoints (non-breaking, UI-only)
- * ------------------------------------------------------------------ */
+/* ================================================================== */
+/* ADMIN: Overlay UI (UPI/WA visuals, independent of timing)          */
+/* ================================================================== */
 
-// === Simple list of exams for the dropdown (admin) ===
-router.get("/exams", isAdmin, async (req, res) => {
-  const rows = await PrepExam.find({}, { examId: 1, name: 1 }).sort({ name: 1 }).lean();
+// List exams for dropdowns
+router.get("/exams", isAdmin, async (_req, res) => {
+  const rows = await PrepExam.find({}, { examId:1, name:1 }).sort({ name:1 }).lean();
   res.json({ success: true, exams: rows || [] });
 });
 
-// === Read overlay UI config (UPI/WA/etc) ===
+// Read overlayUI (admin preview/editor)
 router.get("/overlay/:examId", isAdmin, async (req, res) => {
   const exam = await PrepExam.findOne(
     { examId: req.params.examId },
-    { overlayUI: 1, price: 1, trialDays: 1, name: 1, examId: 1 }
+    { overlayUI:1, price:1, trialDays:1, name:1, examId:1 }
   ).lean();
-  if (!exam) return res.status(404).json({ success: false, message: "Exam not found" });
-  res.json({ success: true, config: exam.overlayUI || {}, exam });
+  if (!exam) return res.status(404).json({ success:false, message:"Exam not found" });
+  res.json({ success:true, config: exam.overlayUI || {}, exam });
 });
 
-// === Save overlay UI config (UPI/WA + optional images) ===
+// Save overlayUI (UPI/WA + optional images)
 router.post(
   "/overlay/:examId",
   isAdmin,
-  upload.fields([{ name: "banner" }, { name: "whatsappQR" }]),
+  upload.fields([{ name:"banner" }, { name:"whatsappQR" }]),
   async (req, res) => {
     const examId = req.params.examId;
-
     const {
-      upiId = "",
-      upiName = "",
-      priceINR = 0,
-      whatsappId = "",
-      forceOverlayAfterDays = "",
-      forceOverlayAt = "",
-      tz = "",
+      upiId = "", upiName = "", priceINR = 0,
+      whatsappId = "", forceOverlayAfterDays = "", forceOverlayAt = "", tz = ""
     } = req.body || {};
 
     let bannerUrl = "";
@@ -222,105 +199,77 @@ router.post(
 
     if (req.files?.banner?.[0]) {
       const f = req.files.banner[0];
-      const saved = await storeBuffer({
-        buffer: f.buffer,
-        filename: f.originalname,
-        mime: f.mimetype,
-        bucket: "prep-overlay",
+      const s = await storeBuffer({
+        buffer:f.buffer, filename:f.originalname, mime:f.mimetype, bucket:"prep-overlay"
       });
-      bannerUrl = saved.url;
+      bannerUrl = s.url;
     }
     if (req.files?.whatsappQR?.[0]) {
       const f = req.files.whatsappQR[0];
-      const saved = await storeBuffer({
-        buffer: f.buffer,
-        filename: f.originalname,
-        mime: f.mimetype,
-        bucket: "prep-overlay",
+      const s = await storeBuffer({
+        buffer:f.buffer, filename:f.originalname, mime:f.mimetype, bucket:"prep-overlay"
       });
-      whatsappQRUrl = saved.url;
+      whatsappQRUrl = s.url;
     }
 
-    // Build overlayUI subdoc (kept separate from overlay timing config)
     const overlayUI = {
       upiId: String(upiId).trim(),
       upiName: String(upiName || "").trim(),
       priceINR: Number(priceINR || 0),
-      whatsappLink: whatsappId ? `https://wa.me/${String(whatsappId).replace(/\D/g, "")}` : "",
+      whatsappLink: whatsappId ? `https://wa.me/${String(whatsappId).replace(/\D/g,"")}` : "",
       ...(bannerUrl ? { bannerUrl } : {}),
       ...(whatsappQRUrl ? { whatsappQRUrl } : {}),
-      // Optional scheduling notes (stored here only for editor convenience)
       ...(forceOverlayAfterDays !== "" ? { forceOverlayAfterDays: Number(forceOverlayAfterDays) } : {}),
       ...(forceOverlayAt ? { forceOverlayAt: new Date(forceOverlayAt).toISOString() } : {}),
       ...(tz ? { tz: String(tz) } : {}),
     };
 
-    // Persist
     const update = {
       overlayUI,
-      // keep exam.price in sync with UI price if provided
       ...(priceINR ? { price: Number(priceINR) } : {}),
     };
 
-    const doc = await PrepExam.findOneAndUpdate({ examId }, { $set: update }, { new: true }).lean();
-    res.json({ success: true, exam: doc });
+    const doc = await PrepExam.findOneAndUpdate({ examId }, { $set: update }, { new:true }).lean();
+    res.json({ success:true, exam:doc });
   }
 );
 
-/* ------------------------------------------------------------------
- * EXISTING ADMIN ENDPOINTS (unchanged except the PATCH route below)
- * ------------------------------------------------------------------ */
+/* ================================================================== */
+/* ADMIN: Read/Write exam meta (includes timing+payment fields)       */
+/* ================================================================== */
 
-// Get exam meta (price/trialDays/overlay) for admin UI
 router.get("/exams/:examId/meta", isAdmin, async (req, res) => {
   const exam = await PrepExam.findOne({ examId: req.params.examId }).lean();
-  if (!exam) return res.status(404).json({ success: false, message: "Exam not found" });
-  const { price = 0, trialDays = 3, overlay = {}, payment = {} } = exam;
+  if (!exam) return res.status(404).json({ success:false, message:"Exam not found" });
+  const { price=0, trialDays=3, overlay={}, payment={}, autoGrantRestart=false } = exam;
   res.json({
-    success: true,
-    price,
-    trialDays,
-    overlay,
-    payment, // <-- expose for admin UI
-    name: exam.name,
-    examId: exam.examId,
+    success:true,
+    price, trialDays, overlay, payment,
+    autoGrantRestart: !!autoGrantRestart,
+    name: exam.name, examId: exam.examId
   });
 });
 
-// Update overlay config (and price/trialDays) + payment fields
 router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
   const {
-    price,
-    trialDays,
-    mode,
-    offsetDays,
-    fixedAt,
-    showOnDay,
-    showAtLocal,
-    tz,
-
-    // flat payment fields (optional)
-    upiId,
-    upiName,
-    whatsappNumber,
-    whatsappText,
+    price, trialDays,
+    mode, offsetDays, fixedAt, showOnDay, showAtLocal, tz,
+    upiId, upiName, whatsappNumber, whatsappText,
+    autoGrantRestart,
   } = req.body || {};
-
-  // Also accept legacy nested format: payment: { upiId, upiName, whatsappNumber, whatsappText, waPhone, waText }
   const p = (req.body && req.body.payment) || {};
 
   const effUpiId = (upiId ?? p.upiId) ? sanitizeUpiId(upiId ?? p.upiId) : "";
   const effUpiName = (upiName ?? p.upiName) ? sanitizeText(upiName ?? p.upiName) : "";
   const effWhatsappNumber = (whatsappNumber ?? p.whatsappNumber ?? p.waPhone)
-    ? sanitizePhone(whatsappNumber ?? p.whatsappNumber ?? p.waPhone)
-    : "";
+    ? sanitizePhone(whatsappNumber ?? p.whatsappNumber ?? p.waPhone) : "";
   const effWhatsappText = (whatsappText ?? p.whatsappText ?? p.waText)
-    ? sanitizeText(whatsappText ?? p.whatsappText ?? p.waText)
-    : "";
+    ? sanitizeText(whatsappText ?? p.whatsappText ?? p.waText) : "";
 
   const update = {
     ...(price != null ? { price: Number(price) } : {}),
     ...(trialDays != null ? { trialDays: Number(trialDays) } : {}),
+    ...(autoGrantRestart != null ? { autoGrantRestart: !!autoGrantRestart } : {}),
     overlay: {
       ...(mode ? { mode } : {}),
       ...(offsetDays != null ? { offsetDays: Number(offsetDays) } : {}),
@@ -328,39 +277,38 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
       ...(showOnDay != null ? { showOnDay: Number(showOnDay) } : {}),
       ...(showAtLocal ? { showAtLocal: String(showAtLocal) } : {}),
       ...(tz ? { tz: String(tz) } : {}),
-      ...((effUpiId || effUpiName || effWhatsappNumber || effWhatsappText)
-        ? {
-            payment: {
-              ...(effUpiId ? { upiId: effUpiId } : {}),
-              ...(effUpiName ? { upiName: effUpiName } : {}),
-              ...(effWhatsappNumber ? { whatsappNumber: effWhatsappNumber } : {}),
-              ...(effWhatsappText ? { whatsappText: effWhatsappText } : {}),
-            },
-          }
-        : {}),
+      ...((effUpiId || effUpiName || effWhatsappNumber || effWhatsappText) ? {
+        payment: {
+          ...(effUpiId ? { upiId: effUpiId } : {}),
+          ...(effUpiName ? { upiName: effUpiName } : {}),
+          ...(effWhatsappNumber ? { whatsappNumber: effWhatsappNumber } : {}),
+          ...(effWhatsappText ? { whatsappText: effWhatsappText } : {}),
+        }
+      } : {}),
     },
   };
 
-  // Ensure default TZ when planDayTime is chosen without tz
   if (update.overlay?.mode === "planDayTime" && !("tz" in update.overlay)) {
     update.overlay.tz = "Asia/Kolkata";
   }
 
-  const doc = await PrepExam.findOneAndUpdate({ examId: req.params.examId }, { $set: update }, { new: true }).lean();
-  res.json({ success: true, exam: doc });
+  const doc = await PrepExam.findOneAndUpdate({ examId: req.params.examId }, { $set: update }, { new:true }).lean();
+  res.json({ success:true, exam:doc });
 });
 
-/* ------------------------------------------------------------------
- * GET /api/prep/access/status
- * ------------------------------------------------------------------ */
+/* ================================================================== */
+/* PUBLIC: status/summary/today                                       */
+/* ================================================================== */
+
 router.get("/access/status", async (req, res) => {
   try {
     const { examId, email } = req.query || {};
-    if (!examId) return res.status(400).json({ success: false, error: "examId required" });
+    if (!examId) return res.status(400).json({ success:false, error:"examId required" });
 
     const exam = await PrepExam.findOne({ examId }).lean();
-    if (!exam)
-      return res.json({ exam: null, access: { status: "none" }, overlay: {}, serverNow: Date.now() });
+    if (!exam) {
+      return res.json({ exam:null, access:{ status:"none" }, overlay:{}, serverNow: Date.now() });
+    }
 
     const planDays = await planDaysForExam(examId);
     const access = email ? await PrepAccess.findOne({ examId, userEmail: email }).lean() : null;
@@ -369,218 +317,186 @@ router.get("/access/status", async (req, res) => {
     let todayDay = 1;
     if (access?.startAt) todayDay = Math.min(planDays, dayIndexFrom(access.startAt));
     const canRestart = status === "active" && todayDay >= planDays;
+    const trialDays = Number(exam?.trialDays ?? 0);
 
-    // Include overlay plan (client can read for display, but server owns timing)
-    const ov = exam?.overlay || null;
-    if (ov && access) {
-      access.overlayPlan = {
-        mode: ov.mode || "planDayTime",
-        showOnDay: Number(ov.showOnDay || 1),
-        showAtLocal: String(ov.showAtLocal || "09:00"),
-        tz: ov.tz || "Asia/Kolkata",
-      };
-    }
-
-    // derive overlay timing (modern)
+    // timing
     const { openAt, planTimeShow } = computeOverlayAt(exam, access);
     const now = Date.now();
-    let overlay = {
-      show: false,
-      mode: null,
+
+    // overlay payload + payment
+    const pay = exam?.overlay?.payment || {};
+    const overlay = {
+      show:false, mode:null,
       openAt: openAt ? openAt.toISOString() : null,
       tz: exam?.overlay?.tz || "Asia/Kolkata",
+      payment: {
+        courseName: exam?.name || String(examId),
+        priceINR: Number(exam?.price || 0),
+        upiId: pay.upiId || "",
+        upiName: pay.upiName || "",
+        whatsappNumber: pay.whatsappNumber || "",
+        whatsappText: pay.whatsappText || "",
+      },
     };
 
-    // NEW: include payment/proof + course info for client buttons
-    const pay = exam?.overlay?.payment || {};
-    overlay.payment = {
-      courseName: exam?.name || String(examId),
-      priceINR: Number(exam?.price || 0),
-      upiId: pay.upiId || "",
-      upiName: pay.upiName || "",
-      whatsappNumber: pay.whatsappNumber || "",
-      whatsappText: pay.whatsappText || "",
-    };
-
-    if (exam?.overlay?.mode === "planDayTime") {
-      if (planTimeShow) {
-        overlay.mode = status === "active" && canRestart ? "restart" : "purchase";
-        overlay.show = true;
+    // ===== Trial behaviour =====
+    if (status === "trial") {
+      if (todayDay <= trialDays) {
+        // suppress overlay during trial
+        return res.json({
+          success:true,
+          exam,
+          access: {
+            status, planDays, todayDay, canRestart,
+            trialEnded:false,
+            startAt: access?.startAt || null,
+            overlayPlan: exam?.overlay ? {
+              mode: exam.overlay.mode || "offset-days",
+              showOnDay: Number(exam.overlay.showOnDay ?? 1),
+              showAtLocal: String(exam.overlay.showAtLocal || "09:00"),
+              tz: exam.overlay.tz || "Asia/Kolkata",
+            } : null,
+          },
+          overlay: { ...overlay, show:false, mode:null },
+          serverNow: Date.now(),
+        });
       }
-    } else if (exam?.overlay?.mode && exam.overlay.mode !== "never") {
-      if (openAt && +openAt <= now) {
-        overlay.mode = status === "active" && canRestart ? "restart" : "purchase";
-        overlay.show = true;
-      }
-    }
-
-    // --- legacy overlay schedule safeguards (ONLY when modern mode missing) ---
-    if (!exam?.overlay?.mode) {
-      const ovLegacy = exam?.overlay || {};
-      let forceOverlay = false;
-
-      if (ovLegacy.overlayMode === "afterN") {
-        const startMs = Date.parse(
-          access?.startedAt || access?.createdAt || access?.trialStartedAt || 0
-        );
-        if (startMs && ovLegacy.daysAfterStart > 0) {
-          forceOverlay = now >= startMs + ovLegacy.daysAfterStart * 86400000;
+      // trial just ended → force overlay immediately
+      overlay.show = true;
+      overlay.mode = "purchase";
+      overlay.openAt = null;
+    } else {
+      // schedule rules (when not in trial)
+      if (exam?.overlay?.mode === "planDayTime") {
+        if (planTimeShow) {
+          overlay.mode = canRestart ? "restart" : "purchase";
+          overlay.show = true;
+        }
+      } else if (exam?.overlay?.mode && exam.overlay.mode !== "never") {
+        if (openAt && +openAt <= now) {
+          overlay.mode = canRestart ? "restart" : "purchase";
+          overlay.show = true;
         }
       }
 
-      if (ovLegacy.overlayMode === "fixed") {
-        const fixedMs = Date.parse(ovLegacy.fixedAt || 0);
-        if (fixedMs) forceOverlay = now >= fixedMs;
-      }
-
-      if (forceOverlay) {
-        if (access) {
-          access.overlayForce = true;
-          access.forceMode = "purchase";
+      // legacy safety when overlay.mode is missing
+      if (!exam?.overlay?.mode && !overlay.show) {
+        const ovLegacy = exam?.overlay || {};
+        let force = false;
+        if (ovLegacy.overlayMode === "afterN") {
+          const startMs = Date.parse(access?.startAt || access?.createdAt || 0);
+          if (startMs && ovLegacy.daysAfterStart >= 0) {
+            force = now >= startMs + ovLegacy.daysAfterStart * 86400000;
+          }
         }
-        overlay.show = true;
-        overlay.mode = "purchase";
+        if (ovLegacy.overlayMode === "fixed") {
+          const fixedMs = Date.parse(ovLegacy.fixedAt || 0);
+          if (fixedMs) force = now >= fixedMs;
+        }
+        if (force) { overlay.show = true; overlay.mode = "purchase"; }
       }
     }
-    // --- end legacy block ---
-
-    const trialDays = Number(exam?.trialDays || 3);
-    const trialEnded = status === "trial" && todayDay > trialDays;
 
     res.json({
-      success: true,
-      exam, // includes exam.payment if configured
+      success:true,
+      exam,
       access: {
-        status,
-        planDays,
-        todayDay,
-        canRestart,
-        trialEnded,
-        startAt: access?.startAt,
-        overlayForce: access?.overlayForce || false,
-        forceMode: access?.forceMode || null,
-        overlayPlan: access?.overlayPlan || null,
+        status, planDays, todayDay, canRestart,
+        trialEnded: status === "trial" ? todayDay > trialDays : null,
+        startAt: access?.startAt || null,
+        overlayPlan: exam?.overlay ? {
+          mode: exam.overlay.mode || "offset-days",
+          showOnDay: Number(exam.overlay.showOnDay ?? 1),
+          showAtLocal: String(exam.overlay.showAtLocal || "09:00"),
+          tz: exam.overlay.tz || "Asia/Kolkata",
+        } : null,
       },
       overlay,
       serverNow: Date.now(),
     });
   } catch (e) {
-    res.status(500).json({ success: false, error: e?.message || "server error" });
+    res.status(500).json({ success:false, error:e?.message || "server error" });
   }
 });
 
-/* ------------------------------------------------------------------
- * Other existing routes (unchanged)
- * ------------------------------------------------------------------ */
-
-// Start trial
+// (Optional convenience) start trial
 router.post("/access/start-trial", async (req, res) => {
   try {
     const { examId, email } = req.body || {};
-    if (!examId || !email)
-      return res.status(400).json({ success: false, error: "examId & email required" });
+    if (!examId || !email) return res.status(400).json({ success:false, error:"examId & email required" });
 
     const planDays = await planDaysForExam(examId);
     const now = new Date();
-
     const existing = await PrepAccess.findOne({ examId, userEmail: email }).lean();
     if (existing && existing.status === "active") {
-      return res.json({
-        success: true,
-        access: existing,
-        message: "already active",
-      });
+      return res.json({ success:true, access: existing, message:"already active" });
     }
-
     const doc = await PrepAccess.findOneAndUpdate(
       { examId, userEmail: email },
-      { $set: { status: "trial", planDays, startAt: now } },
-      { upsert: true, new: true }
+      { $set: { status:"trial", planDays, startAt: now } },
+      { upsert:true, new:true }
     );
-    res.json({ success: true, access: doc });
+    res.json({ success:true, access: doc });
   } catch (e) {
-    res.status(500).json({ success: false, error: e?.message || "server error" });
+    res.status(500).json({ success:false, error:e?.message || "server error" });
   }
 });
 
-/* ------------------------------------------------------------------
- * UPDATED: Access request — intent optional, flexible file fields
- * ------------------------------------------------------------------ */
+/* ================================================================== */
+/* PUBLIC: make access request (proof optional), and poll its status  */
+/* ================================================================== */
 
-// Accept proof under several possible field names
 function firstFile(req, ...names) {
   for (const n of names) {
     const f = req.files?.[n]?.[0];
     if (f) return f;
   }
-  if (req.file) return req.file; // single-file mode
+  if (req.file) return req.file;
   return null;
 }
-
-// Multer that tolerates multiple field names (used only if content-type is multipart)
 const acceptProofUpload = upload.fields([
-  { name: "screenshot", maxCount: 1 },
-  { name: "file", maxCount: 1 },
-  { name: "image", maxCount: 1 },
-  { name: "proof", maxCount: 1 },
+  { name:"screenshot", maxCount:1 },
+  { name:"file", maxCount:1 },
+  { name:"image", maxCount:1 },
+  { name:"proof", maxCount:1 },
 ]);
 
-// Access request (accepts JSON or multipart; intent optional)
 router.post("/access/request", acceptProofUpload, async (req, res) => {
   try {
-    // Works for both JSON and multipart bodies
     const {
-      examId,
-      email,
-      intent: intentIn, // optional now
-      note,
-      name, // optional — from popup
-      phone, // optional — from popup
-      planKey,
-      planLabel,
-      planPrice, // optional, tolerated
+      examId, email,
+      intent: intentIn, note,
+      name, phone,
+      planKey, planLabel, planPrice
     } = req.body || {};
 
     if (!examId || !email) {
-      return res
-        .status(400)
-        .json({ success: false, error: "examId & email required" });
+      return res.status(400).json({ success:false, error:"examId & email required" });
     }
 
-    // Default/normalize intent if not sent by client
     let intent = (intentIn || "").trim();
     if (!intent) {
       const existing = await PrepAccess.findOne({ examId, userEmail: email }).lean();
       intent = existing && existing.status === "active" ? "restart" : "purchase";
     }
 
-    // Optional proof file (support multiple field names)
     let screenshotUrl = "";
-    const f = firstFile(req, "screenshot", "file", "image", "proof");
+    const f = firstFile(req, "screenshot","file","image","proof");
     if (f?.buffer?.length) {
       const saved = await storeBuffer({
-        buffer: f.buffer,
-        filename: f.originalname || "payment.jpg",
-        mime: f.mimetype || "application/octet-stream",
-        bucket: "prep-proof",
+        buffer:f.buffer, filename:f.originalname || "payment.jpg",
+        mime:f.mimetype || "application/octet-stream", bucket:"prep-proof"
       });
       screenshotUrl = saved.url;
     }
 
-    // Price snapshot + auto-grant flag
     const exam = await PrepExam.findOne({ examId }).lean();
     const priceAt = Number(exam?.price || planPrice || 0);
     const autoGrant = !!exam?.autoGrantRestart;
 
-    // Create the access request (now storing name/phone in meta)
     const reqDoc = await PrepAccessRequest.create({
-      examId,
-      userEmail: email,
-      intent,
-      screenshotUrl,
-      note,
-      status: "pending",
-      priceAt,
+      examId, userEmail: email, intent, screenshotUrl,
+      note: sanitizeText(note), status: "pending", priceAt,
       meta: {
         name: sanitizeText(name),
         phone: sanitizePhone(phone),
@@ -590,49 +506,66 @@ router.post("/access/request", acceptProofUpload, async (req, res) => {
       },
     });
 
-    // Optional auto-grant flow (unchanged)
     if (autoGrant) {
       await grantActiveAccess({ examId, email });
       await PrepAccessRequest.updateOne(
         { _id: reqDoc._id },
-        { $set: { status: "approved", approvedAt: new Date(), approvedBy: "auto" } }
+        { $set: { status:"approved", approvedAt:new Date(), approvedBy:"auto" } }
       );
-      return res.json({ success: true, approved: true, request: reqDoc });
+      return res.json({ success:true, approved:true, request:reqDoc });
     }
 
-    // Normal path: pending for admin review
-    res.json({ success: true, approved: false, request: reqDoc });
+    res.json({ success:true, approved:false, request:reqDoc });
   } catch (e) {
-    console.error("[prep] /access/request failed:", e);
-    res.status(500).json({ success: false, error: e?.message || "server error" });
+    console.error("[prep_access] /access/request failed:", e);
+    res.status(500).json({ success:false, error:e?.message || "server error" });
   }
 });
 
-// Admin list requests
+// Poll latest request status (for "waiting...")
+router.get("/access/request/status", async (req, res) => {
+  try {
+    const { examId, email } = req.query || {};
+    if (!examId || !email) return res.status(400).json({ success:false, error:"examId & email required" });
+
+    const item = await PrepAccessRequest
+      .findOne({ examId, userEmail: email })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    res.json({ success:true, found: !!item, status: item?.status || null, request: item || null });
+  } catch (e) {
+    res.status(500).json({ success:false, error:e?.message || "server error" });
+  }
+});
+
+/* ================================================================== */
+/* ADMIN: list/approve/reject/revoke                                  */
+/* ================================================================== */
+
 router.get("/access/requests", isAdmin, async (req, res) => {
   try {
     const { examId, status = "pending" } = req.query || {};
     const q = {};
     if (examId) q.examId = examId;
     if (status) q.status = status;
-    const items = await PrepAccessRequest.find(q).sort({ createdAt: -1 }).limit(100).lean();
-    res.json({ success: true, items });
+    const items = await PrepAccessRequest.find(q).sort({ createdAt:-1 }).limit(200).lean();
+    res.json({ success:true, items });
   } catch (e) {
-    res.status(500).json({ success: false, error: e?.message || "server error" });
+    res.status(500).json({ success:false, error:e?.message || "server error" });
   }
 });
 
-// Admin approve/revoke
 router.post("/access/admin/approve", isAdmin, async (req, res) => {
   try {
     const { requestId, approve = true } = req.body || {};
     const ar = await PrepAccessRequest.findById(requestId);
-    if (!ar) return res.status(404).json({ success: false, error: "request not found" });
+    if (!ar) return res.status(404).json({ success:false, error:"request not found" });
 
     if (!approve) {
       ar.status = "rejected";
       await ar.save();
-      return res.json({ success: true, request: ar });
+      return res.json({ success:true, request: ar });
     }
 
     await grantActiveAccess({ examId: ar.examId, email: ar.userEmail });
@@ -641,57 +574,41 @@ router.post("/access/admin/approve", isAdmin, async (req, res) => {
     ar.approvedBy = "admin";
     await ar.save();
 
-    res.json({ success: true, request: ar });
+    res.json({ success:true, request: ar });
   } catch (e) {
-    res.status(500).json({ success: false, error: e?.message || "server error" });
+    res.status(500).json({ success:false, error:e?.message || "server error" });
   }
 });
 
 router.post("/access/admin/revoke", isAdmin, async (req, res) => {
   try {
     const { examId, email } = req.body || {};
-    if (!examId || !email)
-      return res.status(400).json({ success: false, error: "examId & email required" });
-    const r = await PrepAccess.updateOne(
-      { examId, userEmail: email },
-      { $set: { status: "revoked" } }
-    );
-    res.json({ success: true, updated: r.modifiedCount });
+    if (!examId || !email) return res.status(400).json({ success:false, error:"examId & email required" });
+    const r = await PrepAccess.updateOne({ examId, userEmail: email }, { $set:{ status:"revoked" } });
+    res.json({ success:true, updated: r.modifiedCount });
   } catch (e) {
-    res.status(500).json({ success: false, error: e?.message || "server error" });
+    res.status(500).json({ success:false, error:e?.message || "server error" });
   }
 });
 
-/* ------------------------------------------------------------------
- * ADDITIONS (safe, minimal)
- * ------------------------------------------------------------------ */
+/* ================================================================== */
+/* QUICK ADMIN (URL toggle) – optional, uses loose key                */
+/* ================================================================== */
 
-// lightweight admin guard using owner key (query/header/body)
 function isAdminLoose(req, res, next) {
   const key = req.get("X-Owner-Key") || req.query._k || (req.body && req.body._k);
   const ok = key && key === (process.env.ADMIN_KEY || process.env.VITE_OWNER_KEY || "");
-  if (!ok) return res.status(401).json({ success: false, error: "Unauthorized" });
+  if (!ok) return res.status(401).json({ success:false, error:"Unauthorized" });
   next();
 }
 
-// ONE-TAP quick setter for overlay + payment (no CORS; open this URL in browser)
 router.get("/exams/:examId/overlay-quick-set", isAdminLoose, async (req, res) => {
   try {
     const examId = req.params.examId;
     const {
-      price,
-      trialDays,
-      mode,
-      offsetDays,
-      fixedAt,
-      showOnDay,
-      showAtLocal,
-      tz,
-      // short URL-friendly payment aliases
-      upi: upiId,
-      upn: upiName,
-      wa: whatsappNumber,
-      wat: whatsappText,
+      price, trialDays, mode, offsetDays, fixedAt, showOnDay, showAtLocal, tz,
+      upi: upiId, upn: upiName, wa: whatsappNumber, wat: whatsappText,
+      autoGrantRestart,
     } = req.query || {};
 
     const overlay = {};
@@ -712,6 +629,7 @@ router.get("/exams/:examId/overlay-quick-set", isAdminLoose, async (req, res) =>
     const update = {
       ...(price != null ? { price: Number(price) } : {}),
       ...(trialDays != null ? { trialDays: Number(trialDays) } : {}),
+      ...(autoGrantRestart != null ? { autoGrantRestart: truthy(autoGrantRestart) } : {}),
       ...(Object.keys(overlay).length ? { overlay } : {}),
     };
 
@@ -719,11 +637,10 @@ router.get("/exams/:examId/overlay-quick-set", isAdminLoose, async (req, res) =>
       update.overlay.tz = "Asia/Kolkata";
     }
 
-    const doc = await PrepExam.findOneAndUpdate({ examId }, { $set: update }, { new: true }).lean();
-
-    res.json({ success: true, exam: doc, applied: update });
+    const doc = await PrepExam.findOneAndUpdate({ examId }, { $set: update }, { new:true }).lean();
+    res.json({ success:true, exam:doc, applied:update });
   } catch (e) {
-    res.status(500).json({ success: false, error: e?.message || "server error" });
+    res.status(500).json({ success:false, error:e?.message || "server error" });
   }
 });
 
