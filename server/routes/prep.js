@@ -1,5 +1,5 @@
 // server/routes/prep.js
-// LawNetwork Prep: Exams, Modules, Access, Overlay/Payment, Requests
+// LawNetwork Prep Routes — Exams, Modules, Access, Progress + Overlay/Payment + Requests
 
 import express from "express";
 import multer from "multer";
@@ -14,14 +14,18 @@ import PrepProgress from "../models/PrepProgress.js";
 
 const router = express.Router();
 
-/* ----------------------------- uploads ---------------------------------- */
+/* ------------------------------- Upload ---------------------------------- */
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 40 * 1024 * 1024 },
 });
+
 function safeName(filename = "file") {
   return String(filename).replace(/\s+/g, "_").replace(/[^\w.\-]/g, "");
 }
+
+// Optional Cloudflare R2 helper (same pattern you had)
 let R2 = null;
 try { R2 = await import("../utils/r2.js"); } catch { R2 = null; }
 
@@ -30,18 +34,23 @@ function grid(bucket) {
   if (!db) return null;
   return new mongoose.mongo.GridFSBucket(db, { bucketName: bucket });
 }
+
 async function storeBuffer({ buffer, filename, mime, bucket = "prep" }) {
   const name = safeName(filename || "file");
   const contentType = mime || "application/octet-stream";
+
+  // Try R2 first
   if (R2?.r2Enabled?.() && typeof R2.uploadBuffer === "function") {
     try {
       const key = `${bucket}/${name}`;
       const url = await R2.uploadBuffer(key, buffer, contentType);
       return { url, via: "r2" };
     } catch (e) {
-      console.warn("[prep] R2 upload failed → GridFS:", e.message);
+      console.warn("[prep] R2 upload failed → fallback to GridFS:", e.message);
     }
   }
+
+  // Fallback to GridFS
   const g = grid(bucket);
   if (!g) throw Object.assign(new Error("DB not connected"), { status: 503 });
   const id = await new Promise((resolve, reject) => {
@@ -53,30 +62,25 @@ async function storeBuffer({ buffer, filename, mime, bucket = "prep" }) {
   return { url: `/api/files/${bucket}/${String(id)}`, via: "gridfs" };
 }
 
-/* --------------------------- helpers & tz -------------------------------- */
-function sanitizeText(v) { return v ? String(v).trim() : ""; }
-function sanitizePhone(v) { return v ? String(v).trim().replace(/[^\d+]/g, "") : ""; }
-function sanitizeUpiId(v) { return v ? String(v).trim() : ""; }
-function truthy(v){ return ["true","1","on","yes"].includes(String(v).trim().toLowerCase()); }
+/* ---------------------------- Small utils -------------------------------- */
 
-function normalizeMode(mode){
-  const m = String(mode || "").trim().toLowerCase();
-  if (!m) return "";
-  if (["after n days (per user)","after n days","offset","offset-days","offset days","per-user"].includes(m)) return "offset-days";
-  if (["fixed","fixed-date","date"].includes(m)) return "fixed-date";
-  if (["plan","plandaytime","plan day time","plan-day-time"].includes(m)) return "planDayTime";
-  if (["never","off","disabled"].includes(m)) return "never";
-  return mode; // already a machine value
-}
+function sanitizeUpiId(v) { return v ? String(v).trim() : ""; }
+function sanitizePhone(v) { return v ? String(v).trim().replace(/[^\d+]/g, "") : ""; }
+function sanitizeText(v) { return v ? String(v).trim() : ""; }
+function truthy(v) { return ["true","1","on","yes"].includes(String(v).trim().toLowerCase()); }
+
+/* --------------------------- Plan calculations --------------------------- */
 
 async function planDaysForExam(examId) {
   const days = await PrepModule.find({ examId }).distinct("dayIndex");
-  return days.length ? Math.max(...days.map(Number).filter(Number.isFinite)) : 1;
+  if (!days.length) return 1;
+  return Math.max(...days.map(Number).filter(Number.isFinite));
 }
-function dayIndexFrom(startAt, now=new Date()){
-  return Math.max(1, Math.floor((now - new Date(startAt))/86400000) + 1);
+function dayIndexFrom(startAt, now = new Date()) {
+  return Math.max(1, Math.floor((now - new Date(startAt)) / 86400000) + 1);
 }
 
+/* --------------------------- TZ helpers ---------------------------------- */
 function tzParts(date, timeZone) {
   const fmt = new Intl.DateTimeFormat("en-GB", {
     timeZone, year: "numeric", month: "2-digit", day: "2-digit",
@@ -85,21 +89,28 @@ function tzParts(date, timeZone) {
   const parts = Object.fromEntries(fmt.formatToParts(date).map(p => [p.type, p.value]));
   return { year:+parts.year, month:+parts.month, day:+parts.day, hour:+parts.hour, minute:+parts.minute };
 }
-function tzYMD(date, tz){ const p=tzParts(date,tz); return { year:p.year, month:p.month, day:p.day }; }
-function daysBetweenTZ(a,b,tz){
-  const A=tzYMD(a,tz), B=tzYMD(b,tz);
-  return Math.round((Date.UTC(B.year,B.month-1,B.day)-Date.UTC(A.year,A.month-1,A.day))/86400000);
+function tzYMD(date, timeZone) { const p = tzParts(date, timeZone); return { year:p.year, month:p.month, day:p.day }; }
+function daysBetweenTZ(aDate, bDate, timeZone) {
+  const a = tzYMD(aDate, timeZone), b = tzYMD(bDate, timeZone);
+  return Math.round((Date.UTC(b.year,b.month-1,b.day)-Date.UTC(a.year,a.month-1,a.day))/86400000);
 }
-function isTimeReachedInTZ(now, hhmm, tz){
-  const p = tzParts(now,tz);
-  const [hh,mm] = String(hhmm||"09:00").split(":").map(n=>parseInt(n,10)||0);
-  if (p.hour>hh) return true; if (p.hour<hh) return false; return p.minute>=mm;
+function isTimeReachedInTZ(now, hhmm, timeZone) {
+  const p = tzParts(now, timeZone);
+  const [hh, mm] = String(hhmm || "09:00").split(":").map(x => parseInt(x,10)||0);
+  if (p.hour > hh) return true;
+  if (p.hour < hh) return false;
+  return p.minute >= mm;
 }
 
-function computeOverlayAt(exam, access){
-  if (!exam?.overlay || exam.overlay.mode === "never") return { openAt:null, planTimeShow:false };
+function computeOverlayAt(exam, access) {
+  // hard never
+  if (!exam?.overlay || exam.overlay.mode === "never") {
+    return { openAt:null, planTimeShow:false };
+  }
+
   const mode = exam.overlay.mode;
-  if (mode === "planDayTime"){
+
+  if (mode === "planDayTime") {
     const tz = exam.overlay.tz || "Asia/Kolkata";
     const showOnDay = Number(exam.overlay.showOnDay ?? 1);
     const showAtLocal = String(exam.overlay.showAtLocal || "09:00");
@@ -107,22 +118,32 @@ function computeOverlayAt(exam, access){
     if (!startAt) return { openAt:null, planTimeShow:false };
     const now = new Date();
     const todayDay = Math.max(1, daysBetweenTZ(startAt, now, tz) + 1);
-    return { openAt:null, planTimeShow: (todayDay >= showOnDay) && isTimeReachedInTZ(now, showAtLocal, tz) };
+    return { openAt:null, planTimeShow: todayDay >= showOnDay && isTimeReachedInTZ(now, showAtLocal, tz) };
   }
-  if (mode === "fixed-date"){
+
+  if (mode === "fixed-date") {
     const dt = exam.overlay.fixedAt ? new Date(exam.overlay.fixedAt) : null;
     return { openAt: dt && !isNaN(+dt) ? dt : null, planTimeShow:false };
   }
+
   // offset-days
   const base = access?.startAt ? new Date(access.startAt) : new Date();
   const days = Number(exam.overlay.offsetDays ?? 3);
   return { openAt: new Date(+base + days*86400000), planTimeShow:false };
 }
 
-/* --------------------------- payload builder ----------------------------- */
-async function buildAccessStatusPayload(examId, email){
+/* ------------------------- Shared payload builder ------------------------ */
+/**
+ * UPDATED:
+ *  - Overlay suppressed during trial.
+ *  - For "After N days (per user)" (offset-days), overlay appears immediately
+ *    after trial completes, or immediately on Day 1 if trial=0 and offsetDays=0.
+ *    We honor the stricter of trialDays vs offsetDays: threshold = max(trialDays, offsetDays).
+ *  - "never" hard-stops overlay.
+ */
+async function buildAccessStatusPayload(examId, email) {
   const exam = await PrepExam.findOne({ examId }).lean();
-  if (!exam){
+  if (!exam) {
     return { success:true, exam:null, access:{ status:"none" }, overlay:{}, serverNow:Date.now() };
   }
 
@@ -132,69 +153,95 @@ async function buildAccessStatusPayload(examId, email){
   let status = access?.status || "none";
   let todayDay = 1;
   if (access?.startAt) todayDay = Math.min(planDays, dayIndexFrom(access.startAt));
-
-  const trialDays = Number(exam?.trialDays ?? 3);
+  const trialDays = Number(exam?.trialDays ?? 0);
+  const mode = String(exam?.overlay?.mode || "").trim();
   const canRestart = status === "active" && todayDay >= planDays;
 
-  // default overlay payload
   const pay = exam?.overlay?.payment || {};
   const overlay = {
-    show:false, mode:null, openAt:null, tz: exam?.overlay?.tz || "Asia/Kolkata",
-    payment:{
+    show:false, mode:null, openAt:null,
+    tz: exam?.overlay?.tz || "Asia/Kolkata",
+    payment: {
       courseName: exam?.name || String(examId),
       priceINR: Number(exam?.price || 0),
-      upiId: pay.upiId || "", upiName: pay.upiName || "",
-      whatsappNumber: pay.whatsappNumber || "", whatsappText: pay.whatsappText || "",
+      upiId: pay.upiId || "",
+      upiName: pay.upiName || "",
+      whatsappNumber: pay.whatsappNumber || "",
+      whatsappText: pay.whatsappText || "",
     },
   };
 
-  // HARD block if admin chose "never"
-  if (exam?.overlay?.mode === "never"){
+  // Never → hard stop
+  if (mode === "never") {
     return {
       success:true,
-      exam: { examId: exam.examId, name: exam.name, price: exam.price },
-      access: { status, planDays, todayDay, canRestart, startAt: access?.startAt || null },
-      overlay, serverNow: Date.now(),
+      exam: { examId: exam.examId, name: exam.name, price: exam.price, overlay: exam.overlay },
+      access: { status, planDays, todayDay, canRestart, startAt: access?.startAt || null, trialDays },
+      overlay,
+      serverNow: Date.now(),
     };
   }
 
+  // Compute schedule reference
   const { openAt, planTimeShow } = computeOverlayAt(exam, access);
   overlay.openAt = openAt ? openAt.toISOString() : null;
 
-  // suppress during trial window
+  // Trial guard
   const inTrial = status === "trial" && todayDay <= trialDays;
 
-  if (!inTrial){
-    if (exam?.overlay?.mode === "planDayTime"){
-      if (planTimeShow){ overlay.mode = (status==="active" && canRestart) ? "restart" : "purchase"; overlay.show = true; }
-    } else if (openAt && +openAt <= Date.now()){
-      overlay.mode = (status==="active" && canRestart) ? "restart" : "purchase"; overlay.show = true;
+  if (!inTrial) {
+    if (mode === "offset-days" || !mode) {
+      const offsetDays = Number(exam?.overlay?.offsetDays ?? 0);
+      const threshold = Math.max(trialDays, offsetDays);
+      if (todayDay > threshold) {
+        overlay.show = true;
+        overlay.mode = canRestart ? "restart" : "purchase";
+      }
+    } else if (mode === "fixed-date") {
+      if (openAt && +new Date(openAt) <= Date.now()) {
+        overlay.show = true;
+        overlay.mode = canRestart ? "restart" : "purchase";
+      }
+    } else if (mode === "planDayTime") {
+      if (planTimeShow) {
+        overlay.show = true;
+        overlay.mode = canRestart ? "restart" : "purchase";
+      }
     }
   }
 
   return {
     success:true,
-    exam: { examId: exam.examId, name: exam.name, price: exam.price },
+    exam: { examId: exam.examId, name: exam.name, price: exam.price, overlay: exam.overlay },
     access: { status, planDays, todayDay, canRestart, startAt: access?.startAt || null, trialDays },
-    overlay, serverNow: Date.now(),
+    overlay,
+    serverNow: Date.now(),
   };
 }
 
-/* ------------------------------- Exams ----------------------------------- */
-router.get("/exams", async (_req,res)=>{
+/* ----------------------------- No-store ---------------------------------- */
+function noStore(res) {
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.set("Pragma", "no-cache");
+  res.set("Expires", "0");
+}
+
+/* -------------------------------- Exams ---------------------------------- */
+
+router.get("/exams", async (_req, res) => {
   const exams = await PrepExam.find({}, { examId:1, name:1 }).sort({ name:1 }).lean();
   res.json({ success:true, exams });
 });
 
-router.post("/exams", isAdmin, async (req,res)=>{
-  const { examId, name, scheduleMode="cohort" } = req.body || {};
+router.post("/exams", isAdmin, async (req, res) => {
+  const { examId, name, scheduleMode = "cohort" } = req.body || {};
   if (!examId || !name) return res.status(400).json({ success:false, error:"examId & name required" });
   const doc = await PrepExam.findOneAndUpdate({ examId }, { $set:{ name, scheduleMode } }, { upsert:true, new:true });
   res.json({ success:true, exam:doc });
 });
 
-router.delete("/exams/:examId", isAdmin, async (req,res)=>{
-  try{
+router.delete("/exams/:examId", isAdmin, async (req, res) => {
+  try {
     const examId = req.params.examId;
     if (!examId) return res.status(400).json({ success:false, error:"examId required" });
     const r1 = await PrepModule.deleteMany({ examId });
@@ -202,25 +249,25 @@ router.delete("/exams/:examId", isAdmin, async (req,res)=>{
     const r3 = await PrepProgress.deleteMany({ examId });
     const r4 = await PrepExam.deleteOne({ examId });
     res.json({ success:true, removed:{ modules:r1.deletedCount, access:r2.deletedCount, progress:r3.deletedCount, exams:r4.deletedCount }});
-  } catch(e){
+  } catch (e) {
     res.status(500).json({ success:false, error:e?.message || "server error" });
   }
 });
 
-/* ----------------------- Admin overlay meta/get --------------------------- */
-router.get("/exams/:examId/meta", isAdmin, async (req,res)=>{
+/* ------------------------ Admin overlay meta ----------------------------- */
+
+router.get("/exams/:examId/meta", isAdmin, async (req, res) => {
   const exam = await PrepExam.findOne({ examId: req.params.examId }).lean();
   if (!exam) return res.status(404).json({ success:false, message:"Exam not found" });
   const { price=0, trialDays=3, overlay={}, payment={}, autoGrantRestart=false } = exam;
   res.json({ success:true, price, trialDays, overlay, payment, autoGrantRestart:!!autoGrantRestart, name:exam.name, examId:exam.examId });
 });
 
-/* ------------------------- Save overlay config --------------------------- */
-router.patch("/exams/:examId/overlay-config", isAdmin, async (req,res)=>{
+router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
   const {
     price, trialDays, mode, offsetDays, fixedAt, showOnDay, showAtLocal, tz,
     upiId, upiName, whatsappNumber, whatsappText,
-    autoGrantRestart, payment: p={}
+    autoGrantRestart, payment: p = {},
   } = req.body || {};
 
   const eff = {
@@ -236,7 +283,7 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req,res)=>{
     ...(trialDays != null ? { trialDays: Number(trialDays) } : {}),
     ...(autoGrantRestart != null ? { autoGrantRestart: !!autoGrantRestart } : {}),
     overlay: {
-      ...(normalizeMode(mode) ? { mode: normalizeMode(mode) } : {}),
+      ...(mode ? { mode } : {}),
       ...(offsetDays != null ? { offsetDays: Number(offsetDays) } : {}),
       ...(fixedAt ? { fixedAt: new Date(fixedAt) } : { fixedAt: null }),
       ...(showOnDay != null ? { showOnDay: Number(showOnDay) } : {}),
@@ -246,49 +293,47 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req,res)=>{
     },
     ...(hasPay ? { payment: eff } : {}),
   };
-  if (update.overlay?.mode === "planDayTime" && !("tz" in update.overlay)){
+  if (update.overlay?.mode === "planDayTime" && !("tz" in update.overlay)) {
     update.overlay.tz = "Asia/Kolkata";
   }
 
   const doc = await PrepExam.findOneAndUpdate(
     { examId: req.params.examId },
     { $set: update },
-    { new:true }
+    { new: true }
   ).lean();
 
   res.json({ success:true, exam:doc });
 });
 
-/* --------------------------- Status endpoints ---------------------------- */
-function noStore(res){
-  res.set("Cache-Control","no-store, no-cache, must-revalidate, proxy-revalidate");
-  res.set("Pragma","no-cache");
-  res.set("Expires","0");
-}
-router.get("/access/status", async (req,res)=>{
-  try{
+/* ------------------------------- Status ---------------------------------- */
+
+router.get("/access/status", async (req, res) => {
+  try {
     const { examId, email } = req.query || {};
     if (!examId) return res.status(400).json({ success:false, error:"examId required" });
     const payload = await buildAccessStatusPayload(examId, email);
     noStore(res);
     res.json(payload);
-  }catch(e){
+  } catch (e) {
     res.status(500).json({ success:false, error:e?.message || "server error" });
   }
 });
-router.get("/user/summary", async (req,res)=>{
-  try{
+
+router.get("/user/summary", async (req, res) => {
+  try {
     const { examId, email } = req.query || {};
     if (!examId) return res.status(400).json({ success:false, error:"examId required" });
     const payload = await buildAccessStatusPayload(examId, email);
     noStore(res);
     res.json(payload);
-  }catch(e){
+  } catch (e) {
     res.status(500).json({ success:false, error:e?.message || "server error" });
   }
 });
-router.get("/user/today", async (req,res)=>{
-  try{
+
+router.get("/user/today", async (req, res) => {
+  try {
     const { examId, email } = req.query || {};
     if (!examId) return res.status(400).json({ success:false, error:"examId required" });
     const status = await buildAccessStatusPayload(examId, email);
@@ -296,181 +341,253 @@ router.get("/user/today", async (req,res)=>{
     const items = await PrepModule.find({ examId, dayIndex: day }).sort({ releaseAt:1, slotMin:1 }).lean();
     noStore(res);
     res.json({ success:true, items, todayDay: day, summary: status });
-  }catch(e){
+  } catch (e) {
     res.status(500).json({ success:false, error:e?.message || "server error" });
   }
 });
 
 /* ------------------------------ User flows ------------------------------- */
-router.post("/access/start-trial", async (req,res)=>{
-  try{
+
+router.post("/access/start-trial", async (req, res) => {
+  try {
     const { examId, email } = req.body || {};
     if (!examId || !email) return res.status(400).json({ success:false, error:"examId & email required" });
+
     const planDays = await planDaysForExam(examId);
     const now = new Date();
+
     const existing = await PrepAccess.findOne({ examId, userEmail: email }).lean();
     if (existing && existing.status === "active") {
       return res.json({ success:true, access: existing, message:"already active" });
     }
+
     const doc = await PrepAccess.findOneAndUpdate(
       { examId, userEmail: email },
-      { $set:{ status:"trial", planDays, startAt: now } },
+      { $set: { status:"trial", planDays, startAt: now } },
       { upsert:true, new:true }
     );
     res.json({ success:true, access: doc });
-  }catch(e){
+  } catch (e) {
     res.status(500).json({ success:false, error:e?.message || "server error" });
   }
 });
 
-/* --------- Access Request (JSON or multipart; screenshot optional) ------- */
-function firstFile(req,...names){
-  for (const n of names){ const f = req.files?.[n]?.[0]; if (f) return f; }
+/* ------- Submit proof (optional) & create pending request (public) -------- */
+// Always creates a PrepAccessRequest (screenshot/file optional)
+
+function firstFile(req, ...names) {
+  for (const n of names) { const f = req.files?.[n]?.[0]; if (f) return f; }
   if (req.file) return req.file;
   return null;
 }
-const proofFields = [
-  { name:"screenshot", maxCount:1 },
-  { name:"file", maxCount:1 },
-  { name:"image", maxCount:1 },
-  { name:"proof", maxCount:1 },
-];
-router.post("/access/request", upload.fields(proofFields), async (req,res)=>{
-  try{
-    const b = req.body || {};
-    const examId = sanitizeText(b.examId);
-    const email  = sanitizeText(b.email);
+const acceptProofUpload = upload.fields([
+  { name: "screenshot", maxCount: 1 },
+  { name: "file", maxCount: 1 },
+  { name: "image", maxCount: 1 },
+  { name: "proof", maxCount: 1 },
+]);
+
+router.post("/access/request", acceptProofUpload, async (req, res) => {
+  try {
+    const { examId, email, intent: intentIn, note, name, phone, planKey, planLabel, planPrice } = req.body || {};
     if (!examId || !email) return res.status(400).json({ success:false, error:"examId & email required" });
 
-    let intent = sanitizeText(b.intent);
-    if (!intent){
-      const access = await PrepAccess.findOne({ examId, userEmail: email }).lean();
-      intent = access && access.status === "active" ? "restart" : "purchase";
+    let intent = (intentIn || "").trim();
+    if (!intent) {
+      const existing = await PrepAccess.findOne({ examId, userEmail: email }).lean();
+      intent = existing && existing.status === "active" ? "restart" : "purchase";
     }
 
     let screenshotUrl = "";
     const f = firstFile(req, "screenshot","file","image","proof");
-    if (f?.buffer?.length){
-      const saved = await storeBuffer({ buffer:f.buffer, filename:f.originalname||"payment.jpg", mime:f.mimetype||"application/octet-stream", bucket:"prep-proof" });
+    if (f?.buffer?.length) {
+      const saved = await storeBuffer({
+        buffer: f.buffer, filename: f.originalname || "payment.jpg",
+        mime: f.mimetype || "application/octet-stream", bucket: "prep-proof",
+      });
       screenshotUrl = saved.url;
     }
 
     const exam = await PrepExam.findOne({ examId }).lean();
-    const priceAt = Number(exam?.price || 0);
+    const priceAt = Number(exam?.price || planPrice || 0);
     const autoGrant = !!exam?.autoGrantRestart;
 
     const reqDoc = await PrepAccessRequest.create({
-      examId, userEmail: email, intent, screenshotUrl,
-      note: sanitizeText(b.note), status: "pending", priceAt,
-      meta: { name: sanitizeText(b.name), phone: sanitizePhone(b.phone) },
+      examId,
+      userEmail: email,
+      intent,
+      screenshotUrl,
+      note: sanitizeText(note),
+      status: "pending",
+      priceAt,
+      meta: {
+        name: sanitizeText(name),
+        phone: sanitizePhone(phone),
+        planKey: sanitizeText(planKey),
+        planLabel: sanitizeText(planLabel),
+        planPrice: Number(planPrice || 0) || undefined,
+      },
     });
 
-    if (autoGrant){
+    if (autoGrant) {
       const pd = await planDaysForExam(examId);
       const now = new Date();
       await PrepAccess.findOneAndUpdate(
         { examId, userEmail: email },
-        { $set:{ status:"active", planDays:pd, startAt:now }, $inc:{ cycle:1 } },
+        { $set: { status:"active", planDays:pd, startAt:now }, $inc:{ cycle:1 } },
         { upsert:true, new:true }
       );
       await PrepAccessRequest.updateOne(
-        { _id:reqDoc._id },
-        { $set:{ status:"approved", approvedAt:new Date(), approvedBy:"auto" } }
+        { _id: reqDoc._id },
+        { $set: { status:"approved", approvedAt:new Date(), approvedBy:"auto" } }
       );
-      return res.json({ success:true, approved:true, id:reqDoc._id, request:reqDoc });
+      return res.json({ success:true, approved:true, id:String(reqDoc._id), request:reqDoc });
     }
 
-    res.json({ success:true, approved:false, id:reqDoc._id, request:reqDoc });
-  }catch(e){
+    res.json({ success:true, approved:false, id:String(reqDoc._id), request:reqDoc });
+  } catch (e) {
     console.error("[prep] access/request failed:", e);
     res.status(500).json({ success:false, error:e?.message || "server error" });
   }
 });
 
-/* --------------------------- Admin: requests ----------------------------- */
-router.get("/access/requests", isAdmin, async (req,res)=>{
-  try{
-    const { examId, status="pending" } = req.query || {};
-    const q = {}; if (examId) q.examId = examId; if (status) q.status = status;
-    const items = await PrepAccessRequest.find(q).sort({ createdAt:-1 }).limit(200).lean();
-    res.json({ success:true, items });
-  }catch(e){
+/* ------- Public poll: latest request status (pending/approved/rejected) --- */
+
+router.get("/access/request/status", async (req, res) => {
+  try {
+    const { examId, email } = req.query || {};
+    if (!examId || !email) return res.status(400).json({ success:false, error:"examId & email required" });
+
+    const item = await PrepAccessRequest
+      .findOne({ examId, userEmail: email })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    noStore(res);
+    res.json({ success:true, found: !!item, status: item?.status || null, request: item || null });
+  } catch (e) {
     res.status(500).json({ success:false, error:e?.message || "server error" });
   }
 });
-router.post("/access/admin/approve", isAdmin, async (req,res)=>{
-  try{
-    const { requestId, approve=true } = req.body || {};
+
+/* ---------------------------- Admin: requests ----------------------------- */
+
+router.get("/access/requests", isAdmin, async (req, res) => {
+  try {
+    const { examId, status = "pending" } = req.query || {};
+    const q = {};
+    if (examId) q.examId = examId;
+    if (status) q.status = status;
+    const items = await PrepAccessRequest.find(q).sort({ createdAt:-1 }).limit(200).lean();
+    res.json({ success:true, items });
+  } catch (e) {
+    res.status(500).json({ success:false, error:e?.message || "server error" });
+  }
+});
+
+router.post("/access/admin/approve", isAdmin, async (req, res) => {
+  try {
+    const { requestId, approve = true } = req.body || {};
     const ar = await PrepAccessRequest.findById(requestId);
     if (!ar) return res.status(404).json({ success:false, error:"request not found" });
-    if (!approve){ ar.status="rejected"; await ar.save(); return res.json({ success:true, request:ar }); }
+
+    if (!approve) {
+      ar.status = "rejected";
+      await ar.save();
+      return res.json({ success:true, request: ar });
+    }
+
     const pd = await planDaysForExam(ar.examId);
     const now = new Date();
     await PrepAccess.findOneAndUpdate(
       { examId: ar.examId, userEmail: ar.userEmail },
-      { $set:{ status:"active", planDays:pd, startAt:now }, $inc:{ cycle:1 } },
+      { $set: { status:"active", planDays:pd, startAt:now }, $inc:{ cycle:1 } },
       { upsert:true, new:true }
     );
-    ar.status="approved"; ar.approvedAt=new Date(); ar.approvedBy="admin"; await ar.save();
+
+    ar.status = "approved";
+    ar.approvedAt = new Date();
+    ar.approvedBy = "admin";
+    await ar.save();
+
     res.json({ success:true, request: ar });
-  }catch(e){
+  } catch (e) {
     res.status(500).json({ success:false, error:e?.message || "server error" });
   }
 });
-router.post("/access/admin/revoke", isAdmin, async (req,res)=>{
-  try{
+
+router.post("/access/admin/revoke", isAdmin, async (req, res) => {
+  try {
     const { examId, email } = req.body || {};
     if (!examId || !email) return res.status(400).json({ success:false, error:"examId & email required" });
     const r = await PrepAccess.updateOne({ examId, userEmail: email }, { $set:{ status:"revoked" } });
     res.json({ success:true, updated:r.modifiedCount });
-  }catch(e){
+  } catch (e) {
     res.status(500).json({ success:false, error:e?.message || "server error" });
   }
 });
 
 /* ------------------------------ Templates -------------------------------- */
-router.get("/templates", async (req,res)=>{
+
+router.get("/templates", async (req, res) => {
   const { examId } = req.query || {};
   if (!examId) return res.status(400).json({ success:false, error:"examId required" });
   const items = await PrepModule.find({ examId }).sort({ dayIndex:1, slotMin:1 }).lean();
   res.json({ success:true, items });
 });
+
 router.post(
   "/templates",
   isAdmin,
-  upload.fields([{ name:"images", maxCount:12 }, { name:"pdf", maxCount:1 }, { name:"audio", maxCount:1 }, { name:"video", maxCount:1 }]),
-  async (req,res)=>{
-    try{
-      const { examId, dayIndex, slotMin=0, title="", releaseAt, manualText="", extractOCR, showOriginal, allowDownload, highlight, background, content } = req.body || {};
+  upload.fields([
+    { name:"images", maxCount:12 },
+    { name:"pdf", maxCount:1 },
+    { name:"audio", maxCount:1 },
+    { name:"video", maxCount:1 },
+  ]),
+  async (req, res) => {
+    try {
+      const {
+        examId, dayIndex, slotMin=0, title="", releaseAt,
+        manualText="", extractOCR, showOriginal, allowDownload, highlight, background,
+        content,
+      } = req.body || {};
+
       if (!examId || !dayIndex) return res.status(400).json({ success:false, error:"examId & dayIndex required" });
-      const files=[];
+
+      const files = [];
       const saveFile = async f => storeBuffer({ buffer:f.buffer, filename:f.originalname||f.fieldname, mime:f.mimetype||"application/octet-stream" });
-      if (req.files?.images) for (const f of req.files.images){ const s=await saveFile(f); files.push({ kind:"image", url:s.url, mime:f.mimetype }); }
-      if (req.files?.pdf?.[0])   { const f=req.files.pdf[0];   const s=await saveFile(f); files.push({ kind:"pdf",   url:s.url, mime:f.mimetype }); }
-      if (req.files?.audio?.[0]) { const f=req.files.audio[0]; const s=await saveFile(f); files.push({ kind:"audio", url:s.url, mime:f.mimetype }); }
-      if (req.files?.video?.[0]) { const f=req.files.video[0]; const s=await saveFile(f); files.push({ kind:"video", url:s.url, mime:f.mimetype }); }
+
+      if (req.files?.images) for (const f of req.files.images) { const s = await saveFile(f); files.push({ kind:"image", url:s.url, mime:f.mimetype }); }
+      if (req.files?.pdf?.[0])   { const f = req.files.pdf[0];   const s = await saveFile(f); files.push({ kind:"pdf",   url:s.url, mime:f.mimetype }); }
+      if (req.files?.audio?.[0]) { const f = req.files.audio[0]; const s = await saveFile(f); files.push({ kind:"audio", url:s.url, mime:f.mimetype }); }
+      if (req.files?.video?.[0]) { const f = req.files.video[0]; const s = await saveFile(f); files.push({ kind:"video", url:s.url, mime:f.mimetype }); }
+
       const manualOrPasted = (manualText || content || "").trim();
       const relAt = releaseAt ? new Date(releaseAt) : null;
       const status = relAt && relAt > new Date() ? "scheduled" : "released";
+
       const doc = await PrepModule.create({
         examId, dayIndex:Number(dayIndex), slotMin:Number(slotMin), title,
         text:manualOrPasted, files,
         flags:{ extractOCR:truthy(extractOCR), showOriginal:truthy(showOriginal), allowDownload:truthy(allowDownload), highlight:truthy(highlight), background },
         releaseAt: relAt || undefined, status,
       });
+
       res.json({ success:true, item:{ ...doc.toObject(), files }, message:`Uploaded ${files.length} file(s)` });
-    }catch(e){
+    } catch (e) {
       console.error("[prep] create template failed:", e);
       res.status(500).json({ success:false, error:e?.message || "server error" });
     }
   }
 );
-router.delete("/templates/:id", isAdmin, async (req,res)=>{
-  try{
+
+router.delete("/templates/:id", isAdmin, async (req, res) => {
+  try {
     const r = await PrepModule.findByIdAndDelete(req.params.id);
     if (!r) return res.status(404).json({ success:false, error:"Not found" });
     res.json({ success:true, removed:r._id });
-  }catch(e){
+  } catch (e) {
     res.status(500).json({ success:false, error:e?.message || "server error" });
   }
 });
