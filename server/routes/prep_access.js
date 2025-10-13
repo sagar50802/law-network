@@ -307,7 +307,7 @@ router.get("/access/status", async (req, res) => {
 
     const exam = await PrepExam.findOne({ examId }).lean();
     if (!exam) {
-      return res.json({ exam:null, access:{ status:"none" }, overlay:{}, serverNow: Date.now() });
+      return res.json({ exam:null, access:{ status:"none" }, overlay:{}, serverNow: Date.now(), success:true });
     }
 
     const planDays = await planDaysForExam(examId);
