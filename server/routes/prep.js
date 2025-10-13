@@ -25,6 +25,7 @@ function safeName(filename = "file") {
   return String(filename).replace(/\s+/g, "_").replace(/[^\w.\-]/g, "");
 }
 
+// Optional Cloudflare R2 helper (kept exactly as your existing pattern)
 let R2 = null;
 try { R2 = await import("../utils/r2.js"); } catch { R2 = null; }
 
@@ -38,6 +39,7 @@ async function storeBuffer({ buffer, filename, mime, bucket = "prep" }) {
   const name = safeName(filename || "file");
   const contentType = mime || "application/octet-stream";
 
+  // Try R2 first (non-breaking, same as your current code)
   if (R2?.r2Enabled?.() && typeof R2.uploadBuffer === "function") {
     try {
       const key = `${bucket}/${name}`;
@@ -48,6 +50,7 @@ async function storeBuffer({ buffer, filename, mime, bucket = "prep" }) {
     }
   }
 
+  // Fallback to GridFS
   const g = grid(bucket);
   if (!g) throw Object.assign(new Error("DB not connected"), { status: 503 });
   const id = await new Promise((resolve, reject) => {
@@ -130,6 +133,9 @@ function computeOverlayAt(exam, access) {
 }
 
 /* ------------------------- Shared payload builder ------------------------ */
+// ✅ Tiny, surgical patch here:
+// 1) Hard stop when overlay.mode === "never" (also return overlay.hardDisabled = true)
+// 2) Trial-day guard — overlay never shows while in trial window
 
 async function buildAccessStatusPayload(examId, email) {
   const exam = await PrepExam.findOne({ examId }).lean();
@@ -150,7 +156,7 @@ async function buildAccessStatusPayload(examId, email) {
   const baseOverlay = {
     show:false, mode:null, openAt:null,
     tz: exam?.overlay?.tz || "Asia/Kolkata",
-    hardDisabled: false, // default
+    hardDisabled: false, // flag for front-end to clear any stale "waiting"
     payment: {
       courseName: exam?.name || String(examId),
       priceINR: Number(exam?.price || 0),
@@ -159,34 +165,35 @@ async function buildAccessStatusPayload(examId, email) {
     },
   };
 
-  // ---------- HARD BLOCK: overlay "never" ----------
+  // ---------- HARD STOP: overlay "never" ----------
   if (exam?.overlay?.mode === "never") {
     return {
       success: true,
       exam: { examId: exam.examId, name: exam.name, price: exam.price, overlay: exam.overlay },
-      access: { status, planDays, todayDay, canRestart, startAt: access?.startAt || null },
+      access: { status, planDays, todayDay, canRestart, startAt: access?.startAt || null, trialDays },
       overlay: { ...baseOverlay, show:false, mode:null, openAt:null, hardDisabled: true },
       serverNow: Date.now(),
     };
   }
-  // --------------------------------------------------
+  // ------------------------------------------------
 
-  // compute schedule
+  // Compute schedule
   const { openAt, planTimeShow } = computeOverlayAt(exam, access);
   const overlay = { ...baseOverlay, openAt: openAt ? openAt.toISOString() : null };
 
-  // never show during trial window
+  // ---------- TRIAL-DAY GUARD ----------
   const inTrial = status === "trial" && todayDay <= trialDays;
+  // -------------------------------------
 
   if (!inTrial) {
     if (exam?.overlay?.mode === "planDayTime") {
       if (planTimeShow) {
-        overlay.mode = status === "active" && canRestart ? "restart" : "purchase";
+        overlay.mode = canRestart ? "restart" : "purchase";
         overlay.show = true;
       }
     } else {
       if (openAt && +new Date(openAt) <= Date.now()) {
-        overlay.mode = status === "active" && canRestart ? "restart" : "purchase";
+        overlay.mode = canRestart ? "restart" : "purchase";
         overlay.show = true;
       }
     }
@@ -195,7 +202,7 @@ async function buildAccessStatusPayload(examId, email) {
   return {
     success:true,
     exam: { examId: exam.examId, name: exam.name, price: exam.price, overlay: exam.overlay },
-    access: { status, planDays, todayDay, canRestart, startAt: access?.startAt || null },
+    access: { status, planDays, todayDay, canRestart, startAt: access?.startAt || null, trialDays },
     overlay,
     serverNow: Date.now(),
   };
@@ -355,6 +362,7 @@ router.post("/access/start-trial", async (req, res) => {
 });
 
 /* ------- Submit proof (optional) & create pending request (public) -------- */
+// ✅ Always creates a PrepAccessRequest (screenshot/file optional)
 
 function firstFile(req, ...names) {
   for (const n of names) { const f = req.files?.[n]?.[0]; if (f) return f; }
@@ -391,7 +399,7 @@ router.post("/access/request", acceptProofUpload, async (req, res) => {
 
     const exam = await PrepExam.findOne({ examId }).lean();
     const priceAt = Number(exam?.price || planPrice || 0);
-    const autoGrant = !!exam?.autoGrantRestart;
+    const autoGrant = !!exam?.autoGrantRestart; // kept from your current code
 
     const reqDoc = await PrepAccessRequest.create({
       examId,
@@ -422,10 +430,10 @@ router.post("/access/request", acceptProofUpload, async (req, res) => {
         { _id: reqDoc._id },
         { $set: { status:"approved", approvedAt:new Date(), approvedBy:"auto" } }
       );
-      return res.json({ success:true, approved:true, id:reqDoc._id, request:reqDoc });
+      return res.json({ success:true, approved:true, id:String(reqDoc._id), request:reqDoc });
     }
 
-    res.json({ success:true, approved:false, id:reqDoc._id, request:reqDoc });
+    res.json({ success:true, approved:false, id:String(reqDoc._id), request:reqDoc });
   } catch (e) {
     console.error("[prep] access/request failed:", e);
     res.status(500).json({ success:false, error:e?.message || "server error" });
@@ -433,6 +441,7 @@ router.post("/access/request", acceptProofUpload, async (req, res) => {
 });
 
 /* ------- Public poll: latest request status (pending/approved/rejected) --- */
+// ✅ Non-breaking helper route for “Waiting for approval” front-end
 
 router.get("/access/request/status", async (req, res) => {
   try {
