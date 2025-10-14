@@ -1,4 +1,5 @@
-// LawNetwork Prep — Access, Overlay/Payment, Requests (hardened)
+// server/routes/prep_access.js
+// LawNetwork Prep — Access, Overlay/Payment, Requests (hardened + debug-friendly)
 
 import express from "express";
 import multer from "multer";
@@ -165,16 +166,14 @@ async function grantActiveAccess({ examId, email }) {
 const router = express.Router();
 
 /* ================================================================== */
-/* ADMIN: Overlay UI (UPI/WA visuals, independent of timing)          */
+/* ADMIN: Overlay UI                                                   */
 /* ================================================================== */
 
-// List exams for dropdowns
 router.get("/exams", isAdmin, async (_req, res) => {
   const rows = await PrepExam.find({}, { examId:1, name:1 }).sort({ name:1 }).lean();
   res.json({ success: true, exams: rows || [] });
 });
 
-// Read overlayUI (admin preview/editor)
 router.get("/overlay/:examId", isAdmin, async (req, res) => {
   const exam = await PrepExam.findOne(
     { examId: req.params.examId },
@@ -184,7 +183,6 @@ router.get("/overlay/:examId", isAdmin, async (req, res) => {
   res.json({ success:true, config: exam.overlayUI || {}, exam });
 });
 
-// Save overlayUI (UPI/WA + optional images)
 router.post(
   "/overlay/:examId",
   isAdmin,
@@ -237,7 +235,7 @@ router.post(
 );
 
 /* ================================================================== */
-/* ADMIN: Read/Write exam meta (includes timing+payment fields)       */
+/* ADMIN: Read/Write exam meta                                         */
 /* ================================================================== */
 
 router.get("/exams/:examId/meta", isAdmin, async (req, res) => {
@@ -299,7 +297,7 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
 });
 
 /* ================================================================== */
-/* PUBLIC: status/summary/today                                       */
+/* PUBLIC: status/summary                                              */
 /* ================================================================== */
 
 router.get("/access/status", async (req, res) => {
@@ -321,11 +319,9 @@ router.get("/access/status", async (req, res) => {
     const canRestart = status === "active" && todayDay >= planDays;
     const trialDays = Number(exam?.trialDays ?? 0);
 
-    // timing
     const { openAt, planTimeShow } = computeOverlayAt(exam, access);
     const now = Date.now();
 
-    // overlay payload + payment
     const pay = exam?.overlay?.payment || {};
     const overlay = {
       show:false, mode:null,
@@ -341,10 +337,8 @@ router.get("/access/status", async (req, res) => {
       },
     };
 
-    // ===== Trial behaviour =====
     if (status === "trial") {
       if (todayDay <= trialDays) {
-        // suppress overlay during trial
         return res.json({
           success:true,
           exam,
@@ -363,12 +357,10 @@ router.get("/access/status", async (req, res) => {
           serverNow: Date.now(),
         });
       }
-      // trial just ended → force overlay immediately
       overlay.show = true;
       overlay.mode = "purchase";
       overlay.openAt = null;
     } else {
-      // schedule rules (when not in trial)
       if (exam?.overlay?.mode === "planDayTime") {
         if (planTimeShow) {
           overlay.mode = canRestart ? "restart" : "purchase";
@@ -381,7 +373,6 @@ router.get("/access/status", async (req, res) => {
         }
       }
 
-      // legacy safety when overlay.mode is missing
       if (!exam?.overlay?.mode && !overlay.show) {
         const ovLegacy = exam?.overlay || {};
         let force = false;
@@ -422,7 +413,7 @@ router.get("/access/status", async (req, res) => {
 });
 
 /* ================================================================== */
-/* PUBLIC: make access request (proof optional), and poll its status  */
+/* PUBLIC: create request + poll                                       */
 /* ================================================================== */
 
 function firstFile(req, ...names) {
@@ -440,7 +431,6 @@ const acceptProofUpload = upload.fields([
   { name:"proof", maxCount:1 },
 ]);
 
-// Accept BOTH multipart (proof) and pure JSON bodies
 router.post("/access/request", (req, res, next) => {
   const ct = (req.headers["content-type"] || "").toLowerCase();
   if (ct.includes("multipart/form-data")) return acceptProofUpload(req, res, next);
@@ -491,16 +481,29 @@ router.post("/access/request", (req, res, next) => {
       },
     });
 
+    // Double-check it persisted (extra safety)
+    if (!reqDoc?._id) throw new Error("request not saved");
+
     if (autoGrant) {
       await grantActiveAccess({ examId, email });
       await PrepAccessRequest.updateOne(
         { _id: reqDoc._id },
         { $set: { status:"approved", approvedAt:new Date(), approvedBy:"auto" } }
       );
-      return res.json({ success:true, approved:true, requestId:String(reqDoc._id) });
+      return res.json({
+        success:true,
+        approved:true,
+        requestId:String(reqDoc._id),
+        examId, email, intent,
+      });
     }
 
-    res.json({ success:true, approved:false, requestId:String(reqDoc._id) });
+    res.json({
+      success:true,
+      approved:false,
+      requestId:String(reqDoc._id),
+      examId, email, intent,
+    });
   } catch (e) {
     console.error("[prep_access] /access/request failed:", e);
     res.status(500).json({ success:false, error:e?.message || "server error" });
@@ -526,17 +529,27 @@ router.get("/access/request/status", async (req, res) => {
 });
 
 /* ================================================================== */
-/* ADMIN: list/approve/reject/revoke                                  */
+/* ADMIN: list/approve/reject/revoke (+ debug=1)                       */
 /* ================================================================== */
 
-// status=all → return all
+// status=all → return all; debug=1 → include counts meta
 router.get("/access/requests", isAdmin, async (req, res) => {
   try {
-    const { examId, status = "pending" } = req.query || {};
+    const { examId, status = "pending", debug } = req.query || {};
     const q = {};
     if (examId) q.examId = examId;
     if (status && status !== "all") q.status = status;
+
     const items = await PrepAccessRequest.find(q).sort({ createdAt:-1 }).limit(200).lean();
+
+    if (debug) {
+      const total = await PrepAccessRequest.countDocuments({});
+      const pending = await PrepAccessRequest.countDocuments({ status:"pending" });
+      const approved = await PrepAccessRequest.countDocuments({ status:"approved" });
+      const rejected = await PrepAccessRequest.countDocuments({ status:"rejected" });
+      return res.json({ success:true, items, debug: { total, pending, approved, rejected, query:q } });
+    }
+
     res.json({ success:true, items });
   } catch (e) {
     res.status(500).json({ success:false, error:e?.message || "server error" });
@@ -579,7 +592,7 @@ router.post("/access/admin/revoke", isAdmin, async (req, res) => {
 });
 
 /* ================================================================== */
-/* QUICK ADMIN (URL toggle) – optional, uses loose key                */
+/* QUICK ADMIN (URL toggle)                                            */
 /* ================================================================== */
 
 function isAdminLoose(req, res, next) {
