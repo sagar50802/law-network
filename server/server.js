@@ -179,10 +179,10 @@ app.use("/api/submissions", submissionsRoutes);
 app.use("/api/qr", qrRoutes);
 app.use("/api/exams", examRoutes);
 
-/* ✅ Mount new prep routes */
-app.use("/api/prep", prepRoutes);
-/* ✅ Mount new prep access routes */
+/* ✅ Mount new prep access routes (must come BEFORE prepRoutes) */
 app.use("/api/prep", prepAccessRoutes);
+/* ✅ Mount new prep routes (legacy/general prep APIs) */
+app.use("/api/prep", prepRoutes);
 /* ✅ Mount GridFS files routes */
 app.use("/api/files", filesRoutes);
 /* ✅ Mount Test Series routes */
