@@ -1,5 +1,5 @@
 // server/routes/prep_access.js
-// LawNetwork Prep — Access, Overlay/Payment, Requests (full & complete)
+// LawNetwork Prep — Access, Overlay/Payment, Requests (hardened + compatible)
 
 import express from "express";
 import multer from "multer";
@@ -461,14 +461,18 @@ const acceptProofUpload = upload.fields([
   { name:"proof", maxCount:1 },
 ]);
 
+// Accept FormData (multipart) or plain JSON
 router.post("/access/request", acceptProofUpload, async (req, res) => {
   try {
+    // For JSON bodies (no multipart), multer won't populate req.body unless upstream added a JSON parser.
+    // Fall back to raw text if needed — but typically express.json() is mounted globally.
+    const b = req.body || {};
     const {
       examId, email,
       intent: intentIn, note,
       name, phone,
       planKey, planLabel, planPrice
-    } = req.body || {};
+    } = b;
 
     if (!examId || !email) {
       return res.status(400).json({ success:false, error:"examId & email required" });
@@ -517,7 +521,7 @@ router.post("/access/request", acceptProofUpload, async (req, res) => {
 
     res.json({ success:true, approved:false, request:reqDoc });
   } catch (e) {
-    console.error("[prep_access] /access/request failed:", e);
+    console.error("[prep_access] POST /access/request failed:", e);
     res.status(500).json({ success:false, error:e?.message || "server error" });
   }
 });
@@ -595,10 +599,10 @@ router.post("/access/admin/revoke", isAdmin, async (req, res) => {
 /* QUICK ADMIN (URL toggle) – optional, uses loose key                */
 /* ================================================================== */
 
-function isAdminLoose(req, res, next) {
+function isAdminLoose(req, _res, next) {
   const key = req.get("X-Owner-Key") || req.query._k || (req.body && req.body._k);
   const ok = key && key === (process.env.ADMIN_KEY || process.env.VITE_OWNER_KEY || "");
-  if (!ok) return res.status(401).json({ success:false, error:"Unauthorized" });
+  if (!ok) return next(Object.assign(new Error("Unauthorized"), { status: 401 }));
   next();
 }
 
