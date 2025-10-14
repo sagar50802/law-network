@@ -1,5 +1,5 @@
 // server/routes/prep_access.js
-// LawNetwork Prep — Access, Overlay/Payment, Requests (hardened + compatible)
+// LawNetwork Prep — Access, Overlay/Payment, Requests (hardened)
 
 import express from "express";
 import multer from "multer";
@@ -18,6 +18,9 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 20 * 1024 * 1024 }, // 20 MB
 });
+
+/* also parse JSON bodies for the endpoints that need it */
+const jsonBody = express.json();
 
 /* ------------------------------------------------------------------ */
 /* Small helpers                                                       */
@@ -419,29 +422,6 @@ router.get("/access/status", async (req, res) => {
   }
 });
 
-// (Optional convenience) start trial
-router.post("/access/start-trial", async (req, res) => {
-  try {
-    const { examId, email } = req.body || {};
-    if (!examId || !email) return res.status(400).json({ success:false, error:"examId & email required" });
-
-    const planDays = await planDaysForExam(examId);
-    const now = new Date();
-    const existing = await PrepAccess.findOne({ examId, userEmail: email }).lean();
-    if (existing && existing.status === "active") {
-      return res.json({ success:true, access: existing, message:"already active" });
-    }
-    const doc = await PrepAccess.findOneAndUpdate(
-      { examId, userEmail: email },
-      { $set: { status:"trial", planDays, startAt: now } },
-      { upsert:true, new:true }
-    );
-    res.json({ success:true, access: doc });
-  } catch (e) {
-    res.status(500).json({ success:false, error:e?.message || "server error" });
-  }
-});
-
 /* ================================================================== */
 /* PUBLIC: make access request (proof optional), and poll its status  */
 /* ================================================================== */
@@ -461,18 +441,20 @@ const acceptProofUpload = upload.fields([
   { name:"proof", maxCount:1 },
 ]);
 
-// Accept FormData (multipart) or plain JSON
-router.post("/access/request", acceptProofUpload, async (req, res) => {
+// Accept BOTH multipart (proof) and pure JSON bodies
+router.post("/access/request", (req, res, next) => {
+  const ct = (req.headers["content-type"] || "").toLowerCase();
+  if (ct.includes("multipart/form-data")) return acceptProofUpload(req, res, next);
+  return jsonBody(req, res, next);
+}, async (req, res) => {
   try {
-    // For JSON bodies (no multipart), multer won't populate req.body unless upstream added a JSON parser.
-    // Fall back to raw text if needed — but typically express.json() is mounted globally.
-    const b = req.body || {};
+    const body = req.body || {};
     const {
       examId, email,
       intent: intentIn, note,
       name, phone,
       planKey, planLabel, planPrice
-    } = b;
+    } = body;
 
     if (!examId || !email) {
       return res.status(400).json({ success:false, error:"examId & email required" });
@@ -516,17 +498,17 @@ router.post("/access/request", acceptProofUpload, async (req, res) => {
         { _id: reqDoc._id },
         { $set: { status:"approved", approvedAt:new Date(), approvedBy:"auto" } }
       );
-      return res.json({ success:true, approved:true, request:reqDoc });
+      return res.json({ success:true, approved:true, requestId:String(reqDoc._id) });
     }
 
-    res.json({ success:true, approved:false, request:reqDoc });
+    res.json({ success:true, approved:false, requestId:String(reqDoc._id) });
   } catch (e) {
-    console.error("[prep_access] POST /access/request failed:", e);
+    console.error("[prep_access] /access/request failed:", e);
     res.status(500).json({ success:false, error:e?.message || "server error" });
   }
 });
 
-// Poll latest request status (for "waiting...")
+// Poll latest request status (for "waiting..."). Returns "none" if not found.
 router.get("/access/request/status", async (req, res) => {
   try {
     const { examId, email } = req.query || {};
@@ -537,7 +519,8 @@ router.get("/access/request/status", async (req, res) => {
       .sort({ createdAt: -1 })
       .lean();
 
-    res.json({ success:true, found: !!item, status: item?.status || null, request: item || null });
+    if (!item) return res.json({ success:true, status:"none" });
+    res.json({ success:true, status: item.status, requestId: String(item._id) });
   } catch (e) {
     res.status(500).json({ success:false, error:e?.message || "server error" });
   }
@@ -547,12 +530,13 @@ router.get("/access/request/status", async (req, res) => {
 /* ADMIN: list/approve/reject/revoke                                  */
 /* ================================================================== */
 
+// status=all → return all
 router.get("/access/requests", isAdmin, async (req, res) => {
   try {
     const { examId, status = "pending" } = req.query || {};
     const q = {};
     if (examId) q.examId = examId;
-    if (status) q.status = status;
+    if (status && status !== "all") q.status = status;
     const items = await PrepAccessRequest.find(q).sort({ createdAt:-1 }).limit(200).lean();
     res.json({ success:true, items });
   } catch (e) {
@@ -599,10 +583,10 @@ router.post("/access/admin/revoke", isAdmin, async (req, res) => {
 /* QUICK ADMIN (URL toggle) – optional, uses loose key                */
 /* ================================================================== */
 
-function isAdminLoose(req, _res, next) {
+function isAdminLoose(req, res, next) {
   const key = req.get("X-Owner-Key") || req.query._k || (req.body && req.body._k);
   const ok = key && key === (process.env.ADMIN_KEY || process.env.VITE_OWNER_KEY || "");
-  if (!ok) return next(Object.assign(new Error("Unauthorized"), { status: 401 }));
+  if (!ok) return res.status(401).json({ success:false, error:"Unauthorized" });
   next();
 }
 
