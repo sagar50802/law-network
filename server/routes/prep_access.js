@@ -1,4 +1,3 @@
-// server/routes/prep_access.js
 // LawNetwork Prep — Access, Overlay/Payment, Requests (hardened)
 
 import express from "express";
