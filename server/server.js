@@ -167,6 +167,8 @@ import filesRoutes from "./routes/files.js";
 import testseriesRoutes from "./routes/testseries.js";
 /* ✅ NEW: Plagiarism API */
 import plagiarismRoutes from "./routes/plagiarism.js";
+/* ✅ NEW: Research API (as requested) */
+import researchRoutes from "./routes/research.js"; // ← added
 
 app.use("/api/articles", articleRoutes);
 app.use("/api/banners", bannerRoutes);
@@ -189,6 +191,8 @@ app.use("/api/files", filesRoutes);
 app.use("/api/testseries", testseriesRoutes);
 /* ✅ Mount Plagiarism routes */
 app.use("/api/plagiarism", plagiarismRoutes);
+/* ✅ Mount Research routes (as requested) */
+app.use("/api/research", researchRoutes); // ← added
 
 /* ---------- Health/probes ---------- */
 app.get("/api/access/status", (_req, res) => res.json({ access: false }));
