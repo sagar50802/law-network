@@ -431,84 +431,105 @@ const acceptProofUpload = upload.fields([
   { name:"proof", maxCount:1 },
 ]);
 
-router.post("/access/request", (req, res, next) => {
-  const ct = (req.headers["content-type"] || "").toLowerCase();
-  if (ct.includes("multipart/form-data")) return acceptProofUpload(req, res, next);
-  return jsonBody(req, res, next);
-}, async (req, res) => {
-  try {
-    const body = req.body || {};
-    const {
-      examId, email,
-      intent: intentIn, note,
-      name, phone,
-      planKey, planLabel, planPrice
-    } = body;
+// --- hardened create-request (accepts JSON or multipart) -------------
+router.post(
+  "/access/request",
+  (req, res, next) => {
+    const ct = (req.headers["content-type"] || "").toLowerCase();
+    if (ct.includes("multipart/form-data")) return acceptProofUpload(req, res, next);
+    return jsonBody(req, res, next);
+  },
+  async (req, res) => {
+    try {
+      if (!mongoose.connection?.db) {
+        return res.status(503).json({ success:false, error:"database not connected" });
+      }
 
-    if (!examId || !email) {
-      return res.status(400).json({ success:false, error:"examId & email required" });
-    }
+      const b = req.body || {};
+      const examId = String(b.examId || "").trim();
+      const email  = String(b.email || b.userEmail || "").trim().toLowerCase();
+      const note   = sanitizeText(b.note);
+      const name   = sanitizeText(b.name);
+      const phone  = sanitizePhone(b.phone);
+      const planKey   = sanitizeText(b.planKey);
+      const planLabel = sanitizeText(b.planLabel);
+      const planPrice = b.planPrice != null ? Number(b.planPrice) : undefined;
 
-    let intent = (intentIn || "").trim();
-    if (!intent) {
-      const existing = await PrepAccess.findOne({ examId, userEmail: email }).lean();
-      intent = existing && existing.status === "active" ? "restart" : "purchase";
-    }
+      if (!examId || !email) {
+        return res.status(400).json({ success:false, error:"examId & email required" });
+      }
 
-    let screenshotUrl = "";
-    const f = firstFile(req, "screenshot","file","image","proof");
-    if (f?.buffer?.length) {
-      const saved = await storeBuffer({
-        buffer:f.buffer, filename:f.originalname || "payment.jpg",
-        mime:f.mimetype || "application/octet-stream", bucket:"prep-proof"
+      // intent: use provided, else infer from current access
+      let intent = String(b.intent || "").trim();
+      if (!intent) {
+        const existing = await PrepAccess.findOne({ examId, userEmail: email }).lean();
+        intent = existing?.status === "active" ? "restart" : "purchase";
+      }
+
+      // optional proof image
+      let screenshotUrl = "";
+      const f = firstFile(req, "screenshot","file","image","proof");
+      if (f?.buffer?.length) {
+        const saved = await storeBuffer({
+          buffer: f.buffer,
+          filename: f.originalname || "payment.jpg",
+          mime: f.mimetype || "application/octet-stream",
+          bucket: "prep-proof",
+        });
+        screenshotUrl = saved.url;
+      }
+
+      const exam = await PrepExam.findOne({ examId }).lean();
+      const priceAt = Number(exam?.price || planPrice || 0);
+      const autoGrant = !!exam?.autoGrantRestart;
+
+      const reqDoc = await PrepAccessRequest.create({
+        examId,
+        userEmail: email,
+        intent,
+        screenshotUrl,
+        note,
+        status: "pending",
+        priceAt,
+        meta: {
+          name,
+          phone,
+          planKey,
+          planLabel,
+          planPrice: planPrice || undefined,
+        },
       });
-      screenshotUrl = saved.url;
-    }
 
-    const exam = await PrepExam.findOne({ examId }).lean();
-    const priceAt = Number(exam?.price || planPrice || 0);
-    const autoGrant = !!exam?.autoGrantRestart;
+      if (!reqDoc?._id) {
+        return res.status(500).json({ success:false, error:"request not saved" });
+      }
 
-    const reqDoc = await PrepAccessRequest.create({
-      examId, userEmail: email, intent, screenshotUrl,
-      note: sanitizeText(note), status: "pending", priceAt,
-      meta: {
-        name: sanitizeText(name),
-        phone: sanitizePhone(phone),
-        planKey: sanitizeText(planKey),
-        planLabel: sanitizeText(planLabel),
-        planPrice: Number(planPrice || 0) || undefined,
-      },
-    });
+      if (autoGrant) {
+        await grantActiveAccess({ examId, email });
+        await PrepAccessRequest.updateOne(
+          { _id: reqDoc._id },
+          { $set: { status:"approved", approvedAt:new Date(), approvedBy:"auto" } }
+        );
+        return res.json({
+          success:true,
+          approved:true,
+          requestId:String(reqDoc._id),
+          examId, email, intent,
+        });
+      }
 
-    // Double-check it persisted (extra safety)
-    if (!reqDoc?._id) throw new Error("request not saved");
-
-    if (autoGrant) {
-      await grantActiveAccess({ examId, email });
-      await PrepAccessRequest.updateOne(
-        { _id: reqDoc._id },
-        { $set: { status:"approved", approvedAt:new Date(), approvedBy:"auto" } }
-      );
-      return res.json({
+      res.json({
         success:true,
-        approved:true,
+        approved:false,
         requestId:String(reqDoc._id),
         examId, email, intent,
       });
+    } catch (e) {
+      console.error("[prep_access] /access/request failed:", e);
+      res.status(500).json({ success:false, error:e?.message || "server error" });
     }
-
-    res.json({
-      success:true,
-      approved:false,
-      requestId:String(reqDoc._id),
-      examId, email, intent,
-    });
-  } catch (e) {
-    console.error("[prep_access] /access/request failed:", e);
-    res.status(500).json({ success:false, error:e?.message || "server error" });
   }
-});
+);
 
 // Poll latest request status (for "waiting..."). Returns "none" if not found.
 router.get("/access/request/status", async (req, res) => {
