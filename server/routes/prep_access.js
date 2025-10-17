@@ -317,7 +317,7 @@ router.post(
         },
       });
 
-      // DEBUG log (safe)
+      // minimal console marker for debugging
       await logCreated(reqDoc);
 
       if (!reqDoc?._id) {
@@ -358,7 +358,7 @@ router.get("/access/request/status", async (req, res) => {
     if (!examId || !email) return res.status(400).json({ success:false, error:"examId & email required" });
 
     const item = await PrepAccessRequest
-      .findOne({ examId, userEmail: email })
+      .findOne({ examId, userEmail: email.toLowerCase() })
       .sort({ createdAt: -1 })
       .lean();
 
@@ -378,7 +378,7 @@ router.get("/access/requests", isAdmin, async (req, res) => {
   try {
     const { examId, status = "pending", debug } = req.query || {};
     const q = {};
-    if (examId) q.examId = examId;
+    if (examId) q.examId = String(examId);
     if (status && status !== "all") q.status = status;
 
     const items = await PrepAccessRequest.find(q).sort({ createdAt:-1 }).limit(200).lean();
@@ -425,7 +425,7 @@ router.post("/access/admin/revoke", isAdmin, async (req, res) => {
   try {
     const { examId, email } = req.body || {};
     if (!examId || !email) return res.status(400).json({ success:false, error:"examId & email required" });
-    const r = await PrepAccess.updateOne({ examId, userEmail: email }, { $set:{ status:"revoked" } });
+    const r = await PrepAccess.updateOne({ examId, userEmail: email.toLowerCase() }, { $set:{ status:"revoked" } });
     res.json({ success:true, updated: r.modifiedCount });
   } catch (e) {
     res.status(500).json({ success:false, error:e?.message || "server error" });
@@ -486,7 +486,7 @@ router.get("/exams/:examId/overlay-quick-set", isAdminLoose, async (req, res) =>
 });
 
 /* ================================================================== */
-/* DEBUG endpoints (safe to keep while you diagnose)                  */
+/* DEBUG endpoints (safe to keep while you diagnose)                   */
 /* ================================================================== */
 
 // 1) show counts + latest 5, no auth (do not expose publicly forever)
