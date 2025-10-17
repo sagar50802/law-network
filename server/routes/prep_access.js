@@ -1,4 +1,3 @@
-// server/routes/prep_access.js
 // LawNetwork Prep — Access Requests + Overlay/Payment Admin (separate from prep.js)
 
 import express from "express";
@@ -318,14 +317,12 @@ router.post(
         },
       });
 
+      // DEBUG log (safe)
+      await logCreated(reqDoc);
+
       if (!reqDoc?._id) {
         return res.status(500).json({ success:false, error:"request not saved" });
       }
-
-      // helpful log
-      console.log("[prep_access] created request", {
-        requestId: String(reqDoc._id), examId, email, intent
-      });
 
       if (autoGrant) {
         await grantActiveAccess({ examId, email });
@@ -380,22 +377,18 @@ router.get("/access/request/status", async (req, res) => {
 router.get("/access/requests", isAdmin, async (req, res) => {
   try {
     const { examId, status = "pending", debug } = req.query || {};
-
-    // normalize status so "All"/"ALL"/"Pending" etc. work
-    const statusNorm = String(status || "").trim().toLowerCase();
-
     const q = {};
     if (examId) q.examId = examId;
-    if (statusNorm && statusNorm !== "all") q.status = statusNorm;
+    if (status && status !== "all") q.status = status;
 
     const items = await PrepAccessRequest.find(q).sort({ createdAt:-1 }).limit(200).lean();
 
     if (debug) {
-      const total    = await PrepAccessRequest.countDocuments({});
-      const pending  = await PrepAccessRequest.countDocuments({ status:"pending" });
+      const total = await PrepAccessRequest.countDocuments({});
+      const pending = await PrepAccessRequest.countDocuments({ status:"pending" });
       const approved = await PrepAccessRequest.countDocuments({ status:"approved" });
       const rejected = await PrepAccessRequest.countDocuments({ status:"rejected" });
-      return res.json({ success:true, items, debug: { total, pending, approved, rejected, query:q, statusNorm } });
+      return res.json({ success:true, items, debug: { total, pending, approved, rejected, query:q } });
     }
 
     res.json({ success:true, items });
@@ -491,5 +484,58 @@ router.get("/exams/:examId/overlay-quick-set", isAdminLoose, async (req, res) =>
     res.status(500).json({ success:false, error:e?.message || "server error" });
   }
 });
+
+/* ================================================================== */
+/* DEBUG endpoints (safe to keep while you diagnose)                  */
+/* ================================================================== */
+
+// 1) show counts + latest 5, no auth (do not expose publicly forever)
+router.get("/access/requests-debug", async (_req, res) => {
+  try {
+    const total    = await PrepAccessRequest.countDocuments({});
+    const pending  = await PrepAccessRequest.countDocuments({ status: "pending" });
+    const approved = await PrepAccessRequest.countDocuments({ status: "approved" });
+    const rejected = await PrepAccessRequest.countDocuments({ status: "rejected" });
+
+    const latest = await PrepAccessRequest
+      .find({})
+      .sort({ createdAt: -1 })
+      .limit(5)
+      .select({ examId:1, userEmail:1, status:1, intent:1, priceAt:1, createdAt:1 })
+      .lean();
+
+    res.json({ success:true, counts: { total, pending, approved, rejected }, latest });
+  } catch (e) {
+    res.status(500).json({ success:false, error:e?.message || "server error" });
+  }
+});
+
+// 2) dump last N for one exam/email (handy to verify insert)
+router.get("/access/requests-debug/by", async (req, res) => {
+  try {
+    const { examId, email } = req.query || {};
+    const q = {};
+    if (examId) q.examId = String(examId);
+    if (email)  q.userEmail = String(email).toLowerCase();
+    const items = await PrepAccessRequest.find(q).sort({ createdAt:-1 }).limit(20).lean();
+    res.json({ success:true, items });
+  } catch (e) {
+    res.status(500).json({ success:false, error:e?.message || "server error" });
+  }
+});
+
+// 3) log whenever a request is created (minimal)
+async function logCreated(ar) {
+  try {
+    console.log("[prep_access] created request", {
+      id: String(ar?._id),
+      examId: ar?.examId,
+      userEmail: ar?.userEmail,
+      status: ar?.status,
+      intent: ar?.intent,
+      at: ar?.createdAt,
+    });
+  } catch {}
+}
 
 export default router;
