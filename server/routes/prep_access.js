@@ -322,6 +322,11 @@ router.post(
         return res.status(500).json({ success:false, error:"request not saved" });
       }
 
+      // helpful log
+      console.log("[prep_access] created request", {
+        requestId: String(reqDoc._id), examId, email, intent
+      });
+
       if (autoGrant) {
         await grantActiveAccess({ examId, email });
         await PrepAccessRequest.updateOne(
@@ -375,18 +380,22 @@ router.get("/access/request/status", async (req, res) => {
 router.get("/access/requests", isAdmin, async (req, res) => {
   try {
     const { examId, status = "pending", debug } = req.query || {};
+
+    // normalize status so "All"/"ALL"/"Pending" etc. work
+    const statusNorm = String(status || "").trim().toLowerCase();
+
     const q = {};
     if (examId) q.examId = examId;
-    if (status && status !== "all") q.status = status;
+    if (statusNorm && statusNorm !== "all") q.status = statusNorm;
 
     const items = await PrepAccessRequest.find(q).sort({ createdAt:-1 }).limit(200).lean();
 
     if (debug) {
-      const total = await PrepAccessRequest.countDocuments({});
-      const pending = await PrepAccessRequest.countDocuments({ status:"pending" });
+      const total    = await PrepAccessRequest.countDocuments({});
+      const pending  = await PrepAccessRequest.countDocuments({ status:"pending" });
       const approved = await PrepAccessRequest.countDocuments({ status:"approved" });
       const rejected = await PrepAccessRequest.countDocuments({ status:"rejected" });
-      return res.json({ success:true, items, debug: { total, pending, approved, rejected, query:q } });
+      return res.json({ success:true, items, debug: { total, pending, approved, rejected, query:q, statusNorm } });
     }
 
     res.json({ success:true, items });
