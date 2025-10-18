@@ -92,7 +92,7 @@ async function grantActiveAccess({ examId, email }) {
   const planDays = await planDaysForExam(examId);
   const now = new Date();
   const doc = await PrepAccess.findOneAndUpdate(
-    { examId, userEmail: email },
+    { examId, userEmail: email.toLowerCase() },
     { $set: { status: "active", planDays, startAt: now }, $inc: { cycle: 1 } },
     { upsert: true, new: true }
   );
@@ -427,6 +427,18 @@ router.post("/access/admin/revoke", isAdmin, async (req, res) => {
     if (!examId || !email) return res.status(400).json({ success:false, error:"examId & email required" });
     const r = await PrepAccess.updateOne({ examId, userEmail: email.toLowerCase() }, { $set:{ status:"revoked" } });
     res.json({ success:true, updated: r.modifiedCount });
+  } catch (e) {
+    res.status(500).json({ success:false, error:e?.message || "server error" });
+  }
+});
+
+// NEW: Delete a request (admin)
+router.post("/access/admin/delete", isAdmin, async (req, res) => {
+  try {
+    const { requestId } = req.body || {};
+    if (!requestId) return res.status(400).json({ success:false, error:"requestId required" });
+    const r = await PrepAccessRequest.deleteOne({ _id: requestId });
+    res.json({ success:true, deleted: r.deletedCount || 0 });
   } catch (e) {
     res.status(500).json({ success:false, error:e?.message || "server error" });
   }
