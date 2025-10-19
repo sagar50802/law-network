@@ -168,7 +168,9 @@ import testseriesRoutes from "./routes/testseries.js";
 /* ✅ NEW: Plagiarism API */
 import plagiarismRoutes from "./routes/plagiarism.js";
 /* ✅ NEW: Research API (as requested) */
-import researchRoutes from "./routes/research.js"; // ← added
+import researchRoutes from "./routes/research.js";
+/* ✅ NEW: Lab Wizard API */
+import labwizardRoutes from "./routes/labwizard.js";
 
 app.use("/api/articles", articleRoutes);
 app.use("/api/banners", bannerRoutes);
@@ -191,8 +193,10 @@ app.use("/api/files", filesRoutes);
 app.use("/api/testseries", testseriesRoutes);
 /* ✅ Mount Plagiarism routes */
 app.use("/api/plagiarism", plagiarismRoutes);
-/* ✅ Mount Research routes (as requested) */
-app.use("/api/research", researchRoutes); // ← added
+/* ✅ Mount Research routes */
+app.use("/api/research", researchRoutes);
+/* ✅ Mount LabWizard routes */
+app.use("/api/labwizard", labwizardRoutes);
 
 /* ---------- Health/probes ---------- */
 app.get("/api/access/status", (_req, res) => res.json({ access: false }));
