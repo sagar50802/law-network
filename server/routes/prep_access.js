@@ -233,6 +233,77 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
 });
 
 /* ================================================================== */
+/* PUBLIC: current exam/access status (USED BY OVERLAY)                */
+/* ================================================================== */
+// Hard rule here: overlay must be shown unless the user has ACTIVE access for this exam.
+router.get("/access/status", async (req, res) => {
+  try {
+    const { examId, email } = req.query || {};
+    if (!examId) return res.status(400).json({ success:false, error:"examId required" });
+
+    const normEmail = (email || "").trim().toLowerCase();
+
+    // exam meta
+    const exam = await PrepExam.findOne({ examId }).lean();
+    if (!exam) return res.status(404).json({ success:false, error:"Exam not found" });
+
+    // access (optional if no email)
+    let accessDoc = null;
+    if (normEmail) {
+      accessDoc = await PrepAccess.findOne({ examId, userEmail: normEmail }).lean();
+    }
+
+    // Build the access shape expected by client
+    const now = Date.now();
+    let access = {
+      status: "none",           // "none" | "trial" | "active" | "revoked"
+      todayDay: 1,
+      canRestart: false,
+      startAt: null,
+      planDays: Number(exam.planDays || 0) || undefined,
+    };
+
+    if (accessDoc) {
+      access.status  = accessDoc.status || "none";
+      access.startAt = accessDoc.startAt || null;
+      access.planDays = Number(accessDoc.planDays || 0) || undefined;
+
+      if (access.startAt) {
+        const day = Math.max(1, Math.floor((now - new Date(access.startAt).getTime()) / 86400000) + 1);
+        access.todayDay = day;
+      }
+      if (access.planDays && access.todayDay > access.planDays) {
+        access.canRestart = true;
+      }
+    }
+
+    // Force overlay for anyone not ACTIVE.
+    const overlay = {
+      show: access.status !== "active",
+      mode: access.status === "active" && access.canRestart ? "restart" : "purchase",
+      payment: (exam.overlay?.payment || exam.payment || {}),
+    };
+
+    return res.json({
+      success: true,
+      exam: {
+        examId: exam.examId,
+        name: exam.name,
+        price: Number(exam.price || 0),
+        trialDays: Number(exam.trialDays || 0),
+        overlay: exam.overlay || {},
+        payment: exam.payment || {},
+      },
+      access,
+      overlay,
+    });
+  } catch (e) {
+    console.error("[prep_access] /access/status failed:", e);
+    res.status(500).json({ success:false, error:e?.message || "server error" });
+  }
+});
+
+/* ================================================================== */
 /* PUBLIC: create request + poll                                       */
 /* ================================================================== */
 
@@ -365,86 +436,6 @@ router.get("/access/request/status", async (req, res) => {
     if (!item) return res.json({ success:true, status:"none" });
     res.json({ success:true, status: item.status, requestId: String(item._id) });
   } catch (e) {
-    res.status(500).json({ success:false, error:e?.message || "server error" });
-  }
-});
-
-/* ================================================================== */
-/* PUBLIC: current exam/access status (USED BY OVERLAY)                */
-/* ================================================================== */
-
-router.get("/access/status", async (req, res) => {
-  try {
-    const { examId, email } = req.query || {};
-    if (!examId) return res.status(400).json({ success:false, error:"examId required" });
-
-    const normEmail = (email || "").trim().toLowerCase();
-
-    // exam meta
-    const exam = await PrepExam.findOne({ examId }).lean();
-    if (!exam) return res.status(404).json({ success:false, error:"Exam not found" });
-
-    // user access (if any)
-    let accessDoc = null;
-    if (normEmail) {
-      accessDoc = await PrepAccess.findOne({ examId, userEmail: normEmail }).lean();
-    }
-
-    // Build "access" object
-    const now = Date.now();
-    let access = {
-      status: "none",
-      todayDay: 1,
-      canRestart: false,
-      startAt: null,
-      planDays: undefined,
-    };
-
-    if (accessDoc) {
-      access.status  = accessDoc.status || "none";
-      access.startAt = accessDoc.startAt || null;
-      access.planDays = Number(accessDoc.planDays || 0) || undefined;
-
-      if (access.startAt) {
-        const day = Math.max(1, Math.floor((now - new Date(access.startAt).getTime()) / 86400000) + 1);
-        access.todayDay = day;
-      }
-
-      if (access.planDays && access.todayDay > access.planDays) {
-        access.canRestart = true;
-      }
-    }
-
-    // If we have no planDays yet but we can compute them from modules, add it
-    if (!access.planDays) {
-      try {
-        const pd = await planDaysForExam(examId);
-        if (Number.isFinite(pd)) access.planDays = pd;
-      } catch {}
-    }
-
-    // HARD GATE: show overlay unless the user is ACTIVE
-    const overlay = {
-      show: access.status !== "active",
-      mode: access.status === "active" && access.canRestart ? "restart" : "purchase",
-      payment: (exam.overlay?.payment || exam.payment || {}),
-    };
-
-    res.json({
-      success: true,
-      exam: {
-        examId: exam.examId,
-        name: exam.name,
-        price: Number(exam.price || 0),
-        trialDays: Number(exam.trialDays || 0),
-        overlay: exam.overlay || {},
-        payment: exam.payment || {},
-      },
-      access,
-      overlay,
-    });
-  } catch (e) {
-    console.error("[prep_access] /access/status failed:", e);
     res.status(500).json({ success:false, error:e?.message || "server error" });
   }
 });
