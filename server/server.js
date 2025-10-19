@@ -13,13 +13,12 @@ const PORT = process.env.PORT || 5000;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-/* ---------- CORS (robust) ---------- */
+/* ---------- CORS (robust Render setup) ---------- */
 const CLIENT_URL =
   process.env.CLIENT_URL ||
   process.env.VITE_BACKEND_URL ||
   "https://law-network-client.onrender.com";
 
-// allow both client + api + local dev; also optionally any *.onrender.com
 const ALLOWED = new Set([
   CLIENT_URL,
   "https://law-network-client.onrender.com",
@@ -30,7 +29,6 @@ const ALLOWED = new Set([
 
 const corsOptions = {
   origin(origin, cb) {
-    // same-origin/curl/server-to-server (no Origin header)
     if (!origin) return cb(null, true);
     if (ALLOWED.has(origin)) return cb(null, true);
     try {
@@ -90,7 +88,7 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
-/* ---------- Tiny log ---------- */
+/* ---------- Tiny logger ---------- */
 app.use((req, _res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
   next();
@@ -101,7 +99,7 @@ app.use((req, _res, next) => {
   if (req.url.startsWith("/api/api/")) {
     const before = req.url;
     req.url = req.url.replace(/^\/api\/api\//, "/api/");
-    console.log("↪️  internally rewrote", before, "→", req.url);
+    console.log("↪️ internally rewrote", before, "→", req.url);
   }
   next();
 });
@@ -122,13 +120,10 @@ app.use((req, _res, next) => {
   if (!fs.existsSync(full)) fs.mkdirSync(full, { recursive: true });
 });
 
-/* ---------- Static /uploads (two roots, robust) ---------- */
-// A: server-relative
+/* ---------- Static /uploads ---------- */
 const UPLOADS_DIR_A = path.join(__dirname, "uploads");
-// B: cwd/server/uploads (some hosts run with cwd at repo root)
 const UPLOADS_DIR_B = path.join(process.cwd(), "server", "uploads");
 
-// Strong caching + CORS/CORP for images (fixed to your client origin)
 const staticHeaders = {
   setHeaders(res, _p, stat) {
     res.setHeader("Access-Control-Allow-Origin", CLIENT_URL);
@@ -157,19 +152,12 @@ import submissionsRoutes from "./routes/submissions.js";
 import qrRoutes from "./routes/qr.js";
 import examRoutes from "./routes/exams.js";
 
-/* ✅ NEW: Prep (Exam Wizard) APIs */
 import prepRoutes from "./routes/prep.js";
-/* ✅ NEW: Prep Access APIs (Grant/Revoke/Restart) */
 import prepAccessRoutes from "./routes/prep_access.js";
-/* ✅ NEW: Files (GridFS) API */
 import filesRoutes from "./routes/files.js";
-/* ✅ NEW: Test Series API */
 import testseriesRoutes from "./routes/testseries.js";
-/* ✅ NEW: Plagiarism API */
 import plagiarismRoutes from "./routes/plagiarism.js";
-/* ✅ NEW: Research API (as requested) */
 import researchRoutes from "./routes/research.js";
-/* ✅ NEW: Lab Wizard API */
 import labwizardRoutes from "./routes/labwizard.js";
 
 app.use("/api/articles", articleRoutes);
@@ -183,27 +171,19 @@ app.use("/api/submissions", submissionsRoutes);
 app.use("/api/qr", qrRoutes);
 app.use("/api/exams", examRoutes);
 
-/* ✅ Mount new prep access routes (must come BEFORE prepRoutes) */
 app.use("/api/prep", prepAccessRoutes);
-/* ✅ Mount new prep routes (legacy/general prep APIs) */
 app.use("/api/prep", prepRoutes);
-/* ✅ Mount GridFS files routes */
 app.use("/api/files", filesRoutes);
-/* ✅ Mount Test Series routes */
 app.use("/api/testseries", testseriesRoutes);
-/* ✅ Mount Plagiarism routes */
 app.use("/api/plagiarism", plagiarismRoutes);
-/* ✅ Mount Research routes */
 app.use("/api/research", researchRoutes);
-/* ✅ Mount LabWizard routes */
 app.use("/api/labwizard", labwizardRoutes);
 
-/* ---------- Health/probes ---------- */
+/* ---------- Health & 404 ---------- */
 app.get("/api/access/status", (_req, res) => res.json({ access: false }));
 app.get("/api/ping", (_req, res) => res.json({ ok: true, ts: Date.now() }));
 app.get("/", (_req, res) => res.json({ ok: true, root: true }));
 
-/* ---------- 404 ---------- */
 app.use((req, res) =>
   res
     .status(404)
