@@ -157,8 +157,7 @@ import prepAccessRoutes from "./routes/prep_access.js";
 import filesRoutes from "./routes/files.js";
 import testseriesRoutes from "./routes/testseries.js";
 import plagiarismRoutes from "./routes/plagiarism.js";
-import researchRoutes from "./routes/research.js";
-import labwizardRoutes from "./routes/labwizard.js";
+ 
 
 app.use("/api/articles", articleRoutes);
 app.use("/api/banners", bannerRoutes);
@@ -176,8 +175,7 @@ app.use("/api/prep", prepRoutes);
 app.use("/api/files", filesRoutes);
 app.use("/api/testseries", testseriesRoutes);
 app.use("/api/plagiarism", plagiarismRoutes);
-app.use("/api/research", researchRoutes);
-app.use("/api/labwizard", labwizardRoutes);
+ 
 
 /* ---------- Health & 404 ---------- */
 app.get("/api/access/status", (_req, res) => res.json({ access: false }));
