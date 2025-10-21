@@ -233,9 +233,88 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
 });
 
 /* ================================================================== */
-/* PUBLIC: current exam/access status (USED BY OVERLAY)                */
+/* PUBLIC: ACCESS STATUS — GUARD (slug/name tolerant & hard gate)      */
 /* ================================================================== */
-// Hard rule here: overlay must be shown unless the user has ACTIVE access for this exam.
+// NEW, unique path so it never collides with any other route.
+// Use this in the client: /api/prep/access/status/guard
+router.get("/access/status/guard", async (req, res) => {
+  try {
+    const { examId: rawExamId, email } = req.query || {};
+    if (!rawExamId) return res.status(400).json({ success:false, error:"examId required" });
+
+    const normId = String(rawExamId).trim();
+    const normEmail = (email || "").trim().toLowerCase();
+
+    // Try by examId first
+    let exam = await PrepExam.findOne({ examId: normId }).lean();
+
+    // Fallbacks: match by exact name (case-insensitive) or a loose "slug" of the name
+    if (!exam) {
+      const esc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const alt = normId.replace(/[-_]+/g, " ").replace(/\s+/g, " ").trim();
+      exam = await PrepExam.findOne({
+        $or: [
+          { name: new RegExp(`^${esc(normId)}$`, "i") },
+          { name: new RegExp(`^${esc(alt)}$`, "i") },
+        ],
+      }).lean();
+    }
+
+    if (!exam) return res.status(404).json({ success:false, error:"Exam not found" });
+
+    // user access (optional)
+    let accessDoc = null;
+    if (normEmail) {
+      accessDoc = await PrepAccess.findOne({ examId: exam.examId, userEmail: normEmail }).lean();
+    }
+
+    const now = Date.now();
+    const access = {
+      status: accessDoc?.status || "none",
+      startAt: accessDoc?.startAt || null,
+      planDays: Number(accessDoc?.planDays || 0) || undefined,
+      todayDay: 1,
+      canRestart: false,
+    };
+
+    if (access.startAt) {
+      const day = Math.max(1, Math.floor((now - new Date(access.startAt).getTime()) / 86400000) + 1);
+      access.todayDay = day;
+    }
+    if (access.planDays && access.todayDay > access.planDays) {
+      access.canRestart = true;
+    }
+
+    // HARD GATE: overlay unless ACTIVE
+    const overlay = {
+      show: access.status !== "active",
+      mode: access.status === "active" && access.canRestart ? "restart" : "purchase",
+      payment: (exam.overlay?.payment || exam.payment || {}),
+    };
+
+    return res.json({
+      success: true,
+      exam: {
+        examId: exam.examId,
+        name: exam.name,
+        price: Number(exam.price || 0),
+        trialDays: Number(exam.trialDays || 0),
+        overlay: exam.overlay || {},
+        payment: exam.payment || {},
+      },
+      access,
+      overlay,
+    });
+  } catch (e) {
+    console.error("[prep_access] /access/status/guard failed:", e);
+    res.status(500).json({ success:false, error:e?.message || "server error" });
+  }
+});
+
+/* ================================================================== */
+/* PUBLIC: (legacy) /access/status — keep if other code uses it        */
+/* ================================================================== */
+// This is your previous version; okay to keep.
 router.get("/access/status", async (req, res) => {
   try {
     const { examId, email } = req.query || {};
@@ -243,20 +322,17 @@ router.get("/access/status", async (req, res) => {
 
     const normEmail = (email || "").trim().toLowerCase();
 
-    // exam meta
     const exam = await PrepExam.findOne({ examId }).lean();
     if (!exam) return res.status(404).json({ success:false, error:"Exam not found" });
 
-    // access (optional if no email)
     let accessDoc = null;
     if (normEmail) {
       accessDoc = await PrepAccess.findOne({ examId, userEmail: normEmail }).lean();
     }
 
-    // Build the access shape expected by client
     const now = Date.now();
     let access = {
-      status: "none",           // "none" | "trial" | "active" | "revoked"
+      status: "none",
       todayDay: 1,
       canRestart: false,
       startAt: null,
@@ -269,7 +345,7 @@ router.get("/access/status", async (req, res) => {
       access.planDays = Number(accessDoc.planDays || 0) || undefined;
 
       if (access.startAt) {
-        const day = Math.max(1, Math.floor((now - new Date(access.startAt).getTime()) / 86400000) + 1);
+        const day = Math.max(1, Math.floor((now - new Date(access.startAt).getTime()) / 1000 / 60 / 60 / 24) + 1);
         access.todayDay = day;
       }
       if (access.planDays && access.todayDay > access.planDays) {
@@ -277,7 +353,6 @@ router.get("/access/status", async (req, res) => {
       }
     }
 
-    // Force overlay for anyone not ACTIVE.
     const overlay = {
       show: access.status !== "active",
       mode: access.status === "active" && access.canRestart ? "restart" : "purchase",
