@@ -151,14 +151,16 @@ import videoRoutes from "./routes/videos.js";
 import submissionsRoutes from "./routes/submissions.js";
 import qrRoutes from "./routes/qr.js";
 import examRoutes from "./routes/exams.js";
-
 import prepRoutes from "./routes/prep.js";
 import prepAccessRoutes from "./routes/prep_access.js";
 import filesRoutes from "./routes/files.js";
 import testseriesRoutes from "./routes/testseries.js";
 import plagiarismRoutes from "./routes/plagiarism.js";
- 
 
+/* ---------- ✅ New Research Drafting Route ---------- */
+import researchDraftingRoutes from "./routes/researchDrafting.js";
+
+/* ---------- Use Routes ---------- */
 app.use("/api/articles", articleRoutes);
 app.use("/api/banners", bannerRoutes);
 app.use("/api/consultancy", consultancyRoutes);
@@ -175,7 +177,9 @@ app.use("/api/prep", prepRoutes);
 app.use("/api/files", filesRoutes);
 app.use("/api/testseries", testseriesRoutes);
 app.use("/api/plagiarism", plagiarismRoutes);
- 
+
+/* ---------- ✅ Added Research Drafting API ---------- */
+app.use("/api/research-drafting", researchDraftingRoutes);
 
 /* ---------- Health & 404 ---------- */
 app.get("/api/access/status", (_req, res) => res.json({ access: false }));
