@@ -198,7 +198,13 @@ router.delete("/exams/:examId", isAdmin, async (req, res) => {
 
 /* ------------------------------- Status ---------------------------------- */
 
-router.get("/access/status", async (req, res) => {
+/**
+ * IMPORTANT:
+ * This route used to be /access/status and clashed with the guard route in prep_access.js.
+ * We rename it to /access/status-raw so the overlay-enforcing route in prep_access.js
+ * (GET /api/prep/access/status) is the one the frontend uses.
+ */
+router.get("/access/status-raw", async (req, res) => {
   try {
     const { examId, email } = req.query || {};
     if (!examId) return res.status(400).json({ success:false, error:"examId required" });
