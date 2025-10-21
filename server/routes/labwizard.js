@@ -1,4 +1,3 @@
-// server/routes/labwizard.js
 import express from "express";
 import mongoose from "mongoose";
 import fetch from "node-fetch";
@@ -10,13 +9,13 @@ const router = express.Router();
 const LabWizardSchema = new mongoose.Schema(
   {
     userEmail: String,
-    module: String, // proposal / dissertation / etc.
-    data: Object,   // form or metadata
+    module: String,            // proposal / dissertation / etc.
+    data: Object,              // form or metadata
     step: Number,
     percent: Number,
-    labOption: String,
-    status: { type: String, default: "in_progress" },
-    journeyData: Object, // notebook-style auto-saved content
+    labOption: String,         // "self" | "pro"
+    status: { type: String, default: "in_progress" }, // auto-updates to "ready"
+    journeyData: Object,       // notebook-style auto-saved content
   },
   { timestamps: true }
 );
@@ -31,9 +30,15 @@ router.post("/submit", async (req, res) => {
     if (!email || !module)
       return res.status(400).json({ error: "Missing required fields" });
 
+    // ✅ auto-promote “Create in Your Lab” to ready
+    let status = "in_progress";
+    if (labOption && labOption.toLowerCase() === "self") status = "ready";
+
     const doc = await LabWizard.findOneAndUpdate(
       { userEmail: email, module },
-      { $set: { data, step, percent, labOption, status: "in_progress" } },
+      {
+        $set: { data, step, percent, labOption, status },
+      },
       { upsert: true, new: true }
     );
 
