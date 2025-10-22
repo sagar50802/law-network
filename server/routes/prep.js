@@ -138,7 +138,7 @@ async function buildAccessStatusPayload(examId, email) {
   const { openAt, planTimeShow } = computeOverlayAt(exam, access);
   const pay = exam?.overlay?.payment || {};
   const overlay = {
-    show:false, mode:null, // final decision is in prep_access.js
+    show:false, mode:null,
     openAt: openAt ? openAt.toISOString() : null,
     tz: exam?.overlay?.tz || "Asia/Kolkata",
     payment: {
@@ -198,12 +198,6 @@ router.delete("/exams/:examId", isAdmin, async (req, res) => {
 
 /* ------------------------------- Status ---------------------------------- */
 
-/**
- * IMPORTANT:
- * This route used to be /access/status and clashed with the guard route in prep_access.js.
- * We rename it to /access/status-raw so the overlay-enforcing route in prep_access.js
- * (GET /api/prep/access/status) is the one the frontend uses.
- */
 router.get("/access/status-raw", async (req, res) => {
   try {
     const { examId, email } = req.query || {};
@@ -228,11 +222,27 @@ router.get("/user/summary", async (req, res) => {
   }
 });
 
+/* ✅ FIXED: enforce overlay/approval before sending modules */
 router.get("/user/today", async (req, res) => {
   try {
     const { examId, email } = req.query || {};
     if (!examId) return res.status(400).json({ success:false, error:"examId required" });
+
     const status = await buildAccessStatusPayload(examId, email);
+    const accessStatus = status?.access?.status || "none";
+
+    // 🚫 Block unapproved or unauthorized users
+    if (accessStatus !== "active" && accessStatus !== "trial") {
+      noStore(res);
+      return res.json({
+        success: false,
+        locked: true,
+        overlay: status.overlay,
+        message: "Access locked — please subscribe or get admin approval",
+      });
+    }
+
+    // ✅ For approved or trial users, show today's content
     const day = status?.access?.todayDay || 1;
     const items = await PrepModule.find({ examId, dayIndex: day }).sort({ releaseAt:1, slotMin:1 }).lean();
     noStore(res);
