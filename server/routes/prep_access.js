@@ -235,7 +235,6 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
 /* ================================================================== */
 /* PUBLIC: ACCESS STATUS — GUARD (slug/name tolerant & hard gate)      */
 /* ================================================================== */
-// NEW, unique path so it never collides with any other route.
 // Use this in the client: /api/prep/access/status/guard
 router.get("/access/status/guard", async (req, res) => {
   try {
@@ -395,6 +394,7 @@ const acceptProofUpload = upload.fields([
 ]);
 
 // Create an access request (accepts multipart or JSON)
+// Includes a duplicate-submission guard if the user already has ACTIVE access
 router.post(
   "/access/request",
   (req, res, next) => {
@@ -422,10 +422,20 @@ router.post(
         return res.status(400).json({ success:false, error:"examId & email required" });
       }
 
+      // 🔒 Prevent duplicate submissions if already ACTIVE
+      const already = await PrepAccess.findOne({ examId, userEmail: email }).lean();
+      if (already && already.status === "active") {
+        return res.json({
+          success: false,
+          error: "You already have active access. No need to submit again.",
+          code: "ALREADY_ACTIVE",
+        });
+      }
+
       // intent: explicit or infer from current access
       let intent = String(b.intent || "").trim();
       if (!intent) {
-        const existing = await PrepAccess.findOne({ examId, userEmail: email }).lean();
+        const existing = already || (await PrepAccess.findOne({ examId, userEmail: email }).lean());
         intent = existing?.status === "active" ? "restart" : "purchase";
       }
 
@@ -543,6 +553,8 @@ router.get("/access/requests", isAdmin, async (req, res) => {
   }
 });
 
+/* ------------------------------ ENHANCED APPROVE ------------------------- */
+
 router.post("/access/admin/approve", isAdmin, async (req, res) => {
   try {
     const { requestId, approve = true } = req.body || {};
@@ -555,14 +567,29 @@ router.post("/access/admin/approve", isAdmin, async (req, res) => {
       return res.json({ success:true, request: ar });
     }
 
-    await grantActiveAccess({ examId: ar.examId, email: ar.userEmail });
+    // ✅ Approve and grant active access
+    const activeDoc = await grantActiveAccess({ examId: ar.examId, email: ar.userEmail });
+
     ar.status = "approved";
     ar.approvedAt = new Date();
     ar.approvedBy = "admin";
     await ar.save();
 
-    res.json({ success:true, request: ar });
+    // ✅ Add unlockHint and timestamp for client countdown
+    const unlockHint = {
+      message: "approved, unlocking in 15s",
+      unlockAt: new Date(Date.now() + 15000).toISOString(), // 15 sec later
+      access: {
+        examId: ar.examId,
+        email: ar.userEmail,
+        startAt: activeDoc?.startAt,
+        planDays: activeDoc?.planDays,
+      },
+    };
+
+    return res.json({ success:true, request: ar, unlockHint });
   } catch (e) {
+    console.error("[prep_access] /access/admin/approve error:", e);
     res.status(500).json({ success:false, error:e?.message || "server error" });
   }
 });
