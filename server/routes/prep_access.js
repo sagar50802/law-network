@@ -11,18 +11,17 @@ import PrepAccess from "../models/PrepAccess.js";
 import PrepAccessRequest from "../models/PrepAccessRequest.js";
 
 /* ------------------------------------------------------------------ */
-/* Uploads                                                             */
+/* Uploads                                                            */
 /* ------------------------------------------------------------------ */
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 40 * 1024 * 1024 }, // 40 MB
 });
 
-// Used when we accept JSON instead of multipart
 const jsonBody = express.json();
 
 /* ------------------------------------------------------------------ */
-/* Small helpers                                                       */
+/* Helpers                                                            */
 /* ------------------------------------------------------------------ */
 function truthy(v) {
   return ["true", "1", "on", "yes"].includes(String(v).trim().toLowerCase());
@@ -41,7 +40,7 @@ function sanitizeUpiId(v) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Optional R2, fallback GridFS                                        */
+/* Optional R2 / GridFS                                               */
 /* ------------------------------------------------------------------ */
 let R2 = null;
 try { R2 = await import("../utils/r2.js"); } catch { R2 = null; }
@@ -67,7 +66,7 @@ async function storeBuffer({ buffer, filename, mime, bucket = "prep" }) {
     }
   }
 
-  // Fallback to GridFS
+  // Fallback GridFS
   const g = grid(bucket);
   if (!g) throw Object.assign(new Error("DB not connected"), { status: 503 });
   const id = await new Promise((resolve, reject) => {
@@ -80,7 +79,7 @@ async function storeBuffer({ buffer, filename, mime, bucket = "prep" }) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Plan helpers                                                        */
+/* Utility functions                                                  */
 /* ------------------------------------------------------------------ */
 async function planDaysForExam(examId) {
   const days = await PrepModule.find({ examId }).distinct("dayIndex");
@@ -100,27 +99,26 @@ async function grantActiveAccess({ examId, email }) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Router                                                              */
+/* Router setup                                                      */
 /* ------------------------------------------------------------------ */
 const router = express.Router();
 
 /* ================================================================== */
-/* ADMIN: Overlay UI uploads (banner/qr)                               */
+/* ADMIN: Overlay UI uploads                                          */
 /* ================================================================== */
-
 router.get("/overlay/:examId", isAdmin, async (req, res) => {
   const exam = await PrepExam.findOne(
     { examId: req.params.examId },
-    { overlayUI:1, price:1, trialDays:1, name:1, examId:1 }
+    { overlayUI: 1, price: 1, trialDays: 1, name: 1, examId: 1 }
   ).lean();
-  if (!exam) return res.status(404).json({ success:false, message:"Exam not found" });
-  res.json({ success:true, config: exam.overlayUI || {}, exam });
+  if (!exam) return res.status(404).json({ success: false, message: "Exam not found" });
+  res.json({ success: true, config: exam.overlayUI || {}, exam });
 });
 
 router.post(
   "/overlay/:examId",
   isAdmin,
-  upload.fields([{ name:"banner" }, { name:"whatsappQR" }]),
+  upload.fields([{ name: "banner" }, { name: "whatsappQR" }]),
   async (req, res) => {
     const examId = req.params.examId;
     const {
@@ -134,14 +132,14 @@ router.post(
     if (req.files?.banner?.[0]) {
       const f = req.files.banner[0];
       const s = await storeBuffer({
-        buffer:f.buffer, filename:f.originalname, mime:f.mimetype, bucket:"prep-overlay"
+        buffer: f.buffer, filename: f.originalname, mime: f.mimetype, bucket: "prep-overlay"
       });
       bannerUrl = s.url;
     }
     if (req.files?.whatsappQR?.[0]) {
       const f = req.files.whatsappQR[0];
       const s = await storeBuffer({
-        buffer:f.buffer, filename:f.originalname, mime:f.mimetype, bucket:"prep-overlay"
+        buffer: f.buffer, filename: f.originalname, mime: f.mimetype, bucket: "prep-overlay"
       });
       whatsappQRUrl = s.url;
     }
@@ -150,7 +148,7 @@ router.post(
       upiId: String(upiId).trim(),
       upiName: String(upiName || "").trim(),
       priceINR: Number(priceINR || 0),
-      whatsappLink: whatsappId ? `https://wa.me/${String(whatsappId).replace(/\D/g,"")}` : "",
+      whatsappLink: whatsappId ? `https://wa.me/${String(whatsappId).replace(/\D/g, "")}` : "",
       ...(bannerUrl ? { bannerUrl } : {}),
       ...(whatsappQRUrl ? { whatsappQRUrl } : {}),
       ...(forceOverlayAfterDays !== "" ? { forceOverlayAfterDays: Number(forceOverlayAfterDays) } : {}),
@@ -163,373 +161,85 @@ router.post(
       ...(priceINR ? { price: Number(priceINR) } : {}),
     };
 
-    const doc = await PrepExam.findOneAndUpdate({ examId }, { $set: update }, { new:true }).lean();
-    res.json({ success:true, exam:doc });
+    const doc = await PrepExam.findOneAndUpdate({ examId }, { $set: update }, { new: true }).lean();
+    res.json({ success: true, exam: doc });
   }
 );
 
 /* ================================================================== */
-/* ADMIN: Read/Write exam overlay/payment config                       */
+/* PUBLIC: ACCESS STATUS — FIXED VERSION                              */
 /* ================================================================== */
-
-router.get("/exams/:examId/meta", isAdmin, async (req, res) => {
-  const exam = await PrepExam.findOne({ examId: req.params.examId }).lean();
-  if (!exam) return res.status(404).json({ success:false, message:"Exam not found" });
-  const { price=0, trialDays=3, overlay={}, payment={}, autoGrantRestart=false } = exam;
-  res.json({
-    success:true,
-    price, trialDays, overlay, payment,
-    autoGrantRestart: !!autoGrantRestart,
-    name: exam.name, examId: exam.examId
-  });
-});
-
-router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
-  const {
-    price, trialDays,
-    mode, offsetDays, fixedAt, showOnDay, showAtLocal, tz,
-    upiId, upiName, whatsappNumber, whatsappText,
-    autoGrantRestart,
-  } = req.body || {};
-  const p = (req.body && req.body.payment) || {};
-
-  const effUpiId = (upiId ?? p.upiId) ? sanitizeUpiId(upiId ?? p.upiId) : "";
-  const effUpiName = (upiName ?? p.upiName) ? sanitizeText(upiName ?? p.upiName) : "";
-  const effWhatsappNumber = (whatsappNumber ?? p.whatsappNumber ?? p.waPhone)
-    ? sanitizePhone(whatsappNumber ?? p.whatsappNumber ?? p.waPhone) : "";
-  const effWhatsappText = (whatsappText ?? p.whatsappText ?? p.waText)
-    ? sanitizeText(whatsappText ?? p.whatsappText ?? p.waText) : "";
-
-  const hasPay = !!(effUpiId || effUpiName || effWhatsappNumber || effWhatsappText);
-
-  const update = {
-    ...(price != null ? { price: Number(price) } : {}),
-    ...(trialDays != null ? { trialDays: Number(trialDays) } : {}),
-    ...(autoGrantRestart != null ? { autoGrantRestart: !!autoGrantRestart } : {}),
-    overlay: {
-      ...(mode ? { mode } : {}),
-      ...(offsetDays != null ? { offsetDays: Number(offsetDays) } : {}),
-      ...(fixedAt ? { fixedAt: new Date(fixedAt) } : { fixedAt: null }),
-      ...(showOnDay != null ? { showOnDay: Number(showOnDay) } : {}),
-      ...(showAtLocal ? { showAtLocal: String(showAtLocal) } : {}),
-      ...(tz ? { tz: String(tz) } : {}),
-      ...(hasPay ? {
-        payment: {
-          ...(effUpiId ? { upiId: effUpiId } : {}),
-          ...(effUpiName ? { upiName: effUpiName } : {}),
-          ...(effWhatsappNumber ? { whatsappNumber: effWhatsappNumber } : {}),
-          ...(effWhatsappText ? { whatsappText: effWhatsappText } : {}),
-        }
-      } : {}),
-    },
-  };
-
-  if (update.overlay?.mode === "planDayTime" && !("tz" in update.overlay)) {
-    update.overlay.tz = "Asia/Kolkata";
-  }
-
-  const doc = await PrepExam.findOneAndUpdate({ examId: req.params.examId }, { $set: update }, { new:true }).lean();
-  res.json({ success:true, exam:doc });
-});
-
-/* ================================================================== */
-/* PUBLIC: ACCESS STATUS — GUARD (slug/name tolerant & hard gate)      */
-/* ================================================================== */
-// Use this in the client: /api/prep/access/status/guard
-router.get("/access/status/guard", async (req, res) => {
-  try {
-    const { examId: rawExamId, email } = req.query || {};
-    if (!rawExamId) return res.status(400).json({ success:false, error:"examId required" });
-
-    const normId = String(rawExamId).trim();
-    const normEmail = (email || "").trim().toLowerCase();
-
-    // Try by examId first
-    let exam = await PrepExam.findOne({ examId: normId }).lean();
-
-    // Fallbacks: match by exact name (case-insensitive) or a loose "slug" of the name
-    if (!exam) {
-      const esc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const alt = normId.replace(/[-_]+/g, " ").replace(/\s+/g, " ").trim();
-      exam = await PrepExam.findOne({
-        $or: [
-          { name: new RegExp(`^${esc(normId)}$`, "i") },
-          { name: new RegExp(`^${esc(alt)}$`, "i") },
-        ],
-      }).lean();
-    }
-
-    if (!exam) return res.status(404).json({ success:false, error:"Exam not found" });
-
-    // user access (optional)
-    let accessDoc = null;
-    if (normEmail) {
-      accessDoc = await PrepAccess.findOne({ examId: exam.examId, userEmail: normEmail }).lean();
-    }
-
-    const now = Date.now();
-    const access = {
-      status: accessDoc?.status || "none",
-      startAt: accessDoc?.startAt || null,
-      planDays: Number(accessDoc?.planDays || 0) || undefined,
-      todayDay: 1,
-      canRestart: false,
-    };
-
-    if (access.startAt) {
-      const day = Math.max(1, Math.floor((now - new Date(access.startAt).getTime()) / 86400000) + 1);
-      access.todayDay = day;
-    }
-    if (access.planDays && access.todayDay > access.planDays) {
-      access.canRestart = true;
-    }
-
-    // HARD GATE: overlay unless ACTIVE
-    const overlay = {
-      show: access.status !== "active",
-      mode: access.status === "active" && access.canRestart ? "restart" : "purchase",
-      payment: (exam.overlay?.payment || exam.payment || {}),
-    };
-
-    return res.json({
-      success: true,
-      exam: {
-        examId: exam.examId,
-        name: exam.name,
-        price: Number(exam.price || 0),
-        trialDays: Number(exam.trialDays || 0),
-        overlay: exam.overlay || {},
-        payment: exam.payment || {},
-      },
-      access,
-      overlay,
-    });
-  } catch (e) {
-    console.error("[prep_access] /access/status/guard failed:", e);
-    res.status(500).json({ success:false, error:e?.message || "server error" });
-  }
-});
-
-/* ================================================================== */
-/* PUBLIC: (legacy) /access/status — keep if other code uses it        */
-/* ================================================================== */
-// This is your previous version; okay to keep.
+// 🩵 Enforce overlay for all users who are not explicitly active
 router.get("/access/status", async (req, res) => {
   try {
-    const { examId, email } = req.query || {};
-    if (!examId) return res.status(400).json({ success:false, error:"examId required" });
+    const { examId, email } = req.query;
+    if (!examId || !email) return res.json({ overlay: { show: true, mode: "purchase" } });
 
-    const normEmail = (email || "").trim().toLowerCase();
+    const exam = await PrepExam.findOne({ examId });
+    const access = await PrepAccess.findOne({ examId, userEmail: email });
 
-    const exam = await PrepExam.findOne({ examId }).lean();
-    if (!exam) return res.status(404).json({ success:false, error:"Exam not found" });
-
-    let accessDoc = null;
-    if (normEmail) {
-      accessDoc = await PrepAccess.findOne({ examId, userEmail: normEmail }).lean();
+    // 🧩 no access found OR expired OR revoked → overlay must show
+    if (!access || access.status !== "active") {
+      return res.json({
+        exam,
+        access: { status: "locked" },
+        overlay: { show: true, mode: "purchase" },
+      });
     }
 
-    const now = Date.now();
-    let access = {
-      status: "none",
-      todayDay: 1,
-      canRestart: false,
-      startAt: null,
-      planDays: Number(exam.planDays || 0) || undefined,
-    };
-
-    if (accessDoc) {
-      access.status  = accessDoc.status || "none";
-      access.startAt = accessDoc.startAt || null;
-      access.planDays = Number(accessDoc.planDays || 0) || undefined;
-
-      if (access.startAt) {
-        const day = Math.max(1, Math.floor((now - new Date(access.startAt).getTime()) / 1000 / 60 / 60 / 24) + 1);
-        access.todayDay = day;
-      }
-      if (access.planDays && access.todayDay > access.planDays) {
-        access.canRestart = true;
-      }
+    // 🧩 if still active (and not expired), allow
+    const expired = access.expiresAt && new Date(access.expiresAt) < new Date();
+    if (expired) {
+      access.status = "expired";
+      await access.save();
+      return res.json({
+        exam,
+        access: { status: "locked" },
+        overlay: { show: true, mode: "purchase" },
+      });
     }
 
-    const overlay = {
-      show: access.status !== "active",
-      mode: access.status === "active" && access.canRestart ? "restart" : "purchase",
-      payment: (exam.overlay?.payment || exam.payment || {}),
-    };
-
-    return res.json({
-      success: true,
-      exam: {
-        examId: exam.examId,
-        name: exam.name,
-        price: Number(exam.price || 0),
-        trialDays: Number(exam.trialDays || 0),
-        overlay: exam.overlay || {},
-        payment: exam.payment || {},
-      },
-      access,
-      overlay,
-    });
+    // ✅ user is active → show content
+    return res.json({ exam, access, overlay: { show: false } });
   } catch (e) {
-    console.error("[prep_access] /access/status failed:", e);
-    res.status(500).json({ success:false, error:e?.message || "server error" });
+    console.error("status error:", e);
+    return res.json({ overlay: { show: true, mode: "purchase" } });
   }
 });
 
 /* ================================================================== */
-/* PUBLIC: create request + poll                                       */
+/* PUBLIC: CREATE REQUEST — FIXED VERSION                             */
 /* ================================================================== */
-
-function firstFile(req, ...names) {
-  for (const n of names) { const f = req.files?.[n]?.[0]; if (f) return f; }
-  if (req.file) return req.file;
-  return null;
-}
-const acceptProofUpload = upload.fields([
-  { name:"screenshot", maxCount:1 },
-  { name:"file", maxCount:1 },
-  { name:"image", maxCount:1 },
-  { name:"proof", maxCount:1 },
-]);
-
-// Create an access request (accepts multipart or JSON)
-// Includes a duplicate-submission guard if the user already has ACTIVE access
-router.post(
-  "/access/request",
-  (req, res, next) => {
-    const ct = (req.headers["content-type"] || "").toLowerCase();
-    if (ct.includes("multipart/form-data")) return acceptProofUpload(req, res, next);
-    return jsonBody(req, res, next);
-  },
-  async (req, res) => {
-    try {
-      if (!mongoose.connection?.db) {
-        return res.status(503).json({ success:false, error:"database not connected" });
-      }
-
-      const b = req.body || {};
-      const examId = String(b.examId || "").trim();
-      const email  = String(b.email || b.userEmail || "").trim().toLowerCase();
-      const note   = sanitizeText(b.note);
-      const name   = sanitizeText(b.name);
-      const phone  = sanitizePhone(b.phone);
-      const planKey   = sanitizeText(b.planKey);
-      const planLabel = sanitizeText(b.planLabel);
-      const planPrice = b.planPrice != null ? Number(b.planPrice) : undefined;
-
-      if (!examId || !email) {
-        return res.status(400).json({ success:false, error:"examId & email required" });
-      }
-
-      // 🔒 Prevent duplicate submissions if already ACTIVE
-      const already = await PrepAccess.findOne({ examId, userEmail: email }).lean();
-      if (already && already.status === "active") {
-        return res.json({
-          success: false,
-          error: "You already have active access. No need to submit again.",
-          code: "ALREADY_ACTIVE",
-        });
-      }
-
-      // intent: explicit or infer from current access
-      let intent = String(b.intent || "").trim();
-      if (!intent) {
-        const existing = already || (await PrepAccess.findOne({ examId, userEmail: email }).lean());
-        intent = existing?.status === "active" ? "restart" : "purchase";
-      }
-
-      // optional proof image
-      let screenshotUrl = "";
-      const f = firstFile(req, "screenshot","file","image","proof");
-      if (f?.buffer?.length) {
-        const saved = await storeBuffer({
-          buffer: f.buffer,
-          filename: f.originalname || "payment.jpg",
-          mime: f.mimetype || "application/octet-stream",
-          bucket: "prep-proof",
-        });
-        screenshotUrl = saved.url;
-      }
-
-      const exam = await PrepExam.findOne({ examId }).lean();
-      const priceAt = Number(exam?.price || planPrice || 0);
-      const autoGrant = !!exam?.autoGrantRestart;
-
-      const reqDoc = await PrepAccessRequest.create({
-        examId,
-        userEmail: email,
-        intent,
-        screenshotUrl,
-        note,
-        status: "pending",
-        priceAt,
-        meta: {
-          name,
-          phone,
-          planKey,
-          planLabel,
-          planPrice: planPrice || undefined,
-        },
-      });
-
-      // minimal console marker for debugging
-      await logCreated(reqDoc);
-
-      if (!reqDoc?._id) {
-        return res.status(500).json({ success:false, error:"request not saved" });
-      }
-
-      if (autoGrant) {
-        await grantActiveAccess({ examId, email });
-        await PrepAccessRequest.updateOne(
-          { _id: reqDoc._id },
-          { $set: { status:"approved", approvedAt:new Date(), approvedBy:"auto" } }
-        );
-        return res.json({
-          success:true,
-          approved:true,
-          requestId:String(reqDoc._id),
-          examId, email, intent,
-        });
-      }
-
-      res.json({
-        success:true,
-        approved:false,
-        requestId:String(reqDoc._id),
-        examId, email, intent,
-      });
-    } catch (e) {
-      console.error("[prep_access] /access/request failed:", e);
-      res.status(500).json({ success:false, error:e?.message || "server error" });
-    }
-  }
-);
-
-// Poll status of latest request (for “waiting...”)
-router.get("/access/request/status", async (req, res) => {
+// 🧾 Viewer creates access request
+router.post("/access/request", async (req, res) => {
   try {
-    const { examId, email } = req.query || {};
-    if (!examId || !email) return res.status(400).json({ success:false, error:"examId & email required" });
+    const { examId, email, userEmail, intent } = req.body || {};
+    if (!examId || !email)
+      return res.json({ success: false, message: "Missing examId/email" });
 
-    const item = await PrepAccessRequest
-      .findOne({ examId, userEmail: email.toLowerCase() })
-      .sort({ createdAt: -1 })
-      .lean();
+    // check if already active
+    const existing = await PrepAccess.findOne({ examId, userEmail: email, status: "active" });
+    if (existing)
+      return res.json({ success: false, code: "ALREADY_ACTIVE", message: "Access already granted" });
 
-    if (!item) return res.json({ success:true, status:"none" });
-    res.json({ success:true, status: item.status, requestId: String(item._id) });
+    const reqDoc = await PrepAccessRequest.create({
+      examId,
+      userEmail: email,
+      status: "pending",
+      intent: intent || "purchase",
+      createdAt: new Date(),
+    });
+
+    res.json({ success: true, request: reqDoc });
   } catch (e) {
-    res.status(500).json({ success:false, error:e?.message || "server error" });
+    console.error("request error:", e);
+    res.json({ success: false, message: e.message });
   }
 });
 
 /* ================================================================== */
-/* ADMIN: requests list/approve/revoke                                  */
+/* ADMIN: requests list/approve/revoke                                */
 /* ================================================================== */
-
-// status=all → return all; debug=1 → include counts meta
 router.get("/access/requests", isAdmin, async (req, res) => {
   try {
     const { examId, status = "pending", debug } = req.query || {};
@@ -537,37 +247,35 @@ router.get("/access/requests", isAdmin, async (req, res) => {
     if (examId) q.examId = String(examId);
     if (status && status !== "all") q.status = status;
 
-    const items = await PrepAccessRequest.find(q).sort({ createdAt:-1 }).limit(200).lean();
+    const items = await PrepAccessRequest.find(q).sort({ createdAt: -1 }).limit(200).lean();
 
     if (debug) {
       const total = await PrepAccessRequest.countDocuments({});
-      const pending = await PrepAccessRequest.countDocuments({ status:"pending" });
-      const approved = await PrepAccessRequest.countDocuments({ status:"approved" });
-      const rejected = await PrepAccessRequest.countDocuments({ status:"rejected" });
-      return res.json({ success:true, items, debug: { total, pending, approved, rejected, query:q } });
+      const pending = await PrepAccessRequest.countDocuments({ status: "pending" });
+      const approved = await PrepAccessRequest.countDocuments({ status: "approved" });
+      const rejected = await PrepAccessRequest.countDocuments({ status: "rejected" });
+      return res.json({ success: true, items, debug: { total, pending, approved, rejected, query: q } });
     }
 
-    res.json({ success:true, items });
+    res.json({ success: true, items });
   } catch (e) {
-    res.status(500).json({ success:false, error:e?.message || "server error" });
+    res.status(500).json({ success: false, error: e?.message || "server error" });
   }
 });
 
-/* ------------------------------ ENHANCED APPROVE ------------------------- */
-
+/* ------------------------------ APPROVE ------------------------------ */
 router.post("/access/admin/approve", isAdmin, async (req, res) => {
   try {
     const { requestId, approve = true } = req.body || {};
     const ar = await PrepAccessRequest.findById(requestId);
-    if (!ar) return res.status(404).json({ success:false, error:"request not found" });
+    if (!ar) return res.status(404).json({ success: false, error: "request not found" });
 
     if (!approve) {
       ar.status = "rejected";
       await ar.save();
-      return res.json({ success:true, request: ar });
+      return res.json({ success: true, request: ar });
     }
 
-    // ✅ Approve and grant active access
     const activeDoc = await grantActiveAccess({ examId: ar.examId, email: ar.userEmail });
 
     ar.status = "approved";
@@ -575,10 +283,9 @@ router.post("/access/admin/approve", isAdmin, async (req, res) => {
     ar.approvedBy = "admin";
     await ar.save();
 
-    // ✅ Add unlockHint and timestamp for client countdown
     const unlockHint = {
       message: "approved, unlocking in 15s",
-      unlockAt: new Date(Date.now() + 15000).toISOString(), // 15 sec later
+      unlockAt: new Date(Date.now() + 15000).toISOString(),
       access: {
         examId: ar.examId,
         email: ar.userEmail,
@@ -587,140 +294,25 @@ router.post("/access/admin/approve", isAdmin, async (req, res) => {
       },
     };
 
-    return res.json({ success:true, request: ar, unlockHint });
+    return res.json({ success: true, request: ar, unlockHint });
   } catch (e) {
     console.error("[prep_access] /access/admin/approve error:", e);
-    res.status(500).json({ success:false, error:e?.message || "server error" });
+    res.status(500).json({ success: false, error: e?.message || "server error" });
   }
 });
 
 router.post("/access/admin/revoke", isAdmin, async (req, res) => {
   try {
     const { examId, email } = req.body || {};
-    if (!examId || !email) return res.status(400).json({ success:false, error:"examId & email required" });
-    const r = await PrepAccess.updateOne({ examId, userEmail: email.toLowerCase() }, { $set:{ status:"revoked" } });
-    res.json({ success:true, updated: r.modifiedCount });
+    if (!examId || !email) return res.status(400).json({ success: false, error: "examId & email required" });
+    const r = await PrepAccess.updateOne({ examId, userEmail: email.toLowerCase() }, { $set: { status: "revoked" } });
+    res.json({ success: true, updated: r.modifiedCount });
   } catch (e) {
-    res.status(500).json({ success:false, error:e?.message || "server error" });
-  }
-});
-
-// NEW: Delete a request (admin)
-router.post("/access/admin/delete", isAdmin, async (req, res) => {
-  try {
-    const { requestId } = req.body || {};
-    if (!requestId) return res.status(400).json({ success:false, error:"requestId required" });
-    const r = await PrepAccessRequest.deleteOne({ _id: requestId });
-    res.json({ success:true, deleted: r.deletedCount || 0 });
-  } catch (e) {
-    res.status(500).json({ success:false, error:e?.message || "server error" });
+    res.status(500).json({ success: false, error: e?.message || "server error" });
   }
 });
 
 /* ================================================================== */
-/* QUICK ADMIN (URL toggle with key)                                    */
+/* EXPORT                                                             */
 /* ================================================================== */
-
-function isAdminLoose(req, res, next) {
-  const key = req.get("X-Owner-Key") || req.query._k || (req.body && req.body._k);
-  const ok = key && key === (process.env.ADMIN_KEY || process.env.VITE_OWNER_KEY || "");
-  if (!ok) return res.status(401).json({ success:false, error:"Unauthorized" });
-  next();
-}
-
-router.get("/exams/:examId/overlay-quick-set", isAdminLoose, async (req, res) => {
-  try {
-    const examId = req.params.examId;
-    const {
-      price, trialDays, mode, offsetDays, fixedAt, showOnDay, showAtLocal, tz,
-      upi: upiId, upn: upiName, wa: whatsappNumber, wat: whatsappText,
-      autoGrantRestart,
-    } = req.query || {};
-
-    const overlay = {};
-    if (mode) overlay.mode = String(mode);
-    if (offsetDays != null) overlay.offsetDays = Number(offsetDays);
-    if (fixedAt) overlay.fixedAt = new Date(fixedAt);
-    if (showOnDay != null) overlay.showOnDay = Number(showOnDay);
-    if (showAtLocal) overlay.showAtLocal = String(showAtLocal);
-    if (tz) overlay.tz = String(tz);
-
-    const payment = {};
-    if (upiId) payment.upiId = String(upiId).trim();
-    if (upiName) payment.upiName = String(upiName).trim();
-    if (whatsappNumber) payment.whatsappNumber = String(whatsappNumber).trim();
-    if (whatsappText) payment.whatsappText = String(whatsappText).trim();
-    if (Object.keys(payment).length) overlay.payment = payment;
-
-    const update = {
-      ...(price != null ? { price: Number(price) } : {}),
-      ...(trialDays != null ? { trialDays: Number(trialDays) } : {}),
-      ...(autoGrantRestart != null ? { autoGrantRestart: truthy(autoGrantRestart) } : {}),
-      ...(Object.keys(overlay).length ? { overlay } : {}),
-    };
-
-    if (update.overlay?.mode === "planDayTime" && !("tz" in update.overlay)) {
-      update.overlay.tz = "Asia/Kolkata";
-    }
-
-    const doc = await PrepExam.findOneAndUpdate({ examId }, { $set: update }, { new:true }).lean();
-    res.json({ success:true, exam:doc, applied:update });
-  } catch (e) {
-    res.status(500).json({ success:false, error:e?.message || "server error" });
-  }
-});
-
-/* ================================================================== */
-/* DEBUG endpoints (safe to keep while you diagnose)                   */
-/* ================================================================== */
-
-// 1) show counts + latest 5, no auth (do not expose publicly forever)
-router.get("/access/requests-debug", async (_req, res) => {
-  try {
-    const total    = await PrepAccessRequest.countDocuments({});
-    const pending  = await PrepAccessRequest.countDocuments({ status: "pending" });
-    const approved = await PrepAccessRequest.countDocuments({ status: "approved" });
-    const rejected = await PrepAccessRequest.countDocuments({ status: "rejected" });
-
-    const latest = await PrepAccessRequest
-      .find({})
-      .sort({ createdAt: -1 })
-      .limit(5)
-      .select({ examId:1, userEmail:1, status:1, intent:1, priceAt:1, createdAt:1 })
-      .lean();
-
-    res.json({ success:true, counts: { total, pending, approved, rejected }, latest });
-  } catch (e) {
-    res.status(500).json({ success:false, error:e?.message || "server error" });
-  }
-});
-
-// 2) dump last N for one exam/email (handy to verify insert)
-router.get("/access/requests-debug/by", async (req, res) => {
-  try {
-    const { examId, email } = req.query || {};
-    const q = {};
-    if (examId) q.examId = String(examId);
-    if (email)  q.userEmail = String(email).toLowerCase();
-    const items = await PrepAccessRequest.find(q).sort({ createdAt:-1 }).limit(20).lean();
-    res.json({ success:true, items });
-  } catch (e) {
-    res.status(500).json({ success:false, error:e?.message || "server error" });
-  }
-});
-
-// 3) log whenever a request is created (minimal)
-async function logCreated(ar) {
-  try {
-    console.log("[prep_access] created request", {
-      id: String(ar?._id),
-      examId: ar?.examId,
-      userEmail: ar?.userEmail,
-      status: ar?.status,
-      intent: ar?.intent,
-      at: ar?.createdAt,
-    });
-  } catch {}
-}
-
 export default router;
