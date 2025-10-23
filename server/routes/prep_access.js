@@ -12,7 +12,7 @@ import PrepAccess from "../models/PrepAccess.js";
 import PrepAccessRequest from "../models/PrepAccessRequest.js";
 
 /* ------------------------------------------------------------------ */
-/* Uploads                                                             */
+/* Uploads                                                            */
 /* ------------------------------------------------------------------ */
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -23,7 +23,7 @@ const upload = multer({
 const jsonBody = express.json();
 
 /* ------------------------------------------------------------------ */
-/* Small helpers                                                       */
+/* Small helpers                                                      */
 /* ------------------------------------------------------------------ */
 function truthy(v) {
   return ["true", "1", "on", "yes"].includes(String(v).trim().toLowerCase());
@@ -42,10 +42,34 @@ function sanitizeUpiId(v) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Optional R2, fallback GridFS                                        */
+/* Explicit CORS-safe JSON helpers (no behavior change)               */
+/* ------------------------------------------------------------------ */
+function setCommonHeaders(res) {
+  // These headers are harmless when you already have a global CORS middleware.
+  // Kept minimal to avoid behavior changes.
+  res.set("Content-Type", "application/json; charset=utf-8");
+  res.set("X-Content-Type-Options", "nosniff");
+  // NOTE: Access-Control-Allow-Origin typically belongs in app-level CORS.
+  // We do NOT force it here to avoid conflicting with your existing CORS setup.
+}
+function ok(res, payload) {
+  setCommonHeaders(res);
+  return res.json(payload);
+}
+function err(res, status, payload) {
+  setCommonHeaders(res);
+  return res.status(status).json(payload);
+}
+
+/* ------------------------------------------------------------------ */
+/* Optional R2, fallback GridFS                                       */
 /* ------------------------------------------------------------------ */
 let R2 = null;
-try { R2 = await import("../utils/r2.js"); } catch { R2 = null; }
+try {
+  R2 = await import("../utils/r2.js");
+} catch {
+  R2 = null;
+}
 
 function grid(bucket) {
   const db = mongoose.connection?.db;
@@ -81,7 +105,7 @@ async function storeBuffer({ buffer, filename, mime, bucket = "prep" }) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Plan helpers                                                        */
+/* Plan helpers                                                       */
 /* ------------------------------------------------------------------ */
 async function planDaysForExam(examId) {
   const days = await PrepModule.find({ examId }).distinct("dayIndex");
@@ -101,32 +125,37 @@ async function grantActiveAccess({ examId, email }) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Router                                                              */
+/* Router                                                             */
 /* ------------------------------------------------------------------ */
 const router = express.Router();
 
 /* ================================================================== */
-/* ADMIN: Overlay UI uploads (banner/qr)                               */
+/* ADMIN: Overlay UI uploads (banner/qr)                              */
 /* ================================================================== */
 
 router.get("/overlay/:examId", isAdmin, async (req, res) => {
   const exam = await PrepExam.findOne(
     { examId: req.params.examId },
-    { overlayUI:1, price:1, trialDays:1, name:1, examId:1 }
+    { overlayUI: 1, price: 1, trialDays: 1, name: 1, examId: 1 }
   ).lean();
-  if (!exam) return res.status(404).json({ success:false, message:"Exam not found" });
-  res.json({ success:true, config: exam.overlayUI || {}, exam });
+  if (!exam) return err(res, 404, { success: false, message: "Exam not found" });
+  return ok(res, { success: true, config: exam.overlayUI || {}, exam });
 });
 
 router.post(
   "/overlay/:examId",
   isAdmin,
-  upload.fields([{ name:"banner" }, { name:"whatsappQR" }]),
+  upload.fields([{ name: "banner" }, { name: "whatsappQR" }]),
   async (req, res) => {
     const examId = req.params.examId;
     const {
-      upiId = "", upiName = "", priceINR = 0,
-      whatsappId = "", forceOverlayAfterDays = "", forceOverlayAt = "", tz = ""
+      upiId = "",
+      upiName = "",
+      priceINR = 0,
+      whatsappId = "",
+      forceOverlayAfterDays = "",
+      forceOverlayAt = "",
+      tz = "",
     } = req.body || {};
 
     let bannerUrl = "";
@@ -135,14 +164,20 @@ router.post(
     if (req.files?.banner?.[0]) {
       const f = req.files.banner[0];
       const s = await storeBuffer({
-        buffer:f.buffer, filename:f.originalname, mime:f.mimetype, bucket:"prep-overlay"
+        buffer: f.buffer,
+        filename: f.originalname,
+        mime: f.mimetype,
+        bucket: "prep-overlay",
       });
       bannerUrl = s.url;
     }
     if (req.files?.whatsappQR?.[0]) {
       const f = req.files.whatsappQR[0];
       const s = await storeBuffer({
-        buffer:f.buffer, filename:f.originalname, mime:f.mimetype, bucket:"prep-overlay"
+        buffer: f.buffer,
+        filename: f.originalname,
+        mime: f.mimetype,
+        bucket: "prep-overlay",
       });
       whatsappQRUrl = s.url;
     }
@@ -151,7 +186,7 @@ router.post(
       upiId: String(upiId).trim(),
       upiName: String(upiName || "").trim(),
       priceINR: Number(priceINR || 0),
-      whatsappLink: whatsappId ? `https://wa.me/${String(whatsappId).replace(/\D/g,"")}` : "",
+      whatsappLink: whatsappId ? `https://wa.me/${String(whatsappId).replace(/\D/g, "")}` : "",
       ...(bannerUrl ? { bannerUrl } : {}),
       ...(whatsappQRUrl ? { whatsappQRUrl } : {}),
       ...(forceOverlayAfterDays !== "" ? { forceOverlayAfterDays: Number(forceOverlayAfterDays) } : {}),
@@ -164,42 +199,55 @@ router.post(
       ...(priceINR ? { price: Number(priceINR) } : {}),
     };
 
-    const doc = await PrepExam.findOneAndUpdate({ examId }, { $set: update }, { new:true }).lean();
-    res.json({ success:true, exam:doc });
+    const doc = await PrepExam.findOneAndUpdate({ examId }, { $set: update }, { new: true }).lean();
+    return ok(res, { success: true, exam: doc });
   }
 );
 
 /* ================================================================== */
-/* ADMIN: Read/Write exam overlay/payment config                       */
+/* ADMIN: Read/Write exam overlay/payment config                      */
 /* ================================================================== */
 
 router.get("/exams/:examId/meta", isAdmin, async (req, res) => {
   const exam = await PrepExam.findOne({ examId: req.params.examId }).lean();
-  if (!exam) return res.status(404).json({ success:false, message:"Exam not found" });
-  const { price=0, trialDays=3, overlay={}, payment={}, autoGrantRestart=false } = exam;
-  res.json({
-    success:true,
-    price, trialDays, overlay, payment,
+  if (!exam) return err(res, 404, { success: false, message: "Exam not found" });
+  const { price = 0, trialDays = 3, overlay = {}, payment = {}, autoGrantRestart = false } = exam;
+  return ok(res, {
+    success: true,
+    price,
+    trialDays,
+    overlay,
+    payment,
     autoGrantRestart: !!autoGrantRestart,
-    name: exam.name, examId: exam.examId
+    name: exam.name,
+    examId: exam.examId,
   });
 });
 
 router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
   const {
-    price, trialDays,
-    mode, offsetDays, fixedAt, showOnDay, showAtLocal, tz,
-    upiId, upiName, whatsappNumber, whatsappText,
+    price,
+    trialDays,
+    mode,
+    offsetDays,
+    fixedAt,
+    showOnDay,
+    showAtLocal,
+    tz,
+    upiId,
+    upiName,
+    whatsappNumber,
+    whatsappText,
     autoGrantRestart,
   } = req.body || {};
   const p = (req.body && req.body.payment) || {};
 
   const effUpiId = (upiId ?? p.upiId) ? sanitizeUpiId(upiId ?? p.upiId) : "";
   const effUpiName = (upiName ?? p.upiName) ? sanitizeText(upiName ?? p.upiName) : "";
-  const effWhatsappNumber = (whatsappNumber ?? p.whatsappNumber ?? p.waPhone)
-    ? sanitizePhone(whatsappNumber ?? p.whatsappNumber ?? p.waPhone) : "";
-  const effWhatsappText = (whatsappText ?? p.whatsappText ?? p.waText)
-    ? sanitizeText(whatsappText ?? p.whatsappText ?? p.waText) : "";
+  const effWhatsappNumber =
+    (whatsappNumber ?? p.whatsappNumber ?? p.waPhone) ? sanitizePhone(whatsappNumber ?? p.whatsappNumber ?? p.waPhone) : "";
+  const effWhatsappText =
+    (whatsappText ?? p.whatsappText ?? p.waText) ? sanitizeText(whatsappText ?? p.whatsappText ?? p.waText) : "";
 
   const hasPay = !!(effUpiId || effUpiName || effWhatsappNumber || effWhatsappText);
 
@@ -214,14 +262,16 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
       ...(showOnDay != null ? { showOnDay: Number(showOnDay) } : {}),
       ...(showAtLocal ? { showAtLocal: String(showAtLocal) } : {}),
       ...(tz ? { tz: String(tz) } : {}),
-      ...(hasPay ? {
-        payment: {
-          ...(effUpiId ? { upiId: effUpiId } : {}),
-          ...(effUpiName ? { upiName: effUpiName } : {}),
-          ...(effWhatsappNumber ? { whatsappNumber: effWhatsappNumber } : {}),
-          ...(effWhatsappText ? { whatsappText: effWhatsappText } : {}),
-        }
-      } : {}),
+      ...(hasPay
+        ? {
+            payment: {
+              ...(effUpiId ? { upiId: effUpiId } : {}),
+              ...(effUpiName ? { upiName: effUpiName } : {}),
+              ...(effWhatsappNumber ? { whatsappNumber: effWhatsappNumber } : {}),
+              ...(effWhatsappText ? { whatsappText: effWhatsappText } : {}),
+            },
+          }
+        : {}),
     },
   };
 
@@ -229,21 +279,24 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
     update.overlay.tz = "Asia/Kolkata";
   }
 
-  const doc = await PrepExam.findOneAndUpdate({ examId: req.params.examId }, { $set: update }, { new:true }).lean();
-  res.json({ success:true, exam:doc });
+  const doc = await PrepExam.findOneAndUpdate({ examId: req.params.examId }, { $set: update }, { new: true }).lean();
+  return ok(res, { success: true, exam: doc });
 });
 
 /* ================================================================== */
-/* PUBLIC: ACCESS STATUS — GUARD (slug/name tolerant & hard gate)      */
+/* PUBLIC: ACCESS STATUS — GUARD (slug/name tolerant & hard gate)     */
 /* ================================================================== */
 // Use this in the client: /api/prep/access/status/guard
 router.get("/access/status/guard", async (req, res) => {
   try {
     const { examId: rawExamId, email } = req.query || {};
-    if (!rawExamId) return res.status(400).json({ success:false, error:"examId required" });
+    if (!rawExamId) return err(res, 400, { success: false, error: "examId required" });
 
     const normId = String(rawExamId).trim();
     const normEmail = (email || "").trim().toLowerCase();
+
+    // Small debug log (safe)
+    console.log("[prep_access] status/guard", { examId: normId, email: normEmail || "(anon)" });
 
     // Try by examId first
     let exam = await PrepExam.findOne({ examId: normId }).lean();
@@ -260,7 +313,7 @@ router.get("/access/status/guard", async (req, res) => {
       }).lean();
     }
 
-    if (!exam) return res.status(404).json({ success:false, error:"Exam not found" });
+    if (!exam) return err(res, 404, { success: false, error: "Exam not found" });
 
     // user access (optional)
     let accessDoc = null;
@@ -289,10 +342,10 @@ router.get("/access/status/guard", async (req, res) => {
     const overlay = {
       show: access.status !== "active",
       mode: access.status === "active" && access.canRestart ? "restart" : "purchase",
-      payment: (exam.overlay?.payment || exam.payment || {}),
+      payment: exam.overlay?.payment || exam.payment || {},
     };
 
-    return res.json({
+    return ok(res, {
       success: true,
       exam: {
         examId: exam.examId,
@@ -307,23 +360,23 @@ router.get("/access/status/guard", async (req, res) => {
     });
   } catch (e) {
     console.error("[prep_access] /access/status/guard failed:", e);
-    res.status(500).json({ success:false, error:e?.message || "server error" });
+    return err(res, 500, { success: false, error: e?.message || "server error" });
   }
 });
 
 /* ================================================================== */
-/* PUBLIC: (legacy) /access/status — keep if other code uses it        */
+/* PUBLIC: (legacy) /access/status — keep if other code uses it       */
 /* ================================================================== */
 // This is your previous version; okay to keep.
 router.get("/access/status", async (req, res) => {
   try {
     const { examId, email } = req.query || {};
-    if (!examId) return res.status(400).json({ success:false, error:"examId required" });
+    if (!examId) return err(res, 400, { success: false, error: "examId required" });
 
     const normEmail = (email || "").trim().toLowerCase();
 
     const exam = await PrepExam.findOne({ examId }).lean();
-    if (!exam) return res.status(404).json({ success:false, error:"Exam not found" });
+    if (!exam) return err(res, 404, { success: false, error: "Exam not found" });
 
     let accessDoc = null;
     if (normEmail) {
@@ -340,12 +393,15 @@ router.get("/access/status", async (req, res) => {
     };
 
     if (accessDoc) {
-      access.status  = accessDoc.status || "none";
+      access.status = accessDoc.status || "none";
       access.startAt = accessDoc.startAt || null;
       access.planDays = Number(accessDoc.planDays || 0) || undefined;
 
       if (access.startAt) {
-        const day = Math.max(1, Math.floor((now - new Date(access.startAt).getTime()) / 1000 / 60 / 60 / 24) + 1);
+        const day = Math.max(
+          1,
+          Math.floor((now - new Date(access.startAt).getTime()) / 1000 / 60 / 60 / 24) + 1
+        );
         access.todayDay = day;
       }
       if (access.planDays && access.todayDay > access.planDays) {
@@ -356,10 +412,10 @@ router.get("/access/status", async (req, res) => {
     const overlay = {
       show: access.status !== "active",
       mode: access.status === "active" && access.canRestart ? "restart" : "purchase",
-      payment: (exam.overlay?.payment || exam.payment || {}),
+      payment: exam.overlay?.payment || exam.payment || {},
     };
 
-    return res.json({
+    return ok(res, {
       success: true,
       exam: {
         examId: exam.examId,
@@ -374,24 +430,28 @@ router.get("/access/status", async (req, res) => {
     });
   } catch (e) {
     console.error("[prep_access] /access/status failed:", e);
-    res.status(500).json({ success:false, error:e?.message || "server error" });
+    return err(res, 500, { success: false, error: e?.message || "server error" });
   }
 });
 
 /* ================================================================== */
-/* PUBLIC: create request + poll                                       */
+/* PUBLIC: create request + poll                                      */
 /* ================================================================== */
 
 function firstFile(req, ...names) {
-  for (const n of names) { const f = req.files?.[n]?.[0]; if (f) return f; }
+  for (const n of names) {
+    const f = req.files?.[n]?.[0];
+    if (f) return f;
+  }
   if (req.file) return req.file;
   return null;
 }
+
 const acceptProofUpload = upload.fields([
-  { name:"screenshot", maxCount:1 },
-  { name:"file", maxCount:1 },
-  { name:"image", maxCount:1 },
-  { name:"proof", maxCount:1 },
+  { name: "screenshot", maxCount: 1 },
+  { name: "file", maxCount: 1 },
+  { name: "image", maxCount: 1 },
+  { name: "proof", maxCount: 1 },
 ]);
 
 // Create an access request (accepts multipart or JSON)
@@ -406,27 +466,27 @@ router.post(
   async (req, res) => {
     try {
       if (!mongoose.connection?.db) {
-        return res.status(503).json({ success:false, error:"database not connected" });
+        return err(res, 503, { success: false, error: "database not connected" });
       }
 
       const b = req.body || {};
       const examId = String(b.examId || "").trim();
-      const email  = String(b.email || b.userEmail || "").trim().toLowerCase();
-      const note   = sanitizeText(b.note);
-      const name   = sanitizeText(b.name);
-      const phone  = sanitizePhone(b.phone);
-      const planKey   = sanitizeText(b.planKey);
+      const email = String(b.email || b.userEmail || "").trim().toLowerCase();
+      const note = sanitizeText(b.note);
+      const name = sanitizeText(b.name);
+      const phone = sanitizePhone(b.phone);
+      const planKey = sanitizeText(b.planKey);
       const planLabel = sanitizeText(b.planLabel);
       const planPrice = b.planPrice != null ? Number(b.planPrice) : undefined;
 
       if (!examId || !email) {
-        return res.status(400).json({ success:false, error:"examId & email required" });
+        return err(res, 400, { success: false, error: "examId & email required" });
       }
 
       // 🔒 Prevent duplicate submissions if already ACTIVE
       const already = await PrepAccess.findOne({ examId, userEmail: email }).lean();
       if (already && already.status === "active") {
-        return res.json({
+        return ok(res, {
           success: false,
           error: "You already have active access. No need to submit again.",
           code: "ALREADY_ACTIVE",
@@ -436,13 +496,14 @@ router.post(
       // intent: explicit or infer from current access
       let intent = String(b.intent || "").trim();
       if (!intent) {
-        const existing = already || (await PrepAccess.findOne({ examId, userEmail: email }).lean());
+        const existing =
+          already || (await PrepAccess.findOne({ examId, userEmail: email }).lean());
         intent = existing?.status === "active" ? "restart" : "purchase";
       }
 
       // optional proof image
       let screenshotUrl = "";
-      const f = firstFile(req, "screenshot","file","image","proof");
+      const f = firstFile(req, "screenshot", "file", "image", "proof");
       if (f?.buffer?.length) {
         const saved = await storeBuffer({
           buffer: f.buffer,
@@ -478,32 +539,43 @@ router.post(
       await logCreated(reqDoc);
 
       if (!reqDoc?._id) {
-        return res.status(500).json({ success:false, error:"request not saved" });
+        return err(res, 500, { success: false, error: "request not saved" });
       }
 
       if (autoGrant) {
-        await grantActiveAccess({ examId, email });
+        const active = await grantActiveAccess({ examId, email });
         await PrepAccessRequest.updateOne(
           { _id: reqDoc._id },
-          { $set: { status:"approved", approvedAt:new Date(), approvedBy:"auto" } }
+          { $set: { status: "approved", approvedAt: new Date(), approvedBy: "auto" } }
         );
-        return res.json({
-          success:true,
-          approved:true,
-          requestId:String(reqDoc._id),
-          examId, email, intent,
+        // Extra small debug line (safe)
+        console.log("[prep_access] auto-granted", {
+          examId,
+          email,
+          startAt: active?.startAt,
+          planDays: active?.planDays,
+        });
+        return ok(res, {
+          success: true,
+          approved: true,
+          requestId: String(reqDoc._id),
+          examId,
+          email,
+          intent,
         });
       }
 
-      res.json({
-        success:true,
-        approved:false,
-        requestId:String(reqDoc._id),
-        examId, email, intent,
+      return ok(res, {
+        success: true,
+        approved: false,
+        requestId: String(reqDoc._id),
+        examId,
+        email,
+        intent,
       });
     } catch (e) {
       console.error("[prep_access] /access/request failed:", e);
-      res.status(500).json({ success:false, error:e?.message || "server error" });
+      return err(res, 500, { success: false, error: e?.message || "server error" });
     }
   }
 );
@@ -512,22 +584,26 @@ router.post(
 router.get("/access/request/status", async (req, res) => {
   try {
     const { examId, email } = req.query || {};
-    if (!examId || !email) return res.status(400).json({ success:false, error:"examId & email required" });
+    if (!examId || !email) {
+      return err(res, 400, { success: false, error: "examId & email required" });
+    }
 
-    const item = await PrepAccessRequest
-      .findOne({ examId, userEmail: email.toLowerCase() })
+    const item = await PrepAccessRequest.findOne({
+      examId,
+      userEmail: email.toLowerCase(),
+    })
       .sort({ createdAt: -1 })
       .lean();
 
-    if (!item) return res.json({ success:true, status:"none" });
-    res.json({ success:true, status: item.status, requestId: String(item._id) });
+    if (!item) return ok(res, { success: true, status: "none" });
+    return ok(res, { success: true, status: item.status, requestId: String(item._id) });
   } catch (e) {
-    res.status(500).json({ success:false, error:e?.message || "server error" });
+    return err(res, 500, { success: false, error: e?.message || "server error" });
   }
 });
 
 /* ================================================================== */
-/* ADMIN: requests list/approve/revoke                                  */
+/* ADMIN: requests list/approve/revoke                                */
 /* ================================================================== */
 
 // status=all → return all; debug=1 → include counts meta
@@ -538,19 +614,23 @@ router.get("/access/requests", isAdmin, async (req, res) => {
     if (examId) q.examId = String(examId);
     if (status && status !== "all") q.status = status;
 
-    const items = await PrepAccessRequest.find(q).sort({ createdAt:-1 }).limit(200).lean();
+    const items = await PrepAccessRequest.find(q).sort({ createdAt: -1 }).limit(200).lean();
 
     if (debug) {
       const total = await PrepAccessRequest.countDocuments({});
-      const pending = await PrepAccessRequest.countDocuments({ status:"pending" });
-      const approved = await PrepAccessRequest.countDocuments({ status:"approved" });
-      const rejected = await PrepAccessRequest.countDocuments({ status:"rejected" });
-      return res.json({ success:true, items, debug: { total, pending, approved, rejected, query:q } });
+      const pending = await PrepAccessRequest.countDocuments({ status: "pending" });
+      const approved = await PrepAccessRequest.countDocuments({ status: "approved" });
+      const rejected = await PrepAccessRequest.countDocuments({ status: "rejected" });
+      return ok(res, {
+        success: true,
+        items,
+        debug: { total, pending, approved, rejected, query: q },
+      });
     }
 
-    res.json({ success:true, items });
+    return ok(res, { success: true, items });
   } catch (e) {
-    res.status(500).json({ success:false, error:e?.message || "server error" });
+    return err(res, 500, { success: false, error: e?.message || "server error" });
   }
 });
 
@@ -560,12 +640,12 @@ router.post("/access/admin/approve", isAdmin, async (req, res) => {
   try {
     const { requestId, approve = true } = req.body || {};
     const ar = await PrepAccessRequest.findById(requestId);
-    if (!ar) return res.status(404).json({ success:false, error:"request not found" });
+    if (!ar) return err(res, 404, { success: false, error: "request not found" });
 
     if (!approve) {
       ar.status = "rejected";
       await ar.save();
-      return res.json({ success:true, request: ar });
+      return ok(res, { success: true, request: ar });
     }
 
     // ✅ Approve and grant active access
@@ -588,21 +668,33 @@ router.post("/access/admin/approve", isAdmin, async (req, res) => {
       },
     };
 
-    return res.json({ success:true, request: ar, unlockHint });
+    // Small debug
+    console.log("[prep_access] admin approved", {
+      requestId: String(ar._id),
+      examId: ar.examId,
+      email: ar.userEmail,
+    });
+
+    return ok(res, { success: true, request: ar, unlockHint });
   } catch (e) {
     console.error("[prep_access] /access/admin/approve error:", e);
-    res.status(500).json({ success:false, error:e?.message || "server error" });
+    return err(res, 500, { success: false, error: e?.message || "server error" });
   }
 });
 
 router.post("/access/admin/revoke", isAdmin, async (req, res) => {
   try {
     const { examId, email } = req.body || {};
-    if (!examId || !email) return res.status(400).json({ success:false, error:"examId & email required" });
-    const r = await PrepAccess.updateOne({ examId, userEmail: email.toLowerCase() }, { $set:{ status:"revoked" } });
-    res.json({ success:true, updated: r.modifiedCount });
+    if (!examId || !email) {
+      return err(res, 400, { success: false, error: "examId & email required" });
+    }
+    const r = await PrepAccess.updateOne(
+      { examId, userEmail: email.toLowerCase() },
+      { $set: { status: "revoked" } }
+    );
+    return ok(res, { success: true, updated: r.modifiedCount });
   } catch (e) {
-    res.status(500).json({ success:false, error:e?.message || "server error" });
+    return err(res, 500, { success: false, error: e?.message || "server error" });
   }
 });
 
@@ -610,22 +702,24 @@ router.post("/access/admin/revoke", isAdmin, async (req, res) => {
 router.post("/access/admin/delete", isAdmin, async (req, res) => {
   try {
     const { requestId } = req.body || {};
-    if (!requestId) return res.status(400).json({ success:false, error:"requestId required" });
+    if (!requestId) {
+      return err(res, 400, { success: false, error: "requestId required" });
+    }
     const r = await PrepAccessRequest.deleteOne({ _id: requestId });
-    res.json({ success:true, deleted: r.deletedCount || 0 });
+    return ok(res, { success: true, deleted: r.deletedCount || 0 });
   } catch (e) {
-    res.status(500).json({ success:false, error:e?.message || "server error" });
+    return err(res, 500, { success: false, error: e?.message || "server error" });
   }
 });
 
 /* ================================================================== */
-/* QUICK ADMIN (URL toggle with key)                                    */
+/* QUICK ADMIN (URL toggle with key)                                  */
 /* ================================================================== */
 
 function isAdminLoose(req, res, next) {
   const key = req.get("X-Owner-Key") || req.query._k || (req.body && req.body._k);
   const ok = key && key === (process.env.ADMIN_KEY || process.env.VITE_OWNER_KEY || "");
-  if (!ok) return res.status(401).json({ success:false, error:"Unauthorized" });
+  if (!ok) return err(res, 401, { success: false, error: "Unauthorized" });
   next();
 }
 
@@ -633,8 +727,18 @@ router.get("/exams/:examId/overlay-quick-set", isAdminLoose, async (req, res) =>
   try {
     const examId = req.params.examId;
     const {
-      price, trialDays, mode, offsetDays, fixedAt, showOnDay, showAtLocal, tz,
-      upi: upiId, upn: upiName, wa: whatsappNumber, wat: whatsappText,
+      price,
+      trialDays,
+      mode,
+      offsetDays,
+      fixedAt,
+      showOnDay,
+      showAtLocal,
+      tz,
+      upi: upiId,
+      upn: upiName,
+      wa: whatsappNumber,
+      wat: whatsappText,
       autoGrantRestart,
     } = req.query || {};
 
@@ -664,35 +768,37 @@ router.get("/exams/:examId/overlay-quick-set", isAdminLoose, async (req, res) =>
       update.overlay.tz = "Asia/Kolkata";
     }
 
-    const doc = await PrepExam.findOneAndUpdate({ examId }, { $set: update }, { new:true }).lean();
-    res.json({ success:true, exam:doc, applied:update });
+    const doc = await PrepExam.findOneAndUpdate({ examId }, { $set: update }, { new: true }).lean();
+
+    console.log("[prep_access] overlay-quick-set", { examId, applied: update });
+
+    return ok(res, { success: true, exam: doc, applied: update });
   } catch (e) {
-    res.status(500).json({ success:false, error:e?.message || "server error" });
+    return err(res, 500, { success: false, error: e?.message || "server error" });
   }
 });
 
 /* ================================================================== */
-/* DEBUG endpoints (safe to keep while you diagnose)                   */
+/* DEBUG endpoints (safe to keep while you diagnose)                  */
 /* ================================================================== */
 
 // 1) show counts + latest 5, no auth (do not expose publicly forever)
 router.get("/access/requests-debug", async (_req, res) => {
   try {
-    const total    = await PrepAccessRequest.countDocuments({});
-    const pending  = await PrepAccessRequest.countDocuments({ status: "pending" });
+    const total = await PrepAccessRequest.countDocuments({});
+    const pending = await PrepAccessRequest.countDocuments({ status: "pending" });
     const approved = await PrepAccessRequest.countDocuments({ status: "approved" });
     const rejected = await PrepAccessRequest.countDocuments({ status: "rejected" });
 
-    const latest = await PrepAccessRequest
-      .find({})
+    const latest = await PrepAccessRequest.find({})
       .sort({ createdAt: -1 })
       .limit(5)
-      .select({ examId:1, userEmail:1, status:1, intent:1, priceAt:1, createdAt:1 })
+      .select({ examId: 1, userEmail: 1, status: 1, intent: 1, priceAt: 1, createdAt: 1 })
       .lean();
 
-    res.json({ success:true, counts: { total, pending, approved, rejected }, latest });
+    return ok(res, { success: true, counts: { total, pending, approved, rejected }, latest });
   } catch (e) {
-    res.status(500).json({ success:false, error:e?.message || "server error" });
+    return err(res, 500, { success: false, error: e?.message || "server error" });
   }
 });
 
@@ -702,11 +808,11 @@ router.get("/access/requests-debug/by", async (req, res) => {
     const { examId, email } = req.query || {};
     const q = {};
     if (examId) q.examId = String(examId);
-    if (email)  q.userEmail = String(email).toLowerCase();
-    const items = await PrepAccessRequest.find(q).sort({ createdAt:-1 }).limit(20).lean();
-    res.json({ success:true, items });
+    if (email) q.userEmail = String(email).toLowerCase();
+    const items = await PrepAccessRequest.find(q).sort({ createdAt: -1 }).limit(20).lean();
+    return ok(res, { success: true, items });
   } catch (e) {
-    res.status(500).json({ success:false, error:e?.message || "server error" });
+    return err(res, 500, { success: false, error: e?.message || "server error" });
   }
 });
 
