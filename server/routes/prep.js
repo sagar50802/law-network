@@ -26,7 +26,11 @@ function safeName(filename = "file") {
 
 // Optional Cloudflare R2 helper
 let R2 = null;
-try { R2 = await import("../utils/r2.js"); } catch { R2 = null; }
+try {
+  R2 = await import("../utils/r2.js");
+} catch {
+  R2 = null;
+}
 
 function grid(bucket) {
   const db = mongoose.connection?.db;
@@ -268,18 +272,18 @@ router.get("/user/today", async (req, res) => {
     const status = await buildAccessStatusPayload(examId, email);
     const accessStatus = status?.access?.status || "none";
 
-    // 🚫 Hard gate: Only active or trial users can access
+    // 🚫 Hard gate: Unauthorized → trigger overlay
     if (accessStatus !== "active" && accessStatus !== "trial") {
       noStore(res);
       return res.json({
         success: false,
         locked: true,
-        overlay: status.overlay,
-        message: "Access locked — please subscribe or get admin approval",
+        overlay: { ...(status.overlay || {}), show: true },
+        message: null, // 👈 hide text, trigger overlay only
       });
     }
 
-    // ✅ Approved users — fetch today's content
+    // ✅ Authorized → show today's content
     const day = status?.access?.todayDay || 1;
     const items = await PrepModule.find({ examId, dayIndex: day })
       .sort({ releaseAt: 1, slotMin: 1 })
