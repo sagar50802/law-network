@@ -172,13 +172,20 @@ app.use("/api/submissions", submissionsRoutes);
 app.use("/api/qr", qrRoutes);
 app.use("/api/exams", examRoutes);
 
-app.use("/api/prep", prepAccessRoutes);
+/* ✅ FIXED MOUNTING ORDER
+   prep_access.js already defines full /api/prep/... paths,
+   so mount at root instead of /api/prep to avoid /api/prep/api/prep/... duplication.
+*/
+app.use("/", prepAccessRoutes);
+
+/* ✅ prep.js defines relative endpoints, so keep under /api/prep */
 app.use("/api/prep", prepRoutes);
+
 app.use("/api/files", filesRoutes);
 app.use("/api/testseries", testseriesRoutes);
 app.use("/api/plagiarism", plagiarismRoutes);
 
-/* ---------- ✅ Added Research Drafting API ---------- */
+/* ✅ Added Research Drafting API */
 app.use("/api/research-drafting", researchDraftingRoutes);
 
 /* ---------- Health & 404 ---------- */
@@ -215,6 +222,9 @@ if (!MONGO) {
     .then(() => console.log("✅ MongoDB connected"))
     .catch((err) => console.error("✗ MongoDB connection failed:", err.message));
 }
+
+/* ---------- Startup log for prep_access ---------- */
+console.log("✅ Prep Access Routes mounted at: /api/prep/* (via root mapping)");
 
 /* ---------- Start ---------- */
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
