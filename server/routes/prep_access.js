@@ -38,19 +38,16 @@ async function ensureDbFile() {
     await fs.access(DB_FILE);
   } catch {
     const initial = {
-      // Global overlay/payment config shown to users
       config: {
-        autoGrant: false, // if true, requests are auto-approved
+        autoGrant: false,
         priceINR: 0,
         upiId: "",
         upiName: "",
         whatsappNumber: "",
         whatsappText: "",
       },
-      // Array of request records
       requests: [],
-      // Grants: active/revoked per (examId, email)
-      grants: [], // { examId, email, status: "active"|"revoked", grantedAt, revokedAt? }
+      grants: [],
     };
     await fs.writeFile(DB_FILE, JSON.stringify(initial, null, 2));
   }
@@ -61,7 +58,6 @@ async function loadDB() {
   const raw = await fs.readFile(DB_FILE, "utf8");
   try {
     const j = JSON.parse(raw);
-    // Backfill keys if older file
     if (!j.config) j.config = { autoGrant: false };
     if (!Array.isArray(j.requests)) j.requests = [];
     if (!Array.isArray(j.grants)) j.grants = [];
@@ -80,29 +76,39 @@ async function saveDB(db) {
 }
 
 // ----------------------------------------------------------------------------
-// Helpers
+// Router & middleware setup
 // ----------------------------------------------------------------------------
 const router = Router();
 
-/* ✅ Ensure JSON body parsing for all endpoints */
+/* ✅ Robust JSON/text parser (handles both proper and missing Content-Type) */
+router.use(express.text({ type: () => true }));
+router.use((req, _res, next) => {
+  try {
+    if (typeof req.body === "string" && req.body.trim().startsWith("{")) {
+      req.body = JSON.parse(req.body);
+    }
+  } catch {
+    req.body = {};
+  }
+  next();
+});
 router.use(express.json());
 
+// ----------------------------------------------------------------------------
+// Helpers
+// ----------------------------------------------------------------------------
 function nowISO() {
   return new Date().toISOString();
 }
-
 function rid() {
   return crypto.randomBytes(12).toString("hex");
 }
-
 function normEmail(s) {
   return String(s || "").trim().toLowerCase();
 }
-
 function normExamId(s) {
   return String(s || "").trim();
 }
-
 function findActiveGrant(db, examId, email) {
   examId = normExamId(examId);
   email = normEmail(email);
@@ -110,7 +116,6 @@ function findActiveGrant(db, examId, email) {
     (g) => g.examId === examId && normEmail(g.email) === email && g.status === "active"
   );
 }
-
 function upsertGrant(db, examId, email, status) {
   examId = normExamId(examId);
   email = normEmail(email);
@@ -129,7 +134,6 @@ function upsertGrant(db, examId, email, status) {
   }
   return g;
 }
-
 function latestRequest(db, examId, email) {
   examId = normExamId(examId);
   email = normEmail(email);
@@ -138,7 +142,6 @@ function latestRequest(db, examId, email) {
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   return list[0] || null;
 }
-
 function overlayPayment(db) {
   const c = db.config || {};
   return {
@@ -149,7 +152,6 @@ function overlayPayment(db) {
     whatsappText: String(c.whatsappText || ""),
   };
 }
-
 function adminExamName(examId) {
   const s = String(examId || "").trim();
   if (!s) return "COURSE";
@@ -163,7 +165,6 @@ router.get("/api/prep/access/status/guard", async (req, res) => {
   try {
     const examId = normExamId(req.query.examId);
     const email = normEmail(req.query.email);
-
     if (!examId) {
       return res.status(400).json({ success: false, error: "Missing examId" });
     }
@@ -178,7 +179,6 @@ router.get("/api/prep/access/status/guard", async (req, res) => {
       name: adminExamName(examId),
       overlay: { payment: overlayPayment(db) },
     };
-
     let overlay = { mode: "purchase" };
     if (!active && lastReq && lastReq.status === "pending") overlay.mode = "waiting";
 
@@ -190,7 +190,7 @@ router.get("/api/prep/access/status/guard", async (req, res) => {
 });
 
 // ----------------------------------------------------------------------------
-// PUBLIC: Create access request (purchase or restart)
+// PUBLIC: Create access request
 // ----------------------------------------------------------------------------
 router.post("/api/prep/access/request", async (req, res) => {
   console.log("[prep_access] incoming request body:", req.body);
@@ -202,7 +202,6 @@ router.post("/api/prep/access/request", async (req, res) => {
 
     const ex = normExamId(examId);
     const em = normEmail(email);
-
     if (!ex || !em) {
       return res.status(400).json({ success: false, error: "Missing examId or email" });
     }
@@ -210,7 +209,6 @@ router.post("/api/prep/access/request", async (req, res) => {
     const db = await loadDB();
     const cfg = db.config || {};
 
-    // If already active, signal to client to unlock immediately
     if (findActiveGrant(db, ex, em)) {
       return res.json({ success: true, code: "ALREADY_ACTIVE" });
     }
@@ -230,7 +228,6 @@ router.post("/api/prep/access/request", async (req, res) => {
     };
     db.requests.push(rec);
 
-    // Auto-approve?
     let approved = false;
     if (cfg.autoGrant) {
       rec.status = "approved";
@@ -274,7 +271,7 @@ router.get("/api/prep/access/request/status", async (req, res) => {
 });
 
 // ----------------------------------------------------------------------------
-// ADMIN: Get & Save overlay/payment config
+// ADMIN: Config management
 // ----------------------------------------------------------------------------
 router.get("/api/admin/prep/access/config", async (_req, res) => {
   try {
@@ -285,12 +282,10 @@ router.get("/api/admin/prep/access/config", async (_req, res) => {
     return res.status(500).json({ success: false, error: "Internal error" });
   }
 });
-
 router.post("/api/admin/prep/access/config", async (req, res) => {
   try {
     const db = await loadDB();
     const b = req.body || {};
-
     db.config = {
       autoGrant: Boolean(b.autoGrant),
       priceINR: Number(b.priceINR || 0),
@@ -299,7 +294,6 @@ router.post("/api/admin/prep/access/config", async (req, res) => {
       whatsappNumber: String(b.whatsappNumber || ""),
       whatsappText: String(b.whatsappText || ""),
     };
-
     await saveDB(db);
     return res.json({ success: true, config: db.config });
   } catch (e) {
@@ -309,7 +303,7 @@ router.post("/api/admin/prep/access/config", async (req, res) => {
 });
 
 // ----------------------------------------------------------------------------
-// ADMIN: List requests
+// ADMIN: Requests list / approve / reject / revoke / delete
 // ----------------------------------------------------------------------------
 router.get("/api/admin/prep/access/requests", async (req, res) => {
   try {
@@ -329,9 +323,6 @@ router.get("/api/admin/prep/access/requests", async (req, res) => {
   }
 });
 
-// ----------------------------------------------------------------------------
-// ADMIN: Approve / Reject / Revoke
-// ----------------------------------------------------------------------------
 router.post("/api/admin/prep/access/approve", async (req, res) => {
   try {
     const { id } = req.body || {};
@@ -339,16 +330,14 @@ router.post("/api/admin/prep/access/approve", async (req, res) => {
     const db = await loadDB();
 
     let rec = null;
-    if (id) {
-      rec = db.requests.find((r) => r.id === id);
-    } else if (examId && email) {
+    if (id) rec = db.requests.find((r) => r.id === id);
+    else if (examId && email) {
       examId = normExamId(examId);
       email = normEmail(email);
       rec = db.requests
         .filter((r) => r.examId === examId && normEmail(r.email) === email)
         .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0];
     }
-
     if (!rec) return res.status(404).json({ success: false, error: "Request not found" });
 
     rec.status = "approved";
@@ -368,18 +357,15 @@ router.post("/api/admin/prep/access/reject", async (req, res) => {
     const { id } = req.body || {};
     let { examId, email } = req.body || {};
     const db = await loadDB();
-
     let rec = null;
-    if (id) {
-      rec = db.requests.find((r) => r.id === id);
-    } else if (examId && email) {
+    if (id) rec = db.requests.find((r) => r.id === id);
+    else if (examId && email) {
       examId = normExamId(examId);
       email = normEmail(email);
       rec = db.requests
         .filter((r) => r.examId === examId && normEmail(r.email) === email)
         .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0];
     }
-
     if (!rec) return res.status(404).json({ success: false, error: "Request not found" });
 
     rec.status = "rejected";
@@ -411,9 +397,6 @@ router.post("/api/admin/prep/access/revoke", async (req, res) => {
   }
 });
 
-// ----------------------------------------------------------------------------
-// ADMIN: Delete single or batch
-// ----------------------------------------------------------------------------
 router.post("/api/admin/prep/access/delete", async (req, res) => {
   try {
     const { id } = req.body || {};
@@ -439,18 +422,14 @@ router.post("/api/admin/prep/access/batch-delete", async (req, res) => {
     const emails = Array.isArray(req.body?.emails)
       ? req.body.emails.map(normEmail).filter(Boolean)
       : [];
-
     const db = await loadDB();
     const before = db.requests.length;
 
     db.requests = db.requests.filter((r) => {
       if (ids.length && ids.includes(r.id)) return false;
-      if (examId && emails.length) {
+      if (examId && emails.length)
         return !(r.examId === examId && emails.includes(normEmail(r.email)));
-      }
-      if (examId && !emails.length) {
-        return true;
-      }
+      if (examId && !emails.length) return true;
       return true;
     });
 
