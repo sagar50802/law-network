@@ -1,4 +1,3 @@
-// server/routes/prep.js
 // LawNetwork Prep Routes — Exams, Modules, Access, Progress (NO request/admin endpoints here)
 
 import express from "express";
@@ -234,7 +233,7 @@ router.delete("/exams/:examId", isAdmin, async (req, res) => {
   }
 });
 
-/* ✅ NEW PATCH ROUTE: Save overlay + payment config for AdminPrepPanel */
+/* ✅ PATCH: Save overlay + payment config for AdminPrepPanel */
 router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
   try {
     const examId = req.params.examId;
@@ -270,6 +269,44 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
   } catch (e) {
     console.error("[PATCH overlay-config] error:", e);
     res.status(500).json({ success: false, error: e.message || "Server error" });
+  }
+});
+
+/* ✅ NEW: GET /exams/:examId/meta (used by PrepAccessOverlay.jsx) */
+router.get("/exams/:examId/meta", async (req, res) => {
+  try {
+    const { examId } = req.params;
+    if (!examId) return res.status(400).json({ success: false, error: "examId required" });
+    const exam = await PrepExam.findOne({ examId }).lean();
+    if (!exam) return res.status(404).json({ success: false, error: "Exam not found" });
+    res.json({
+      success: true,
+      examId: exam.examId,
+      name: exam.name,
+      price: exam.price ?? 0,
+      trialDays: exam.trialDays ?? 0,
+      overlay: exam.overlay || {},
+      payment: (exam.overlay && exam.overlay.payment) || {},
+    });
+  } catch (e) {
+    console.error("[GET meta] error:", e);
+    res.status(500).json({ success: false, error: e.message || "server error" });
+  }
+});
+
+/* ✅ NEW: POST /exams/:examId/meta/test (admin-only quick preview) */
+router.post("/exams/:examId/meta/test", isAdmin, async (req, res) => {
+  try {
+    const { examId } = req.params;
+    const { email } = req.body || {};
+    if (!examId) return res.status(400).json({ success: false, error: "examId required" });
+
+    const payload = await buildAccessStatusPayload(examId, email);
+    noStore(res);
+    res.json(payload);
+  } catch (e) {
+    console.error("[POST meta/test] error:", e);
+    res.status(500).json({ success: false, error: e.message || "server error" });
   }
 });
 
