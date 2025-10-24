@@ -1,833 +1,227 @@
-// server/routes/prep_access.js
-// LawNetwork Prep — Access Requests + Overlay/Payment Admin (separate from prep.js)
-
-import express from "express";
-import multer from "multer";
-import mongoose from "mongoose";
-import { isAdmin } from "./utils.js";
-
-import PrepExam from "../models/PrepExam.js";
-import PrepModule from "../models/PrepModule.js";
-import PrepAccess from "../models/PrepAccess.js";
-import PrepAccessRequest from "../models/PrepAccessRequest.js";
-
-/* ------------------------------------------------------------------ */
-/* Uploads                                                            */
-/* ------------------------------------------------------------------ */
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 40 * 1024 * 1024 }, // 40 MB
-});
-
-// Used when we accept JSON instead of multipart
-const jsonBody = express.json();
-
-/* ------------------------------------------------------------------ */
-/* Small helpers                                                      */
-/* ------------------------------------------------------------------ */
-function truthy(v) {
-  return ["true", "1", "on", "yes"].includes(String(v).trim().toLowerCase());
-}
-function safeName(filename = "file") {
-  return String(filename).replace(/\s+/g, "_").replace(/[^\w.\-]/g, "");
-}
-function sanitizeText(v) {
-  return v ? String(v).trim() : "";
-}
-function sanitizePhone(v) {
-  return v ? String(v).trim().replace(/[^\d+]/g, "") : "";
-}
-function sanitizeUpiId(v) {
-  return v ? String(v).trim() : "";
-}
-
-/* ------------------------------------------------------------------ */
-/* Explicit CORS-safe JSON helpers (no behavior change)               */
-/* ------------------------------------------------------------------ */
-function setCommonHeaders(res) {
-  // These headers are harmless when you already have a global CORS middleware.
-  // Kept minimal to avoid behavior changes.
-  res.set("Content-Type", "application/json; charset=utf-8");
-  res.set("X-Content-Type-Options", "nosniff");
-  // NOTE: Access-Control-Allow-Origin typically belongs in app-level CORS.
-  // We do NOT force it here to avoid conflicting with your existing CORS setup.
-}
-function ok(res, payload) {
-  setCommonHeaders(res);
-  return res.json(payload);
-}
-function err(res, status, payload) {
-  setCommonHeaders(res);
-  return res.status(status).json(payload);
-}
-
-/* ------------------------------------------------------------------ */
-/* Optional R2, fallback GridFS                                       */
-/* ------------------------------------------------------------------ */
-let R2 = null;
-try {
-  R2 = await import("../utils/r2.js");
-} catch {
-  R2 = null;
-}
-
-function grid(bucket) {
-  const db = mongoose.connection?.db;
-  if (!db) return null;
-  return new mongoose.mongo.GridFSBucket(db, { bucketName: bucket });
-}
-
-async function storeBuffer({ buffer, filename, mime, bucket = "prep" }) {
-  const name = safeName(filename || "file");
-  const contentType = mime || "application/octet-stream";
-
-  // Try R2 first
-  if (R2?.r2Enabled?.() && typeof R2.uploadBuffer === "function") {
-    try {
-      const key = `${bucket}/${name}`;
-      const url = await R2.uploadBuffer(key, buffer, contentType);
-      return { url, via: "r2" };
-    } catch (e) {
-      console.warn("[prep_access] R2 upload failed → GridFS fallback:", e.message);
-    }
-  }
-
-  // Fallback to GridFS
-  const g = grid(bucket);
-  if (!g) throw Object.assign(new Error("DB not connected"), { status: 503 });
-  const id = await new Promise((resolve, reject) => {
-    const ws = g.openUploadStream(name, { contentType });
-    ws.on("error", reject);
-    ws.on("finish", () => resolve(ws.id));
-    ws.end(buffer);
-  });
-  return { url: `/api/files/${bucket}/${String(id)}`, via: "gridfs" };
-}
-
-/* ------------------------------------------------------------------ */
-/* Plan helpers                                                       */
-/* ------------------------------------------------------------------ */
-async function planDaysForExam(examId) {
-  const days = await PrepModule.find({ examId }).distinct("dayIndex");
-  if (!days.length) return 1;
-  return Math.max(...days.map(Number).filter(Number.isFinite));
-}
-
-async function grantActiveAccess({ examId, email }) {
-  const planDays = await planDaysForExam(examId);
-  const now = new Date();
-  const doc = await PrepAccess.findOneAndUpdate(
-    { examId, userEmail: email.toLowerCase() },
-    { $set: { status: "active", planDays, startAt: now }, $inc: { cycle: 1 } },
-    { upsert: true, new: true }
-  );
-  return doc;
-}
-
-/* ------------------------------------------------------------------ */
-/* Router                                                             */
-/* ------------------------------------------------------------------ */
+// server/prep_access.js
+const fs = require("fs");
+const path = require("path");
+const express = require("express");
 const router = express.Router();
 
-/* ================================================================== */
-/* ADMIN: Overlay UI uploads (banner/qr)                              */
-/* ================================================================== */
+// Ensure body parsing (for JSON + urlencoded). If defined globally, you can remove these two lines.
+router.use(express.json());
+router.use(express.urlencoded({ extended: true }));
 
-router.get("/overlay/:examId", isAdmin, async (req, res) => {
-  const exam = await PrepExam.findOne(
-    { examId: req.params.examId },
-    { overlayUI: 1, price: 1, trialDays: 1, name: 1, examId: 1 }
-  ).lean();
-  if (!exam) return err(res, 404, { success: false, message: "Exam not found" });
-  return ok(res, { success: true, config: exam.overlayUI || {}, exam });
-});
+/* ------------------------- tiny JSON “DB” ------------------------- */
+const DATA_DIR = path.join(process.cwd(), "data");
+const DB_FILE = path.join(DATA_DIR, "prep_access.json");
 
-router.post(
-  "/overlay/:examId",
-  isAdmin,
-  upload.fields([{ name: "banner" }, { name: "whatsappQR" }]),
-  async (req, res) => {
-    const examId = req.params.examId;
-    const {
-      upiId = "",
-      upiName = "",
-      priceINR = 0,
-      whatsappId = "",
-      forceOverlayAfterDays = "",
-      forceOverlayAt = "",
-      tz = "",
-    } = req.body || {};
-
-    let bannerUrl = "";
-    let whatsappQRUrl = "";
-
-    if (req.files?.banner?.[0]) {
-      const f = req.files.banner[0];
-      const s = await storeBuffer({
-        buffer: f.buffer,
-        filename: f.originalname,
-        mime: f.mimetype,
-        bucket: "prep-overlay",
-      });
-      bannerUrl = s.url;
-    }
-    if (req.files?.whatsappQR?.[0]) {
-      const f = req.files.whatsappQR[0];
-      const s = await storeBuffer({
-        buffer: f.buffer,
-        filename: f.originalname,
-        mime: f.mimetype,
-        bucket: "prep-overlay",
-      });
-      whatsappQRUrl = s.url;
-    }
-
-    const overlayUI = {
-      upiId: String(upiId).trim(),
-      upiName: String(upiName || "").trim(),
-      priceINR: Number(priceINR || 0),
-      whatsappLink: whatsappId ? `https://wa.me/${String(whatsappId).replace(/\D/g, "")}` : "",
-      ...(bannerUrl ? { bannerUrl } : {}),
-      ...(whatsappQRUrl ? { whatsappQRUrl } : {}),
-      ...(forceOverlayAfterDays !== "" ? { forceOverlayAfterDays: Number(forceOverlayAfterDays) } : {}),
-      ...(forceOverlayAt ? { forceOverlayAt: new Date(forceOverlayAt).toISOString() } : {}),
-      ...(tz ? { tz: String(tz) } : {}),
+function ensureDirs() {
+  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+  if (!fs.existsSync(DB_FILE)) {
+    const init = {
+      configs: {}, // examId -> { name, planDays, autoGrant, payment{upiId, upiName, priceINR, whatsappNumber, whatsappText}}
+      // simplified access table: examId+email -> { status: 'active'|'revoked', updatedAt }
+      access: {},
+      // requests list (for admin UI)
+      requests: [], // { id, examId, email, name, phone, intent, note, status('pending'|'approved'|'rejected'), createdAt }
+      seq: 1,
     };
-
-    const update = {
-      overlayUI,
-      ...(priceINR ? { price: Number(priceINR) } : {}),
-    };
-
-    const doc = await PrepExam.findOneAndUpdate({ examId }, { $set: update }, { new: true }).lean();
-    return ok(res, { success: true, exam: doc });
+    fs.writeFileSync(DB_FILE, JSON.stringify(init, null, 2));
   }
-);
+}
+function loadDB() {
+  ensureDirs();
+  return JSON.parse(fs.readFileSync(DB_FILE, "utf8"));
+}
+function saveDB(db) {
+  ensureDirs();
+  fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
+}
+function idgen(db) {
+  const id = String(db.seq++);
+  return id;
+}
+function key(examId, email) {
+  return `${String(examId || "").trim()}|${String(email || "").trim().toLowerCase()}`;
+}
 
-/* ================================================================== */
-/* ADMIN: Read/Write exam overlay/payment config                      */
-/* ================================================================== */
+/* -------------------------- helpers -------------------------- */
 
-router.get("/exams/:examId/meta", isAdmin, async (req, res) => {
-  const exam = await PrepExam.findOne({ examId: req.params.examId }).lean();
-  if (!exam) return err(res, 404, { success: false, message: "Exam not found" });
-  const { price = 0, trialDays = 3, overlay = {}, payment = {}, autoGrantRestart = false } = exam;
-  return ok(res, {
-    success: true,
-    price,
-    trialDays,
-    overlay,
-    payment,
-    autoGrantRestart: !!autoGrantRestart,
-    name: exam.name,
-    examId: exam.examId,
-  });
+function getAccess(db, examId, email) {
+  const k = key(examId, email);
+  return db.access[k] || { status: "inactive" };
+}
+function setAccess(db, examId, email, status) {
+  const k = key(examId, email);
+  db.access[k] = { status, updatedAt: new Date().toISOString() };
+}
+function latestRequestFor(db, examId, email) {
+  const arr = db.requests
+    .filter((r) => r.examId === examId && r.email.toLowerCase() === String(email || "").toLowerCase())
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  return arr[0];
+}
+
+/* -------------------------- GUARD -------------------------- */
+/**
+ * GET /api/prep/access/status/guard?examId&email
+ * Returns:
+ *   { exam, access: { status: 'active'|'inactive' }, overlay: { mode, payment } }
+ *  - This is what the client uses to decide whether to show or hide the overlay.
+ */
+router.get("/api/prep/access/status/guard", (req, res) => {
+  const { examId = "", email = "" } = req.query || {};
+  const db = loadDB();
+  const cfg = db.configs[examId] || { name: examId, planDays: 1, autoGrant: false, payment: {} };
+  const acc = getAccess(db, examId, email);
+
+  const access = { status: acc.status === "active" ? "active" : "inactive" };
+  const overlay = { mode: "purchase", payment: cfg.payment || {} };
+
+  const exam = { id: examId, name: cfg.name || String(examId).toUpperCase(), price: cfg.payment?.priceINR || 0, overlay: { payment: cfg.payment || {} } };
+
+  return res.json({ exam, access, overlay });
 });
 
-router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
-  const {
-    price,
-    trialDays,
-    mode,
-    offsetDays,
-    fixedAt,
-    showOnDay,
-    showAtLocal,
-    tz,
-    upiId,
-    upiName,
-    whatsappNumber,
-    whatsappText,
-    autoGrantRestart,
-  } = req.body || {};
-  const p = (req.body && req.body.payment) || {};
+/* ------------------------- USER: Create request ------------------------- */
+/**
+ * POST /api/prep/access/request
+ * body: FormData or urlencoded:
+ *   examId, email, name?, phone?, intent('purchase'|'restart'), note?
+ * Response:
+ *   { success: true, approved?: true } | { code: 'ALREADY_ACTIVE' }
+ */
+router.post("/api/prep/access/request", (req, res) => {
+  const { examId = "", email = "", name = "", phone = "", intent = "purchase", note = "" } = req.body || {};
+  const db = loadDB();
 
-  const effUpiId = (upiId ?? p.upiId) ? sanitizeUpiId(upiId ?? p.upiId) : "";
-  const effUpiName = (upiName ?? p.upiName) ? sanitizeText(upiName ?? p.upiName) : "";
-  const effWhatsappNumber =
-    (whatsappNumber ?? p.whatsappNumber ?? p.waPhone) ? sanitizePhone(whatsappNumber ?? p.whatsappNumber ?? p.waPhone) : "";
-  const effWhatsappText =
-    (whatsappText ?? p.whatsappText ?? p.waText) ? sanitizeText(whatsappText ?? p.whatsappText ?? p.waText) : "";
+  // Already active?
+  const acc = getAccess(db, examId, email);
+  if (acc.status === "active") {
+    return res.json({ success: true, code: "ALREADY_ACTIVE" });
+  }
 
-  const hasPay = !!(effUpiId || effUpiName || effWhatsappNumber || effWhatsappText);
-
-  const update = {
-    ...(price != null ? { price: Number(price) } : {}),
-    ...(trialDays != null ? { trialDays: Number(trialDays) } : {}),
-    ...(autoGrantRestart != null ? { autoGrantRestart: !!autoGrantRestart } : {}),
-    overlay: {
-      ...(mode ? { mode } : {}),
-      ...(offsetDays != null ? { offsetDays: Number(offsetDays) } : {}),
-      ...(fixedAt ? { fixedAt: new Date(fixedAt) } : { fixedAt: null }),
-      ...(showOnDay != null ? { showOnDay: Number(showOnDay) } : {}),
-      ...(showAtLocal ? { showAtLocal: String(showAtLocal) } : {}),
-      ...(tz ? { tz: String(tz) } : {}),
-      ...(hasPay
-        ? {
-            payment: {
-              ...(effUpiId ? { upiId: effUpiId } : {}),
-              ...(effUpiName ? { upiName: effUpiName } : {}),
-              ...(effWhatsappNumber ? { whatsappNumber: effWhatsappNumber } : {}),
-              ...(effWhatsappText ? { whatsappText: effWhatsappText } : {}),
-            },
-          }
-        : {}),
-    },
+  // create a request
+  const r = {
+    id: idgen(db),
+    examId,
+    email: String(email || "").toLowerCase(),
+    name,
+    phone,
+    intent,
+    note,
+    status: "pending",
+    createdAt: new Date().toISOString(),
   };
+  db.requests.push(r);
 
-  if (update.overlay?.mode === "planDayTime" && !("tz" in update.overlay)) {
-    update.overlay.tz = "Asia/Kolkata";
+  const cfg = db.configs[examId] || {};
+  if (cfg.autoGrant) {
+    // auto-approve
+    r.status = "approved";
+    setAccess(db, examId, email, "active");
+    saveDB(db);
+    return res.json({ success: true, approved: true });
   }
 
-  const doc = await PrepExam.findOneAndUpdate({ examId: req.params.examId }, { $set: update }, { new: true }).lean();
-  return ok(res, { success: true, exam: doc });
+  saveDB(db);
+  return res.json({ success: true, approved: false });
 });
 
-/* ================================================================== */
-/* PUBLIC: ACCESS STATUS — GUARD (slug/name tolerant & hard gate)     */
-/* ================================================================== */
-// Use this in the client: /api/prep/access/status/guard
-router.get("/access/status/guard", async (req, res) => {
-  try {
-    const { examId: rawExamId, email } = req.query || {};
-    if (!rawExamId) return err(res, 400, { success: false, error: "examId required" });
-
-    const normId = String(rawExamId).trim();
-    const normEmail = (email || "").trim().toLowerCase();
-
-    // Small debug log (safe)
-    console.log("[prep_access] status/guard", { examId: normId, email: normEmail || "(anon)" });
-
-    // Try by examId first
-    let exam = await PrepExam.findOne({ examId: normId }).lean();
-
-    // Fallbacks: match by exact name (case-insensitive) or a loose "slug" of the name
-    if (!exam) {
-      const esc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const alt = normId.replace(/[-_]+/g, " ").replace(/\s+/g, " ").trim();
-      exam = await PrepExam.findOne({
-        $or: [
-          { name: new RegExp(`^${esc(normId)}$`, "i") },
-          { name: new RegExp(`^${esc(alt)}$`, "i") },
-        ],
-      }).lean();
-    }
-
-    if (!exam) return err(res, 404, { success: false, error: "Exam not found" });
-
-    // user access (optional)
-    let accessDoc = null;
-    if (normEmail) {
-      accessDoc = await PrepAccess.findOne({ examId: exam.examId, userEmail: normEmail }).lean();
-    }
-
-    const now = Date.now();
-    const access = {
-      status: accessDoc?.status || "none",
-      startAt: accessDoc?.startAt || null,
-      planDays: Number(accessDoc?.planDays || 0) || undefined,
-      todayDay: 1,
-      canRestart: false,
-    };
-
-    if (access.startAt) {
-      const day = Math.max(1, Math.floor((now - new Date(access.startAt).getTime()) / 86400000) + 1);
-      access.todayDay = day;
-    }
-    if (access.planDays && access.todayDay > access.planDays) {
-      access.canRestart = true;
-    }
-
-    // HARD GATE: overlay unless ACTIVE
-    const overlay = {
-      show: access.status !== "active",
-      mode: access.status === "active" && access.canRestart ? "restart" : "purchase",
-      payment: exam.overlay?.payment || exam.payment || {},
-    };
-
-    return ok(res, {
-      success: true,
-      exam: {
-        examId: exam.examId,
-        name: exam.name,
-        price: Number(exam.price || 0),
-        trialDays: Number(exam.trialDays || 0),
-        overlay: exam.overlay || {},
-        payment: exam.payment || {},
-      },
-      access,
-      overlay,
-    });
-  } catch (e) {
-    console.error("[prep_access] /access/status/guard failed:", e);
-    return err(res, 500, { success: false, error: e?.message || "server error" });
-  }
+/* ------------------------- USER: Poll request status ------------------------- */
+/**
+ * GET /api/prep/access/request/status?examId&email
+ * → { status: 'pending'|'approved'|'rejected' } or {}
+ */
+router.get("/api/prep/access/request/status", (req, res) => {
+  const { examId = "", email = "" } = req.query || {};
+  const db = loadDB();
+  const r = latestRequestFor(db, examId, email);
+  if (!r) return res.json({});
+  return res.json({ status: r.status });
 });
 
-/* ================================================================== */
-/* PUBLIC: (legacy) /access/status — keep if other code uses it       */
-/* ================================================================== */
-// This is your previous version; okay to keep.
-router.get("/access/status", async (req, res) => {
-  try {
-    const { examId, email } = req.query || {};
-    if (!examId) return err(res, 400, { success: false, error: "examId required" });
-
-    const normEmail = (email || "").trim().toLowerCase();
-
-    const exam = await PrepExam.findOne({ examId }).lean();
-    if (!exam) return err(res, 404, { success: false, error: "Exam not found" });
-
-    let accessDoc = null;
-    if (normEmail) {
-      accessDoc = await PrepAccess.findOne({ examId, userEmail: normEmail }).lean();
-    }
-
-    const now = Date.now();
-    let access = {
-      status: "none",
-      todayDay: 1,
-      canRestart: false,
-      startAt: null,
-      planDays: Number(exam.planDays || 0) || undefined,
-    };
-
-    if (accessDoc) {
-      access.status = accessDoc.status || "none";
-      access.startAt = accessDoc.startAt || null;
-      access.planDays = Number(accessDoc.planDays || 0) || undefined;
-
-      if (access.startAt) {
-        const day = Math.max(
-          1,
-          Math.floor((now - new Date(access.startAt).getTime()) / 1000 / 60 / 60 / 24) + 1
-        );
-        access.todayDay = day;
-      }
-      if (access.planDays && access.todayDay > access.planDays) {
-        access.canRestart = true;
-      }
-    }
-
-    const overlay = {
-      show: access.status !== "active",
-      mode: access.status === "active" && access.canRestart ? "restart" : "purchase",
-      payment: exam.overlay?.payment || exam.payment || {},
-    };
-
-    return ok(res, {
-      success: true,
-      exam: {
-        examId: exam.examId,
-        name: exam.name,
-        price: Number(exam.price || 0),
-        trialDays: Number(exam.trialDays || 0),
-        overlay: exam.overlay || {},
-        payment: exam.payment || {},
-      },
-      access,
-      overlay,
-    });
-  } catch (e) {
-    console.error("[prep_access] /access/status failed:", e);
-    return err(res, 500, { success: false, error: e?.message || "server error" });
-  }
+/* ------------------------- ADMIN: Config ------------------------- */
+router.get("/api/prep/access/admin/config", (req, res) => {
+  const { examId = "" } = req.query || {};
+  const db = loadDB();
+  const cfg = db.configs[examId] || { name: examId, planDays: 21, autoGrant: false, payment: {} };
+  res.json({ success: true, config: cfg });
 });
 
-/* ================================================================== */
-/* PUBLIC: create request + poll                                      */
-/* ================================================================== */
-
-function firstFile(req, ...names) {
-  for (const n of names) {
-    const f = req.files?.[n]?.[0];
-    if (f) return f;
-  }
-  if (req.file) return req.file;
-  return null;
-}
-
-const acceptProofUpload = upload.fields([
-  { name: "screenshot", maxCount: 1 },
-  { name: "file", maxCount: 1 },
-  { name: "image", maxCount: 1 },
-  { name: "proof", maxCount: 1 },
-]);
-
-// Create an access request (accepts multipart or JSON)
-// Includes a duplicate-submission guard if the user already has ACTIVE access
-router.post(
-  "/access/request",
-  (req, res, next) => {
-    const ct = (req.headers["content-type"] || "").toLowerCase();
-    if (ct.includes("multipart/form-data")) return acceptProofUpload(req, res, next);
-    return jsonBody(req, res, next);
-  },
-  async (req, res) => {
-    try {
-      if (!mongoose.connection?.db) {
-        return err(res, 503, { success: false, error: "database not connected" });
-      }
-
-      const b = req.body || {};
-      const examId = String(b.examId || "").trim();
-      const email = String(b.email || b.userEmail || "").trim().toLowerCase();
-      const note = sanitizeText(b.note);
-      const name = sanitizeText(b.name);
-      const phone = sanitizePhone(b.phone);
-      const planKey = sanitizeText(b.planKey);
-      const planLabel = sanitizeText(b.planLabel);
-      const planPrice = b.planPrice != null ? Number(b.planPrice) : undefined;
-
-      if (!examId || !email) {
-        return err(res, 400, { success: false, error: "examId & email required" });
-      }
-
-      // 🔒 Prevent duplicate submissions if already ACTIVE
-      const already = await PrepAccess.findOne({ examId, userEmail: email }).lean();
-      if (already && already.status === "active") {
-        return ok(res, {
-          success: false,
-          error: "You already have active access. No need to submit again.",
-          code: "ALREADY_ACTIVE",
-        });
-      }
-
-      // intent: explicit or infer from current access
-      let intent = String(b.intent || "").trim();
-      if (!intent) {
-        const existing =
-          already || (await PrepAccess.findOne({ examId, userEmail: email }).lean());
-        intent = existing?.status === "active" ? "restart" : "purchase";
-      }
-
-      // optional proof image
-      let screenshotUrl = "";
-      const f = firstFile(req, "screenshot", "file", "image", "proof");
-      if (f?.buffer?.length) {
-        const saved = await storeBuffer({
-          buffer: f.buffer,
-          filename: f.originalname || "payment.jpg",
-          mime: f.mimetype || "application/octet-stream",
-          bucket: "prep-proof",
-        });
-        screenshotUrl = saved.url;
-      }
-
-      const exam = await PrepExam.findOne({ examId }).lean();
-      const priceAt = Number(exam?.price || planPrice || 0);
-      const autoGrant = !!exam?.autoGrantRestart;
-
-      const reqDoc = await PrepAccessRequest.create({
-        examId,
-        userEmail: email,
-        intent,
-        screenshotUrl,
-        note,
-        status: "pending",
-        priceAt,
-        meta: {
-          name,
-          phone,
-          planKey,
-          planLabel,
-          planPrice: planPrice || undefined,
-        },
-      });
-
-      // minimal console marker for debugging
-      await logCreated(reqDoc);
-
-      if (!reqDoc?._id) {
-        return err(res, 500, { success: false, error: "request not saved" });
-      }
-
-      if (autoGrant) {
-        const active = await grantActiveAccess({ examId, email });
-        await PrepAccessRequest.updateOne(
-          { _id: reqDoc._id },
-          { $set: { status: "approved", approvedAt: new Date(), approvedBy: "auto" } }
-        );
-        // Extra small debug line (safe)
-        console.log("[prep_access] auto-granted", {
-          examId,
-          email,
-          startAt: active?.startAt,
-          planDays: active?.planDays,
-        });
-        return ok(res, {
-          success: true,
-          approved: true,
-          requestId: String(reqDoc._id),
-          examId,
-          email,
-          intent,
-        });
-      }
-
-      return ok(res, {
-        success: true,
-        approved: false,
-        requestId: String(reqDoc._id),
-        examId,
-        email,
-        intent,
-      });
-    } catch (e) {
-      console.error("[prep_access] /access/request failed:", e);
-      return err(res, 500, { success: false, error: e?.message || "server error" });
-    }
-  }
-);
-
-// Poll status of latest request (for “waiting...”)
-router.get("/access/request/status", async (req, res) => {
-  try {
-    const { examId, email } = req.query || {};
-    if (!examId || !email) {
-      return err(res, 400, { success: false, error: "examId & email required" });
-    }
-
-    const item = await PrepAccessRequest.findOne({
-      examId,
-      userEmail: email.toLowerCase(),
-    })
-      .sort({ createdAt: -1 })
-      .lean();
-
-    if (!item) return ok(res, { success: true, status: "none" });
-    return ok(res, { success: true, status: item.status, requestId: String(item._id) });
-  } catch (e) {
-    return err(res, 500, { success: false, error: e?.message || "server error" });
-  }
+router.post("/api/prep/access/admin/config", (req, res) => {
+  const { examId, name, planDays, autoGrant, payment } = req.body || {};
+  if (!examId) return res.status(400).json({ success: false, error: "examId required" });
+  const db = loadDB();
+  db.configs[examId] = {
+    ...(db.configs[examId] || {}),
+    name: name ?? (db.configs[examId]?.name || examId),
+    planDays: Number(planDays ?? db.configs[examId]?.planDays ?? 21),
+    autoGrant: !!(autoGrant ?? db.configs[examId]?.autoGrant ?? false),
+    payment: { ...(db.configs[examId]?.payment || {}), ...(payment || {}) },
+  };
+  saveDB(db);
+  res.json({ success: true });
 });
 
-/* ================================================================== */
-/* ADMIN: requests list/approve/revoke                                */
-/* ================================================================== */
-
-// status=all → return all; debug=1 → include counts meta
-router.get("/access/requests", isAdmin, async (req, res) => {
-  try {
-    const { examId, status = "pending", debug } = req.query || {};
-    const q = {};
-    if (examId) q.examId = String(examId);
-    if (status && status !== "all") q.status = status;
-
-    const items = await PrepAccessRequest.find(q).sort({ createdAt: -1 }).limit(200).lean();
-
-    if (debug) {
-      const total = await PrepAccessRequest.countDocuments({});
-      const pending = await PrepAccessRequest.countDocuments({ status: "pending" });
-      const approved = await PrepAccessRequest.countDocuments({ status: "approved" });
-      const rejected = await PrepAccessRequest.countDocuments({ status: "rejected" });
-      return ok(res, {
-        success: true,
-        items,
-        debug: { total, pending, approved, rejected, query: q },
-      });
-    }
-
-    return ok(res, { success: true, items });
-  } catch (e) {
-    return err(res, 500, { success: false, error: e?.message || "server error" });
-  }
+/* ------------------------- ADMIN: Requests list ------------------------- */
+router.get("/api/prep/access/admin/requests", (req, res) => {
+  const { examId = "" } = req.query || {};
+  const db = loadDB();
+  const items = db.requests
+    .filter((r) => r.examId === examId)
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  res.json({ success: true, items });
 });
 
-/* ------------------------------ ENHANCED APPROVE ------------------------- */
+/* ------------------------- ADMIN: approve/reject/revoke ------------------------- */
+/**
+ * POST /api/prep/access/admin/approve
+ * body: { examId, email, mode: 'grant'|'reject'|'revoke' }
+ */
+router.post("/api/prep/access/admin/approve", (req, res) => {
+  const { examId = "", email = "", mode = "" } = req.body || {};
+  const db = loadDB();
 
-router.post("/access/admin/approve", isAdmin, async (req, res) => {
-  try {
-    const { requestId, approve = true } = req.body || {};
-    const ar = await PrepAccessRequest.findById(requestId);
-    if (!ar) return err(res, 404, { success: false, error: "request not found" });
+  const r = latestRequestFor(db, examId, email);
 
-    if (!approve) {
-      ar.status = "rejected";
-      await ar.save();
-      return ok(res, { success: true, request: ar });
-    }
-
-    // ✅ Approve and grant active access
-    const activeDoc = await grantActiveAccess({ examId: ar.examId, email: ar.userEmail });
-
-    ar.status = "approved";
-    ar.approvedAt = new Date();
-    ar.approvedBy = "admin";
-    await ar.save();
-
-    // ✅ Add unlockHint and timestamp for client countdown
-    const unlockHint = {
-      message: "approved, unlocking in 15s",
-      unlockAt: new Date(Date.now() + 15000).toISOString(), // 15 sec later
-      access: {
-        examId: ar.examId,
-        email: ar.userEmail,
-        startAt: activeDoc?.startAt,
-        planDays: activeDoc?.planDays,
-      },
-    };
-
-    // Small debug
-    console.log("[prep_access] admin approved", {
-      requestId: String(ar._id),
-      examId: ar.examId,
-      email: ar.userEmail,
-    });
-
-    return ok(res, { success: true, request: ar, unlockHint });
-  } catch (e) {
-    console.error("[prep_access] /access/admin/approve error:", e);
-    return err(res, 500, { success: false, error: e?.message || "server error" });
+  if (mode === "grant") {
+    if (r) r.status = "approved";
+    setAccess(db, examId, email, "active");
+    saveDB(db);
+    return res.json({ success: true });
   }
+
+  if (mode === "reject") {
+    if (r) r.status = "rejected";
+    setAccess(db, examId, email, "inactive");
+    saveDB(db);
+    return res.json({ success: true });
+  }
+
+  if (mode === "revoke") {
+    setAccess(db, examId, email, "revoked");
+    saveDB(db);
+    return res.json({ success: true });
+  }
+
+  return res.status(400).json({ success: false, error: "mode must be grant|reject|revoke" });
 });
 
-router.post("/access/admin/revoke", isAdmin, async (req, res) => {
-  try {
-    const { examId, email } = req.body || {};
-    if (!examId || !email) {
-      return err(res, 400, { success: false, error: "examId & email required" });
-    }
-    const r = await PrepAccess.updateOne(
-      { examId, userEmail: email.toLowerCase() },
-      { $set: { status: "revoked" } }
-    );
-    return ok(res, { success: true, updated: r.modifiedCount });
-  } catch (e) {
-    return err(res, 500, { success: false, error: e?.message || "server error" });
+/* ------------------------- ADMIN: delete / batch delete requests ------------------------- */
+/**
+ * POST /api/prep/access/admin/delete
+ * body: { ids: string[] }
+ */
+router.post("/api/prep/access/admin/delete", (req, res) => {
+  const { ids } = req.body || {};
+  if (!Array.isArray(ids) || !ids.length) {
+    return res.status(400).json({ success: false, error: "ids[] required" });
   }
+  const db = loadDB();
+  const before = db.requests.length;
+  const idset = new Set(ids.map(String));
+  db.requests = db.requests.filter((r) => !idset.has(String(r.id)));
+  const removed = before - db.requests.length;
+  saveDB(db);
+  res.json({ success: true, removed });
 });
 
-// NEW: Delete a request (admin)
-router.post("/access/admin/delete", isAdmin, async (req, res) => {
-  try {
-    const { requestId } = req.body || {};
-    if (!requestId) {
-      return err(res, 400, { success: false, error: "requestId required" });
-    }
-    const r = await PrepAccessRequest.deleteOne({ _id: requestId });
-    return ok(res, { success: true, deleted: r.deletedCount || 0 });
-  } catch (e) {
-    return err(res, 500, { success: false, error: e?.message || "server error" });
-  }
-});
-
-/* ================================================================== */
-/* QUICK ADMIN (URL toggle with key)                                  */
-/* ================================================================== */
-
-function isAdminLoose(req, res, next) {
-  const key = req.get("X-Owner-Key") || req.query._k || (req.body && req.body._k);
-  const ok = key && key === (process.env.ADMIN_KEY || process.env.VITE_OWNER_KEY || "");
-  if (!ok) return err(res, 401, { success: false, error: "Unauthorized" });
-  next();
-}
-
-router.get("/exams/:examId/overlay-quick-set", isAdminLoose, async (req, res) => {
-  try {
-    const examId = req.params.examId;
-    const {
-      price,
-      trialDays,
-      mode,
-      offsetDays,
-      fixedAt,
-      showOnDay,
-      showAtLocal,
-      tz,
-      upi: upiId,
-      upn: upiName,
-      wa: whatsappNumber,
-      wat: whatsappText,
-      autoGrantRestart,
-    } = req.query || {};
-
-    const overlay = {};
-    if (mode) overlay.mode = String(mode);
-    if (offsetDays != null) overlay.offsetDays = Number(offsetDays);
-    if (fixedAt) overlay.fixedAt = new Date(fixedAt);
-    if (showOnDay != null) overlay.showOnDay = Number(showOnDay);
-    if (showAtLocal) overlay.showAtLocal = String(showAtLocal);
-    if (tz) overlay.tz = String(tz);
-
-    const payment = {};
-    if (upiId) payment.upiId = String(upiId).trim();
-    if (upiName) payment.upiName = String(upiName).trim();
-    if (whatsappNumber) payment.whatsappNumber = String(whatsappNumber).trim();
-    if (whatsappText) payment.whatsappText = String(whatsappText).trim();
-    if (Object.keys(payment).length) overlay.payment = payment;
-
-    const update = {
-      ...(price != null ? { price: Number(price) } : {}),
-      ...(trialDays != null ? { trialDays: Number(trialDays) } : {}),
-      ...(autoGrantRestart != null ? { autoGrantRestart: truthy(autoGrantRestart) } : {}),
-      ...(Object.keys(overlay).length ? { overlay } : {}),
-    };
-
-    if (update.overlay?.mode === "planDayTime" && !("tz" in update.overlay)) {
-      update.overlay.tz = "Asia/Kolkata";
-    }
-
-    const doc = await PrepExam.findOneAndUpdate({ examId }, { $set: update }, { new: true }).lean();
-
-    console.log("[prep_access] overlay-quick-set", { examId, applied: update });
-
-    return ok(res, { success: true, exam: doc, applied: update });
-  } catch (e) {
-    return err(res, 500, { success: false, error: e?.message || "server error" });
-  }
-});
-
-/* ================================================================== */
-/* DEBUG endpoints (safe to keep while you diagnose)                  */
-/* ================================================================== */
-
-// 1) show counts + latest 5, no auth (do not expose publicly forever)
-router.get("/access/requests-debug", async (_req, res) => {
-  try {
-    const total = await PrepAccessRequest.countDocuments({});
-    const pending = await PrepAccessRequest.countDocuments({ status: "pending" });
-    const approved = await PrepAccessRequest.countDocuments({ status: "approved" });
-    const rejected = await PrepAccessRequest.countDocuments({ status: "rejected" });
-
-    const latest = await PrepAccessRequest.find({})
-      .sort({ createdAt: -1 })
-      .limit(5)
-      .select({ examId: 1, userEmail: 1, status: 1, intent: 1, priceAt: 1, createdAt: 1 })
-      .lean();
-
-    return ok(res, { success: true, counts: { total, pending, approved, rejected }, latest });
-  } catch (e) {
-    return err(res, 500, { success: false, error: e?.message || "server error" });
-  }
-});
-
-// 2) dump last N for one exam/email (handy to verify insert)
-router.get("/access/requests-debug/by", async (req, res) => {
-  try {
-    const { examId, email } = req.query || {};
-    const q = {};
-    if (examId) q.examId = String(examId);
-    if (email) q.userEmail = String(email).toLowerCase();
-    const items = await PrepAccessRequest.find(q).sort({ createdAt: -1 }).limit(20).lean();
-    return ok(res, { success: true, items });
-  } catch (e) {
-    return err(res, 500, { success: false, error: e?.message || "server error" });
-  }
-});
-
-// 3) log whenever a request is created (minimal)
-async function logCreated(ar) {
-  try {
-    console.log("[prep_access] created request", {
-      id: String(ar?._id),
-      examId: ar?.examId,
-      userEmail: ar?.userEmail,
-      status: ar?.status,
-      intent: ar?.intent,
-      at: ar?.createdAt,
-    });
-  } catch {}
-}
-
-export default router;
+module.exports = router;
