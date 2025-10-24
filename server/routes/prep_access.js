@@ -1,5 +1,4 @@
-// server/routes/prep_access.js
-import { Router } from "express";
+import express, { Router } from "express";
 import { promises as fs } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -41,7 +40,7 @@ async function ensureDbFile() {
     const initial = {
       // Global overlay/payment config shown to users
       config: {
-        autoGrant: false,              // if true, requests are auto-approved
+        autoGrant: false, // if true, requests are auto-approved
         priceINR: 0,
         upiId: "",
         upiName: "",
@@ -84,6 +83,9 @@ async function saveDB(db) {
 // Helpers
 // ----------------------------------------------------------------------------
 const router = Router();
+
+/* ✅ Ensure JSON body parsing for all endpoints */
+router.use(express.json());
 
 function nowISO() {
   return new Date().toISOString();
@@ -149,7 +151,6 @@ function overlayPayment(db) {
 }
 
 function adminExamName(examId) {
-  // Stub: you can enrich this if you have a real exams table
   const s = String(examId || "").trim();
   if (!s) return "COURSE";
   return s.toUpperCase();
@@ -158,7 +159,6 @@ function adminExamName(examId) {
 // ----------------------------------------------------------------------------
 // PUBLIC: Access status guard
 // ----------------------------------------------------------------------------
-// GET /api/prep/access/status/guard?examId=...&email=...
 router.get("/api/prep/access/status/guard", async (req, res) => {
   try {
     const examId = normExamId(req.query.examId);
@@ -176,20 +176,13 @@ router.get("/api/prep/access/status/guard", async (req, res) => {
     const exam = {
       id: examId,
       name: adminExamName(examId),
-      overlay: {
-        payment: overlayPayment(db),
-      },
+      overlay: { payment: overlayPayment(db) },
     };
 
     let overlay = { mode: "purchase" };
     if (!active && lastReq && lastReq.status === "pending") overlay.mode = "waiting";
 
-    return res.json({
-      success: true,
-      exam,
-      access,
-      overlay,
-    });
+    return res.json({ success: true, exam, access, overlay });
   } catch (e) {
     console.error("[status/guard] error:", e);
     return res.status(500).json({ success: false, error: "Internal error" });
@@ -199,9 +192,8 @@ router.get("/api/prep/access/status/guard", async (req, res) => {
 // ----------------------------------------------------------------------------
 // PUBLIC: Create access request (purchase or restart)
 // ----------------------------------------------------------------------------
-// POST /api/prep/access/request
-// body: { examId, email, intent: "purchase"|"restart", name?, phone?, note? }
 router.post("/api/prep/access/request", async (req, res) => {
+  console.log("[prep_access] incoming request body:", req.body);
   try {
     const { examId, email, intent } = req.body || {};
     const name = String(req.body?.name || "").trim();
@@ -232,7 +224,7 @@ router.post("/api/prep/access/request", async (req, res) => {
       name,
       phone,
       note,
-      status: "pending", // "pending" | "approved" | "rejected"
+      status: "pending",
       createdAt: nowISO(),
       updatedAt: nowISO(),
     };
@@ -251,14 +243,17 @@ router.post("/api/prep/access/request", async (req, res) => {
     return res.json({ success: true, id: reqId, approved });
   } catch (e) {
     console.error("[access/request] error:", e);
-    return res.status(500).json({ success: false, error: "Internal error" });
+    return res.status(500).json({
+      success: false,
+      error: e.message || "Internal error",
+      stack: process.env.NODE_ENV !== "production" ? e.stack : undefined,
+    });
   }
 });
 
 // ----------------------------------------------------------------------------
 // PUBLIC: Poll request status
 // ----------------------------------------------------------------------------
-// GET /api/prep/access/request/status?examId=...&email=...
 router.get("/api/prep/access/request/status", async (req, res) => {
   try {
     const examId = normExamId(req.query.examId);
@@ -281,7 +276,6 @@ router.get("/api/prep/access/request/status", async (req, res) => {
 // ----------------------------------------------------------------------------
 // ADMIN: Get & Save overlay/payment config
 // ----------------------------------------------------------------------------
-// GET /api/admin/prep/access/config
 router.get("/api/admin/prep/access/config", async (_req, res) => {
   try {
     const db = await loadDB();
@@ -292,8 +286,6 @@ router.get("/api/admin/prep/access/config", async (_req, res) => {
   }
 });
 
-// POST /api/admin/prep/access/config
-// body: { autoGrant?, priceINR?, upiId?, upiName?, whatsappNumber?, whatsappText? }
 router.post("/api/admin/prep/access/config", async (req, res) => {
   try {
     const db = await loadDB();
@@ -319,11 +311,10 @@ router.post("/api/admin/prep/access/config", async (req, res) => {
 // ----------------------------------------------------------------------------
 // ADMIN: List requests
 // ----------------------------------------------------------------------------
-// GET /api/admin/prep/access/requests?examId?=&status?=&limit?=50
 router.get("/api/admin/prep/access/requests", async (req, res) => {
   try {
     const examId = normExamId(req.query.examId);
-    const status = String(req.query.status || "").trim(); // "", "pending", "approved", "rejected"
+    const status = String(req.query.status || "").trim();
     const limit = Math.max(1, Math.min(500, Number(req.query.limit || 50)));
 
     const db = await loadDB();
@@ -341,7 +332,6 @@ router.get("/api/admin/prep/access/requests", async (req, res) => {
 // ----------------------------------------------------------------------------
 // ADMIN: Approve / Reject / Revoke
 // ----------------------------------------------------------------------------
-// POST /api/admin/prep/access/approve  body: { id? OR (examId & email) }
 router.post("/api/admin/prep/access/approve", async (req, res) => {
   try {
     const { id } = req.body || {};
@@ -354,7 +344,6 @@ router.post("/api/admin/prep/access/approve", async (req, res) => {
     } else if (examId && email) {
       examId = normExamId(examId);
       email = normEmail(email);
-      // pick latest pending/any
       rec = db.requests
         .filter((r) => r.examId === examId && normEmail(r.email) === email)
         .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0];
@@ -374,7 +363,6 @@ router.post("/api/admin/prep/access/approve", async (req, res) => {
   }
 });
 
-// POST /api/admin/prep/access/reject body: { id? OR (examId & email) }
 router.post("/api/admin/prep/access/reject", async (req, res) => {
   try {
     const { id } = req.body || {};
@@ -405,7 +393,6 @@ router.post("/api/admin/prep/access/reject", async (req, res) => {
   }
 });
 
-// POST /api/admin/prep/access/revoke body: { examId, email }
 router.post("/api/admin/prep/access/revoke", async (req, res) => {
   try {
     const examId = normExamId(req.body?.examId);
@@ -425,9 +412,8 @@ router.post("/api/admin/prep/access/revoke", async (req, res) => {
 });
 
 // ----------------------------------------------------------------------------
-/** ADMIN: Delete single request */
+// ADMIN: Delete single or batch
 // ----------------------------------------------------------------------------
-// POST /api/admin/prep/access/delete body: { id }
 router.post("/api/admin/prep/access/delete", async (req, res) => {
   try {
     const { id } = req.body || {};
@@ -446,10 +432,6 @@ router.post("/api/admin/prep/access/delete", async (req, res) => {
   }
 });
 
-// ----------------------------------------------------------------------------
-/** ADMIN: Batch delete requests */
-// ----------------------------------------------------------------------------
-// POST /api/admin/prep/access/batch-delete body: { ids?:[], examId?, emails?:[] }
 router.post("/api/admin/prep/access/batch-delete", async (req, res) => {
   try {
     const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
@@ -467,7 +449,6 @@ router.post("/api/admin/prep/access/batch-delete", async (req, res) => {
         return !(r.examId === examId && emails.includes(normEmail(r.email)));
       }
       if (examId && !emails.length) {
-        // If only examId provided without emails, keep all (avoid accidental mass-delete)
         return true;
       }
       return true;
