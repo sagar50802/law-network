@@ -234,6 +234,45 @@ router.delete("/exams/:examId", isAdmin, async (req, res) => {
   }
 });
 
+/* ✅ NEW PATCH ROUTE: Save overlay + payment config for AdminPrepPanel */
+router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
+  try {
+    const examId = req.params.examId;
+    const b = req.body || {};
+    if (!examId) return res.status(400).json({ success: false, error: "Missing examId" });
+
+    const update = {
+      price: Number(b.price || 0),
+      trialDays: Number(b.trialDays || 0),
+      overlay: {
+        mode: b.mode || "planDayTime",
+        offsetDays: Number(b.offsetDays || 0),
+        fixedAt: b.fixedAt ? new Date(b.fixedAt) : undefined,
+        showOnDay: Number(b.showOnDay || 1),
+        showAtLocal: b.showAtLocal || "09:00",
+        payment: {
+          upiId: String(b.upiId || b.payment?.upiId || ""),
+          upiName: String(b.upiName || b.payment?.upiName || ""),
+          whatsappNumber: String(b.whatsappNumber || b.payment?.whatsappNumber || ""),
+          whatsappText: String(b.whatsappText || b.payment?.whatsappText || ""),
+        },
+      },
+    };
+
+    const doc = await PrepExam.findOneAndUpdate(
+      { examId },
+      { $set: update },
+      { new: true, upsert: false }
+    );
+
+    if (!doc) return res.status(404).json({ success: false, error: "Exam not found" });
+    res.json({ success: true, exam: doc });
+  } catch (e) {
+    console.error("[PATCH overlay-config] error:", e);
+    res.status(500).json({ success: false, error: e.message || "Server error" });
+  }
+});
+
 /* ------------------------------- Status ---------------------------------- */
 
 router.get("/access/status-raw", async (req, res) => {
@@ -279,7 +318,7 @@ router.get("/user/today", async (req, res) => {
         success: false,
         locked: true,
         overlay: { ...(status.overlay || {}), show: true },
-        message: null, // 👈 hide text, trigger overlay only
+        message: null,
       });
     }
 
