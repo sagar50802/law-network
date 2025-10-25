@@ -198,26 +198,40 @@ router.get("/exams", async (_req, res) => {
   res.json({ success: true, exams });
 });
 
-/* ✅ FINAL FIX — Admin exam creation now works with FormData */
-router.post("/exams", isAdmin, multer().none(), async (req, res) => {
-  try {
-    const { examId, name, scheduleMode = "cohort" } = req.body || {};
-    if (!examId || !name) {
-      return res.status(400).json({ success: false, error: "examId & name required" });
+/* ✅ FINAL FIX — supports both FormData and JSON safely */
+router.post(
+  "/exams",
+  isAdmin,
+  (req, res, next) => {
+    const ct = req.headers["content-type"] || "";
+    if (ct.includes("multipart/form-data")) {
+      return multer().none()(req, res, next);
+    } else if (ct.includes("application/json") || ct.includes("application/x-www-form-urlencoded")) {
+      return express.urlencoded({ extended: true })(req, res, next);
+    } else {
+      return next();
     }
+  },
+  async (req, res) => {
+    try {
+      const { examId, name, scheduleMode = "cohort" } = req.body || {};
+      if (!examId || !name)
+        return res.status(400).json({ success: false, error: "examId & name required" });
 
-    const doc = await PrepExam.findOneAndUpdate(
-      { examId },
-      { $set: { name, scheduleMode } },
-      { upsert: true, new: true }
-    );
-    res.json({ success: true, exam: doc });
-  } catch (e) {
-    console.error("[POST /exams] error:", e);
-    res.status(500).json({ success: false, error: e.message || "server error" });
+      const doc = await PrepExam.findOneAndUpdate(
+        { examId },
+        { $set: { name, scheduleMode } },
+        { upsert: true, new: true }
+      );
+      res.json({ success: true, exam: doc });
+    } catch (e) {
+      console.error("[POST /exams] error:", e);
+      res.status(500).json({ success: false, message: e.message || "Unexpected server error" });
+    }
   }
-});
+);
 
+/* ------------------------ Delete / Overlay / Meta ------------------------ */
 /* ------------------------ Delete / Overlay / Meta ------------------------ */
 
 router.delete("/exams/:examId", isAdmin, async (req, res) => {
@@ -448,7 +462,9 @@ router.post(
       } = req.body || {};
 
       if (!examId || !dayIndex)
-        return res.status(400).json({ success: false, error: "examId & dayIndex required" });
+        return res
+          .status(400)
+          .json({ success: false, error: "examId & dayIndex required" });
 
       const files = [];
       const saveFile = async (f) =>
