@@ -5,28 +5,22 @@ import { fileURLToPath } from "url";
 import crypto from "crypto";
 
 // ----------------------------------------------------------------------------
-// Paths & simple JSON "DB"
+// Paths & simple JSON "DB" — Render Safe
 // ----------------------------------------------------------------------------
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// ✅ Try project /data first, fallback to writable /tmp/data on Render
-const DATA_DIR_PRIMARY = path.join(__dirname, "..", "data");
-const DATA_DIR_FALLBACK = "/tmp/data";
-let DATA_DIR = DATA_DIR_PRIMARY;
+// ✅ Always prefer /tmp for Render, fallback to ./data locally
+const IS_RENDER = process.env.RENDER === "true" || process.env.PORT;
+const DATA_DIR = IS_RENDER
+  ? "/tmp/prep_access_data"
+  : path.join(__dirname, "..", "data");
 
-try {
-  await fs.mkdir(DATA_DIR_PRIMARY, { recursive: true });
-  await fs.access(DATA_DIR_PRIMARY, fs.constants.W_OK);
-} catch {
-  console.warn("⚠️ [prep_access] Primary data dir not writable, using /tmp/data");
-  DATA_DIR = DATA_DIR_FALLBACK;
-  await fs.mkdir(DATA_DIR, { recursive: true });
-}
+await fs.mkdir(DATA_DIR, { recursive: true }).catch(() => {});
 
 const DB_FILE = path.join(DATA_DIR, "prep_access.json");
 
-// Very small write lock to serialize writes to the JSON file
+// Small write lock to serialize concurrent writes
 let _writeLock = Promise.resolve();
 
 async function withWriteLock(fn) {
@@ -49,7 +43,7 @@ async function ensureDbFile() {
     await fs.mkdir(DATA_DIR, { recursive: true });
   } catch {}
   try {
-    await fs.access(DB_FILE);
+    await fs.access(DB_FILE, fs.constants.F_OK);
   } catch {
     const initial = {
       config: {
@@ -69,14 +63,15 @@ async function ensureDbFile() {
 
 async function loadDB() {
   await ensureDbFile();
-  const raw = await fs.readFile(DB_FILE, "utf8");
   try {
+    const raw = await fs.readFile(DB_FILE, "utf8");
     const j = JSON.parse(raw);
     if (!j.config) j.config = { autoGrant: false };
     if (!Array.isArray(j.requests)) j.requests = [];
     if (!Array.isArray(j.grants)) j.grants = [];
     return j;
-  } catch {
+  } catch (err) {
+    console.warn("[prep_access] resetting DB due to read error:", err.message);
     const reset = { config: { autoGrant: false }, requests: [], grants: [] };
     await fs.writeFile(DB_FILE, JSON.stringify(reset, null, 2));
     return reset;
@@ -296,6 +291,7 @@ router.get("/api/admin/prep/access/config", async (_req, res) => {
     return res.status(500).json({ success: false, error: "Internal error" });
   }
 });
+
 router.post("/api/admin/prep/access/config", async (req, res) => {
   try {
     const db = await loadDB();
