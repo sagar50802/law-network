@@ -198,19 +198,17 @@ router.get("/exams", async (_req, res) => {
   res.json({ success: true, exams });
 });
 
-/* ✅ FINAL FIX — supports both FormData and JSON safely */
+/* ✅ FINAL FIX — Correct multipart & JSON handling */
 router.post(
   "/exams",
   isAdmin,
   (req, res, next) => {
     const ct = req.headers["content-type"] || "";
     if (ct.includes("multipart/form-data")) {
-      return multer().none()(req, res, next);
+      multer().none()(req, res, next);
     } else if (ct.includes("application/json") || ct.includes("application/x-www-form-urlencoded")) {
-      return express.urlencoded({ extended: true })(req, res, next);
-    } else {
-      return next();
-    }
+      express.urlencoded({ extended: true })(req, res, next);
+    } else next();
   },
   async (req, res) => {
     try {
@@ -232,8 +230,6 @@ router.post(
 );
 
 /* ------------------------ Delete / Overlay / Meta ------------------------ */
-/* ------------------------ Delete / Overlay / Meta ------------------------ */
-
 router.delete("/exams/:examId", isAdmin, async (req, res) => {
   try {
     const examId = req.params.examId;
@@ -296,7 +292,7 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
   }
 });
 
-/* ✅ NEW: GET /exams/:examId/meta (used by PrepAccessOverlay.jsx) */
+/* ✅ NEW: GET /exams/:examId/meta */
 router.get("/exams/:examId/meta", async (req, res) => {
   try {
     const { examId } = req.params;
@@ -318,7 +314,7 @@ router.get("/exams/:examId/meta", async (req, res) => {
   }
 });
 
-/* ✅ NEW: POST /exams/:examId/meta/test (admin-only quick preview) */
+/* ✅ POST /exams/:examId/meta/test */
 router.post("/exams/:examId/meta/test", isAdmin, async (req, res) => {
   try {
     const { examId } = req.params;
@@ -334,7 +330,7 @@ router.post("/exams/:examId/meta/test", isAdmin, async (req, res) => {
   }
 });
 
-/* ------------------------------- Status ---------------------------------- */
+/* ------------------------------ Status & Access -------------------------- */
 
 router.get("/access/status-raw", async (req, res) => {
   try {
@@ -362,7 +358,6 @@ router.get("/user/summary", async (req, res) => {
   }
 });
 
-/* ✅ Enforce overlay/approval before sending modules */
 router.get("/user/today", async (req, res) => {
   try {
     const { examId, email } = req.query || {};
@@ -395,8 +390,6 @@ router.get("/user/today", async (req, res) => {
     res.status(500).json({ success: false, error: e?.message || "server error" });
   }
 });
-
-/* ------------------------------ User flows ------------------------------- */
 
 router.post("/access/start-trial", async (req, res) => {
   try {
