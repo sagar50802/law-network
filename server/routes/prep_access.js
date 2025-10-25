@@ -1,30 +1,31 @@
+// prep_access.js — Final production version (Mongo persistent, Render-safe)
+// Public + Admin routes fully compatible with your current frontend
+
 import express, { Router } from "express";
 import mongoose from "mongoose";
 import crypto from "crypto";
 
-// ----------------------------------------------------------------------------
-// MongoDB Connection (Persistent Storage)
-// ----------------------------------------------------------------------------
+/* ----------------------------------------------------------------------------
+ * MongoDB connection (persistent storage)
+ * ---------------------------------------------------------------------------- */
 const MONGO_URI =
   process.env.MONGO_URI ||
-  "mongodb+srv://user:password@cluster0.mongodb.net/law_network"; // <-- replace with your real URI
+  "mongodb+srv://user:password@cluster0.mongodb.net/law_network"; // ← replace with your real URI
 
 if (!mongoose.connection.readyState) {
-  mongoose.connect(MONGO_URI, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
-  });
-  mongoose.connection.on("connected", () =>
-    console.log("[prep_access] ✅ MongoDB connected")
-  );
-  mongoose.connection.on("error", (err) =>
-    console.error("[prep_access] ❌ MongoDB error:", err)
-  );
+  mongoose
+    .connect(MONGO_URI, {
+      useNewUrlParser: true,
+      useUnifiedTopology: true,
+      dbName: process.env.MONGO_DB || undefined,
+    })
+    .then(() => console.log("[prep_access] ✅ MongoDB connected"))
+    .catch((err) => console.error("[prep_access] ❌ MongoDB error:", err.message));
 }
 
-// ----------------------------------------------------------------------------
-// MongoDB Schemas (replaces JSON file)
-// ----------------------------------------------------------------------------
+/* ----------------------------------------------------------------------------
+ * Schemas & Models
+ * ---------------------------------------------------------------------------- */
 const configSchema = new mongoose.Schema(
   {
     autoGrant: { type: Boolean, default: false },
@@ -37,47 +38,50 @@ const configSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const dbSchema = new mongoose.Schema({
+  config: configSchema,
+});
+
 const requestSchema = new mongoose.Schema({
   id: { type: String, required: true, unique: true },
-  examId: { type: String, required: true },
-  email: { type: String, required: true },
+  examId: { type: String, required: true }, // stored as provided; matching is case-insensitive where needed
+  email: { type: String, required: true, lowercase: true, trim: true },
   intent: { type: String, default: "purchase" },
   name: String,
   phone: String,
   note: String,
-  status: { type: String, default: "pending" },
+  status: { type: String, default: "pending", enum: ["pending", "approved", "rejected"] },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
 });
 
 const grantSchema = new mongoose.Schema({
-  examId: String,
-  email: String,
-  status: { type: String, default: "active" },
+  examId: { type: String, required: true },
+  email: { type: String, required: true, lowercase: true, trim: true },
+  status: { type: String, default: "active", enum: ["active", "revoked"] },
   grantedAt: { type: Date, default: Date.now },
-  revokedAt: Date,
+  revokedAt: { type: Date },
 });
 
-const dbSchema = new mongoose.Schema({
-  config: configSchema,
-});
+/* Helpful indexes for speed */
+requestSchema.index({ examId: 1, email: 1, createdAt: -1 });
+grantSchema.index({ examId: 1, email: 1, status: 1 });
 
 const ConfigModel = mongoose.model("PrepAccessConfig", dbSchema);
 const RequestModel = mongoose.model("PrepAccessRequest", requestSchema);
 const GrantModel = mongoose.model("PrepAccessGrant", grantSchema);
 
-// ----------------------------------------------------------------------------
-// Helper Functions
-// ----------------------------------------------------------------------------
-const nowISO = () => new Date().toISOString();
+/* ----------------------------------------------------------------------------
+ * Helpers
+ * ---------------------------------------------------------------------------- */
 const rid = () => crypto.randomBytes(12).toString("hex");
 const normEmail = (s) => String(s || "").trim().toLowerCase();
 const normExamId = (s) => String(s || "").trim();
 
 async function getConfig() {
-  let cfg = await ConfigModel.findOne();
-  if (!cfg) {
-    cfg = new ConfigModel({
+  let cfgDoc = await ConfigModel.findOne().lean();
+  if (!cfgDoc) {
+    const seed = new ConfigModel({
       config: {
         autoGrant: false,
         priceINR: 0,
@@ -87,47 +91,56 @@ async function getConfig() {
         whatsappText: "",
       },
     });
-    await cfg.save();
+    await seed.save();
+    cfgDoc = await ConfigModel.findOne().lean();
   }
-  return cfg.config;
+  return cfgDoc.config || {
+    autoGrant: false,
+    priceINR: 0,
+    upiId: "",
+    upiName: "",
+    whatsappNumber: "",
+    whatsappText: "",
+  };
 }
 
 async function saveConfig(data) {
-  let cfg = await ConfigModel.findOne();
-  if (!cfg) cfg = new ConfigModel({ config: data });
-  cfg.config = data;
-  await cfg.save();
-  return cfg.config;
+  let cfgDoc = await ConfigModel.findOne();
+  if (!cfgDoc) cfgDoc = new ConfigModel({ config: data });
+  cfgDoc.config = data;
+  await cfgDoc.save();
+  return cfgDoc.config;
 }
 
 async function findActiveGrant(examId, email) {
-  return await GrantModel.findOne({
+  return GrantModel.findOne({
     examId: normExamId(examId),
     email: normEmail(email),
     status: "active",
-  });
+  }).lean();
 }
 
 async function upsertGrant(examId, email, status) {
+  const now = new Date();
+  const update =
+    status === "active"
+      ? { status: "active", grantedAt: now, $unset: { revokedAt: 1 } }
+      : { status: "revoked", revokedAt: now };
   const g = await GrantModel.findOneAndUpdate(
     { examId: normExamId(examId), email: normEmail(email) },
-    {
-      $set: {
-        status,
-        grantedAt: status === "active" ? new Date() : undefined,
-        revokedAt: status === "revoked" ? new Date() : undefined,
-      },
-    },
+    { $set: update },
     { upsert: true, new: true }
   );
   return g;
 }
 
 async function latestRequest(examId, email) {
-  return await RequestModel.findOne({
+  return RequestModel.findOne({
     examId: normExamId(examId),
     email: normEmail(email),
-  }).sort({ createdAt: -1 });
+  })
+    .sort({ createdAt: -1 })
+    .lean();
 }
 
 function overlayPayment(cfg) {
@@ -145,11 +158,14 @@ function adminExamName(examId) {
   return s ? s.toUpperCase() : "COURSE";
 }
 
-// ----------------------------------------------------------------------------
-// Router Setup
-// ----------------------------------------------------------------------------
+/* ----------------------------------------------------------------------------
+ * Router
+ * ---------------------------------------------------------------------------- */
 const router = Router();
-router.use(express.json());
+
+/* Robust body parsing:
+   - Accept proper JSON bodies
+   - Also tolerate text bodies containing JSON (if client mislabels content-type) */
 router.use(express.text({ type: () => true }));
 router.use((req, _res, next) => {
   try {
@@ -157,22 +173,22 @@ router.use((req, _res, next) => {
       req.body = JSON.parse(req.body);
     }
   } catch {
-    req.body = {};
+    // ignore; we'll still allow fallback to express.json
   }
   next();
 });
+router.use(express.json());
 
-// ----------------------------------------------------------------------------
-// PUBLIC ROUTES
-// ----------------------------------------------------------------------------
+/* ----------------------------------------------------------------------------
+ * PUBLIC ROUTES
+ * ---------------------------------------------------------------------------- */
 
-// Guard status
+/* Guard: are we active / inactive, and what should overlay show? */
 router.get("/api/prep/access/status/guard", async (req, res) => {
   try {
     const examId = normExamId(req.query.examId);
     const email = normEmail(req.query.email);
-    if (!examId)
-      return res.status(400).json({ success: false, error: "Missing examId" });
+    if (!examId) return res.status(400).json({ success: false, error: "Missing examId" });
 
     const cfg = await getConfig();
     const active = email ? await findActiveGrant(examId, email) : null;
@@ -184,17 +200,18 @@ router.get("/api/prep/access/status/guard", async (req, res) => {
       name: adminExamName(examId),
       overlay: { payment: overlayPayment(cfg) },
     };
+
     let overlay = { mode: "purchase" };
     if (!active && lastReq && lastReq.status === "pending") overlay.mode = "waiting";
 
-    return res.json({ success: true, exam, access, overlay });
+    res.json({ success: true, exam, access, overlay });
   } catch (e) {
     console.error("[status/guard] error:", e);
-    return res.status(500).json({ success: false, error: "Internal error" });
+    res.status(500).json({ success: false, error: "Internal error" });
   }
 });
 
-// Create request
+/* Create access request */
 router.post("/api/prep/access/request", async (req, res) => {
   try {
     const { examId, email, intent } = req.body || {};
@@ -204,8 +221,9 @@ router.post("/api/prep/access/request", async (req, res) => {
 
     const ex = normExamId(examId);
     const em = normEmail(email);
-    if (!ex || !em)
+    if (!ex || !em) {
       return res.status(400).json({ success: false, error: "Missing examId or email" });
+    }
 
     const cfg = await getConfig();
 
@@ -222,56 +240,60 @@ router.post("/api/prep/access/request", async (req, res) => {
       phone,
       note,
       status: "pending",
+      createdAt: new Date(),
+      updatedAt: new Date(),
     });
 
     let approved = false;
     if (cfg.autoGrant) {
       rec.status = "approved";
-      approved = true;
+      rec.updatedAt = new Date();
       await upsertGrant(ex, em, "active");
+      approved = true;
     }
 
     await rec.save();
-    return res.json({ success: true, id: reqId, approved });
+    res.json({ success: true, id: reqId, approved });
   } catch (e) {
     console.error("[access/request] error:", e);
-    return res.status(500).json({ success: false, error: e.message });
+    res.status(500).json({ success: false, error: e.message || "Internal error" });
   }
 });
 
-// Poll status
+/* Poll last request status */
 router.get("/api/prep/access/request/status", async (req, res) => {
   try {
     const examId = normExamId(req.query.examId);
     const email = normEmail(req.query.email);
-    if (!examId || !email)
+    if (!examId || !email) {
       return res.status(400).json({ success: false, error: "Missing examId or email" });
+    }
 
     const last = await latestRequest(examId, email);
     if (!last) return res.json({ success: true, status: null });
-    return res.json({ success: true, status: last.status, id: last.id });
+    res.json({ success: true, status: last.status, id: last.id });
   } catch (e) {
     console.error("[request/status] error:", e);
-    return res.status(500).json({ success: false, error: "Internal error" });
+    res.status(500).json({ success: false, error: "Internal error" });
   }
 });
 
-// ----------------------------------------------------------------------------
-// ADMIN ROUTES
-// ----------------------------------------------------------------------------
+/* ----------------------------------------------------------------------------
+ * ADMIN ROUTES
+ * ---------------------------------------------------------------------------- */
 
-// Get config
+/* Get config */
 router.get("/api/admin/prep/access/config", async (_req, res) => {
   try {
     const cfg = await getConfig();
-    return res.json({ success: true, config: cfg });
+    res.json({ success: true, config: cfg });
   } catch (e) {
     console.error("[admin/config:get] error:", e);
-    return res.status(500).json({ success: false, error: "Internal error" });
+    res.status(500).json({ success: false, error: "Internal error" });
   }
 });
 
-// Save config
+/* Save config */
 router.post("/api/admin/prep/access/config", async (req, res) => {
   try {
     const b = req.body || {};
@@ -284,22 +306,22 @@ router.post("/api/admin/prep/access/config", async (req, res) => {
       whatsappText: String(b.whatsappText || ""),
     };
     const cfg = await saveConfig(data);
-    return res.json({ success: true, config: cfg });
+    res.json({ success: true, config: cfg });
   } catch (e) {
     console.error("[admin/config:post] error:", e);
-    return res.status(500).json({ success: false, error: "Internal error" });
+    res.status(500).json({ success: false, error: "Internal error" });
   }
 });
 
-// List requests
+/* List requests (case-insensitive examId; supports no examId for global view) */
 router.get("/api/admin/prep/access/requests", async (req, res) => {
   try {
     const examId = normExamId(req.query.examId);
     const status = String(req.query.status || "").trim();
     const limit = Math.max(1, Math.min(500, Number(req.query.limit || 50)));
 
-    let q = {};
-    if (examId) q.examId = examId;
+    const q = {};
+    if (examId) q.examId = new RegExp(`^${examId}$`, "i"); // tolerant match
     if (status) q.status = status;
 
     const list = await RequestModel.find(q)
@@ -307,91 +329,107 @@ router.get("/api/admin/prep/access/requests", async (req, res) => {
       .limit(limit)
       .lean();
 
-    return res.json({ success: true, items: list });
+    res.json({ success: true, items: list });
   } catch (e) {
     console.error("[admin/requests:list] error:", e);
-    return res.status(500).json({ success: false, error: "Internal error" });
+    res.status(500).json({ success: false, error: "Internal error" });
   }
 });
 
-// Approve request
+/* Approve latest request for (examId,email) or by id */
 router.post("/api/admin/prep/access/approve", async (req, res) => {
   try {
     const { id } = req.body || {};
     let { examId, email } = req.body || {};
 
-    let rec = id
-      ? await RequestModel.findOne({ id })
-      : await RequestModel.findOne({ examId, email }).sort({ createdAt: -1 });
-
+    let rec = null;
+    if (id) {
+      rec = await RequestModel.findOne({ id });
+    } else if (examId && email) {
+      rec = await RequestModel.findOne({
+        examId: new RegExp(`^${normExamId(examId)}$`, "i"),
+        email: normEmail(email),
+      })
+        .sort({ createdAt: -1 })
+        .exec();
+    }
     if (!rec) return res.status(404).json({ success: false, error: "Request not found" });
 
     rec.status = "approved";
     rec.updatedAt = new Date();
     await rec.save();
+
     await upsertGrant(rec.examId, rec.email, "active");
 
-    return res.json({ success: true, request: rec });
+    res.json({ success: true, request: rec.toObject() });
   } catch (e) {
     console.error("[admin/approve] error:", e);
-    return res.status(500).json({ success: false, error: "Internal error" });
+    res.status(500).json({ success: false, error: "Internal error" });
   }
 });
 
-// Reject request
+/* Reject */
 router.post("/api/admin/prep/access/reject", async (req, res) => {
   try {
     const { id } = req.body || {};
     let { examId, email } = req.body || {};
 
-    let rec = id
-      ? await RequestModel.findOne({ id })
-      : await RequestModel.findOne({ examId, email }).sort({ createdAt: -1 });
-
+    let rec = null;
+    if (id) {
+      rec = await RequestModel.findOne({ id });
+    } else if (examId && email) {
+      rec = await RequestModel.findOne({
+        examId: new RegExp(`^${normExamId(examId)}$`, "i"),
+        email: normEmail(email),
+      })
+        .sort({ createdAt: -1 })
+        .exec();
+    }
     if (!rec) return res.status(404).json({ success: false, error: "Request not found" });
 
     rec.status = "rejected";
     rec.updatedAt = new Date();
     await rec.save();
 
-    return res.json({ success: true, request: rec });
+    res.json({ success: true, request: rec.toObject() });
   } catch (e) {
     console.error("[admin/reject] error:", e);
-    return res.status(500).json({ success: false, error: "Internal error" });
+    res.status(500).json({ success: false, error: "Internal error" });
   }
 });
 
-// Revoke
+/* Revoke active grant */
 router.post("/api/admin/prep/access/revoke", async (req, res) => {
   try {
     const examId = normExamId(req.body?.examId);
     const email = normEmail(req.body?.email);
-    if (!examId || !email)
+    if (!examId || !email) {
       return res.status(400).json({ success: false, error: "Missing examId or email" });
+    }
 
     const g = await upsertGrant(examId, email, "revoked");
-    return res.json({ success: true, grant: g });
+    res.json({ success: true, grant: g.toObject() });
   } catch (e) {
     console.error("[admin/revoke] error:", e);
-    return res.status(500).json({ success: false, error: "Internal error" });
+    res.status(500).json({ success: false, error: "Internal error" });
   }
 });
 
-// Delete
+/* Delete one request by id */
 router.post("/api/admin/prep/access/delete", async (req, res) => {
   try {
     const { id } = req.body || {};
     if (!id) return res.status(400).json({ success: false, error: "Missing id" });
 
     const r = await RequestModel.deleteOne({ id });
-    return res.json({ success: true, removed: r.deletedCount });
+    res.json({ success: true, removed: r.deletedCount || 0 });
   } catch (e) {
     console.error("[admin/delete] error:", e);
-    return res.status(500).json({ success: false, error: "Internal error" });
+    res.status(500).json({ success: false, error: "Internal error" });
   }
 });
 
-// Batch delete
+/* Batch delete by ids (or optional examId+emails) */
 router.post("/api/admin/prep/access/batch-delete", async (req, res) => {
   try {
     const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
@@ -402,18 +440,22 @@ router.post("/api/admin/prep/access/batch-delete", async (req, res) => {
 
     const filter = {};
     if (ids.length) filter.id = { $in: ids };
-    if (examId) filter.examId = examId;
+    if (examId) filter.examId = new RegExp(`^${examId}$`, "i");
     if (emails.length) filter.email = { $in: emails };
 
+    if (!Object.keys(filter).length) {
+      return res.json({ success: true, removed: 0 });
+    }
+
     const r = await RequestModel.deleteMany(filter);
-    return res.json({ success: true, removed: r.deletedCount });
+    res.json({ success: true, removed: r.deletedCount || 0 });
   } catch (e) {
     console.error("[admin/batch-delete] error:", e);
-    return res.status(500).json({ success: false, error: "Internal error" });
+    res.status(500).json({ success: false, error: "Internal error" });
   }
 });
 
-// ----------------------------------------------------------------------------
-// Export
-// ----------------------------------------------------------------------------
+/* ----------------------------------------------------------------------------
+ * Export
+ * ---------------------------------------------------------------------------- */
 export default router;
