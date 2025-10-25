@@ -173,8 +173,9 @@ app.use("/api/qr", qrRoutes);
 app.use("/api/exams", examRoutes);
 
 /* ✅ Correct Mounting for Prep Routes */
-app.use("/api/prep", prepAccessRoutes);  // handles /api/prep/access/... endpoints
-app.use("/api/prep", prepRoutes);        // handles /api/prep/exams, /user/today, etc.
+app.use("/api/prep", prepAccessRoutes);          // /api/prep/access/... (user side)
+app.use("/api/admin/prep", prepAccessRoutes);    // /api/admin/prep/access/... (admin side)
+app.use("/api/prep", prepRoutes);   
 
 app.use("/api/files", filesRoutes);
 app.use("/api/testseries", testseriesRoutes);
