@@ -1,50 +1,83 @@
 import express, { Router } from "express";
-import { promises as fs } from "fs";
-import path from "path";
-import { fileURLToPath } from "url";
+import mongoose from "mongoose";
 import crypto from "crypto";
 
 // ----------------------------------------------------------------------------
-// Paths & JSON "DB" — Render Safe & Persistent
+// MongoDB Connection (Persistent Storage)
 // ----------------------------------------------------------------------------
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const MONGO_URI =
+  process.env.MONGO_URI ||
+  "mongodb+srv://user:password@cluster0.mongodb.net/law_network"; // <-- replace with your real URI
 
-// ✅ Use Render disk if attached; otherwise /tmp fallback (always writable)
-const IS_RENDER = process.env.RENDER === "true" || process.env.PORT;
-const DATA_DIR = IS_RENDER
-  ? (process.env.DATA_DIR || "/var/data/prep_access") // persistent disk
-  : path.join(__dirname, "..", "data");
-
-await fs.mkdir(DATA_DIR, { recursive: true }).catch(() => {});
-const DB_FILE = path.join(DATA_DIR, "prep_access.json");
-
-// simple write lock to avoid race conditions
-let _writeLock = Promise.resolve();
-
-async function withWriteLock(fn) {
-  const prev = _writeLock;
-  let release;
-  _writeLock = new Promise((res) => (release = res));
-  try {
-    await prev;
-    const result = await fn();
-    release();
-    return result;
-  } catch (err) {
-    release();
-    throw err;
-  }
+if (!mongoose.connection.readyState) {
+  mongoose.connect(MONGO_URI, {
+    useNewUrlParser: true,
+    useUnifiedTopology: true,
+  });
+  mongoose.connection.on("connected", () =>
+    console.log("[prep_access] ✅ MongoDB connected")
+  );
+  mongoose.connection.on("error", (err) =>
+    console.error("[prep_access] ❌ MongoDB error:", err)
+  );
 }
 
-async function ensureDbFile() {
-  try {
-    await fs.mkdir(DATA_DIR, { recursive: true });
-  } catch {}
-  try {
-    await fs.access(DB_FILE, fs.constants.F_OK);
-  } catch {
-    const init = {
+// ----------------------------------------------------------------------------
+// MongoDB Schemas (replaces JSON file)
+// ----------------------------------------------------------------------------
+const configSchema = new mongoose.Schema(
+  {
+    autoGrant: { type: Boolean, default: false },
+    priceINR: { type: Number, default: 0 },
+    upiId: { type: String, default: "" },
+    upiName: { type: String, default: "" },
+    whatsappNumber: { type: String, default: "" },
+    whatsappText: { type: String, default: "" },
+  },
+  { _id: false }
+);
+
+const requestSchema = new mongoose.Schema({
+  id: { type: String, required: true, unique: true },
+  examId: { type: String, required: true },
+  email: { type: String, required: true },
+  intent: { type: String, default: "purchase" },
+  name: String,
+  phone: String,
+  note: String,
+  status: { type: String, default: "pending" },
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now },
+});
+
+const grantSchema = new mongoose.Schema({
+  examId: String,
+  email: String,
+  status: { type: String, default: "active" },
+  grantedAt: { type: Date, default: Date.now },
+  revokedAt: Date,
+});
+
+const dbSchema = new mongoose.Schema({
+  config: configSchema,
+});
+
+const ConfigModel = mongoose.model("PrepAccessConfig", dbSchema);
+const RequestModel = mongoose.model("PrepAccessRequest", requestSchema);
+const GrantModel = mongoose.model("PrepAccessGrant", grantSchema);
+
+// ----------------------------------------------------------------------------
+// Helper Functions
+// ----------------------------------------------------------------------------
+const nowISO = () => new Date().toISOString();
+const rid = () => crypto.randomBytes(12).toString("hex");
+const normEmail = (s) => String(s || "").trim().toLowerCase();
+const normExamId = (s) => String(s || "").trim();
+
+async function getConfig() {
+  let cfg = await ConfigModel.findOne();
+  if (!cfg) {
+    cfg = new ConfigModel({
       config: {
         autoGrant: false,
         priceINR: 0,
@@ -53,42 +86,70 @@ async function ensureDbFile() {
         whatsappNumber: "",
         whatsappText: "",
       },
-      requests: [],
-      grants: [],
-    };
-    await fs.writeFile(DB_FILE, JSON.stringify(init, null, 2));
+    });
+    await cfg.save();
   }
+  return cfg.config;
 }
 
-async function loadDB() {
-  await ensureDbFile();
-  try {
-    const raw = await fs.readFile(DB_FILE, "utf8");
-    const j = JSON.parse(raw);
-    if (!j.config) j.config = { autoGrant: false };
-    if (!Array.isArray(j.requests)) j.requests = [];
-    if (!Array.isArray(j.grants)) j.grants = [];
-    return j;
-  } catch (err) {
-    console.warn("[prep_access] DB parse error, resetting:", err.message);
-    const reset = { config: { autoGrant: false }, requests: [], grants: [] };
-    await fs.writeFile(DB_FILE, JSON.stringify(reset, null, 2));
-    return reset;
-  }
+async function saveConfig(data) {
+  let cfg = await ConfigModel.findOne();
+  if (!cfg) cfg = new ConfigModel({ config: data });
+  cfg.config = data;
+  await cfg.save();
+  return cfg.config;
 }
 
-async function saveDB(db) {
-  await withWriteLock(async () => {
-    await fs.writeFile(DB_FILE, JSON.stringify(db, null, 2));
+async function findActiveGrant(examId, email) {
+  return await GrantModel.findOne({
+    examId: normExamId(examId),
+    email: normEmail(email),
+    status: "active",
   });
 }
 
+async function upsertGrant(examId, email, status) {
+  const g = await GrantModel.findOneAndUpdate(
+    { examId: normExamId(examId), email: normEmail(email) },
+    {
+      $set: {
+        status,
+        grantedAt: status === "active" ? new Date() : undefined,
+        revokedAt: status === "revoked" ? new Date() : undefined,
+      },
+    },
+    { upsert: true, new: true }
+  );
+  return g;
+}
+
+async function latestRequest(examId, email) {
+  return await RequestModel.findOne({
+    examId: normExamId(examId),
+    email: normEmail(email),
+  }).sort({ createdAt: -1 });
+}
+
+function overlayPayment(cfg) {
+  return {
+    priceINR: Number(cfg.priceINR || 0),
+    upiId: String(cfg.upiId || ""),
+    upiName: String(cfg.upiName || ""),
+    whatsappNumber: String(cfg.whatsappNumber || ""),
+    whatsappText: String(cfg.whatsappText || ""),
+  };
+}
+
+function adminExamName(examId) {
+  const s = String(examId || "").trim();
+  return s ? s.toUpperCase() : "COURSE";
+}
+
 // ----------------------------------------------------------------------------
-// Router setup & middleware
+// Router Setup
 // ----------------------------------------------------------------------------
 const router = Router();
-
-// handle JSON and text bodies
+router.use(express.json());
 router.use(express.text({ type: () => true }));
 router.use((req, _res, next) => {
   try {
@@ -100,89 +161,29 @@ router.use((req, _res, next) => {
   }
   next();
 });
-router.use(express.json());
-
-// ----------------------------------------------------------------------------
-// Helper functions
-// ----------------------------------------------------------------------------
-const nowISO = () => new Date().toISOString();
-const rid = () => crypto.randomBytes(12).toString("hex");
-const normEmail = (s) => String(s || "").trim().toLowerCase();
-const normExamId = (s) => String(s || "").trim();
-
-function findActiveGrant(db, examId, email) {
-  examId = normExamId(examId);
-  email = normEmail(email);
-  return db.grants.find(
-    (g) => g.examId === examId && normEmail(g.email) === email && g.status === "active"
-  );
-}
-
-function upsertGrant(db, examId, email, status) {
-  examId = normExamId(examId);
-  email = normEmail(email);
-  let g = db.grants.find((x) => x.examId === examId && normEmail(x.email) === email);
-  if (!g) {
-    g = { examId, email, status: "active", grantedAt: nowISO() };
-    db.grants.push(g);
-  }
-  if (status === "active") {
-    g.status = "active";
-    g.grantedAt = nowISO();
-    delete g.revokedAt;
-  } else if (status === "revoked") {
-    g.status = "revoked";
-    g.revokedAt = nowISO();
-  }
-  return g;
-}
-
-function latestRequest(db, examId, email) {
-  examId = normExamId(examId);
-  email = normEmail(email);
-  return db.requests
-    .filter((r) => r.examId === examId && normEmail(r.email) === email)
-    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0] || null;
-}
-
-function overlayPayment(db) {
-  const c = db.config || {};
-  return {
-    priceINR: Number(c.priceINR || 0),
-    upiId: String(c.upiId || ""),
-    upiName: String(c.upiName || ""),
-    whatsappNumber: String(c.whatsappNumber || ""),
-    whatsappText: String(c.whatsappText || ""),
-  };
-}
-
-function adminExamName(examId) {
-  const s = String(examId || "").trim();
-  return s ? s.toUpperCase() : "COURSE";
-}
 
 // ----------------------------------------------------------------------------
 // PUBLIC ROUTES
 // ----------------------------------------------------------------------------
 
-// Access guard
+// Guard status
 router.get("/api/prep/access/status/guard", async (req, res) => {
   try {
     const examId = normExamId(req.query.examId);
     const email = normEmail(req.query.email);
-    if (!examId) return res.status(400).json({ success: false, error: "Missing examId" });
+    if (!examId)
+      return res.status(400).json({ success: false, error: "Missing examId" });
 
-    const db = await loadDB();
-    const active = email ? findActiveGrant(db, examId, email) : null;
-    const lastReq = email ? latestRequest(db, examId, email) : null;
+    const cfg = await getConfig();
+    const active = email ? await findActiveGrant(examId, email) : null;
+    const lastReq = email ? await latestRequest(examId, email) : null;
 
     const access = { status: active ? "active" : "inactive" };
     const exam = {
       id: examId,
       name: adminExamName(examId),
-      overlay: { payment: overlayPayment(db) },
+      overlay: { payment: overlayPayment(cfg) },
     };
-
     let overlay = { mode: "purchase" };
     if (!active && lastReq && lastReq.status === "pending") overlay.mode = "waiting";
 
@@ -195,7 +196,6 @@ router.get("/api/prep/access/status/guard", async (req, res) => {
 
 // Create request
 router.post("/api/prep/access/request", async (req, res) => {
-  console.log("[prep_access] incoming:", req.body);
   try {
     const { examId, email, intent } = req.body || {};
     const name = String(req.body?.name || "").trim();
@@ -207,13 +207,13 @@ router.post("/api/prep/access/request", async (req, res) => {
     if (!ex || !em)
       return res.status(400).json({ success: false, error: "Missing examId or email" });
 
-    const db = await loadDB();
-    const cfg = db.config || {};
+    const cfg = await getConfig();
 
-    if (findActiveGrant(db, ex, em)) return res.json({ success: true, code: "ALREADY_ACTIVE" });
+    const already = await findActiveGrant(ex, em);
+    if (already) return res.json({ success: true, code: "ALREADY_ACTIVE" });
 
     const reqId = rid();
-    const rec = {
+    const rec = new RequestModel({
       id: reqId,
       examId: ex,
       email: em,
@@ -222,20 +222,16 @@ router.post("/api/prep/access/request", async (req, res) => {
       phone,
       note,
       status: "pending",
-      createdAt: nowISO(),
-      updatedAt: nowISO(),
-    };
-    db.requests.push(rec);
+    });
 
     let approved = false;
     if (cfg.autoGrant) {
       rec.status = "approved";
-      rec.updatedAt = nowISO();
-      upsertGrant(db, ex, em, "active");
       approved = true;
+      await upsertGrant(ex, em, "active");
     }
 
-    await saveDB(db);
+    await rec.save();
     return res.json({ success: true, id: reqId, approved });
   } catch (e) {
     console.error("[access/request] error:", e);
@@ -251,10 +247,8 @@ router.get("/api/prep/access/request/status", async (req, res) => {
     if (!examId || !email)
       return res.status(400).json({ success: false, error: "Missing examId or email" });
 
-    const db = await loadDB();
-    const last = latestRequest(db, examId, email);
+    const last = await latestRequest(examId, email);
     if (!last) return res.json({ success: true, status: null });
-
     return res.json({ success: true, status: last.status, id: last.id });
   } catch (e) {
     console.error("[request/status] error:", e);
@@ -269,8 +263,8 @@ router.get("/api/prep/access/request/status", async (req, res) => {
 // Get config
 router.get("/api/admin/prep/access/config", async (_req, res) => {
   try {
-    const db = await loadDB();
-    return res.json({ success: true, config: db.config || {} });
+    const cfg = await getConfig();
+    return res.json({ success: true, config: cfg });
   } catch (e) {
     console.error("[admin/config:get] error:", e);
     return res.status(500).json({ success: false, error: "Internal error" });
@@ -280,9 +274,8 @@ router.get("/api/admin/prep/access/config", async (_req, res) => {
 // Save config
 router.post("/api/admin/prep/access/config", async (req, res) => {
   try {
-    const db = await loadDB();
     const b = req.body || {};
-    db.config = {
+    const data = {
       autoGrant: Boolean(b.autoGrant),
       priceINR: Number(b.priceINR || 0),
       upiId: String(b.upiId || ""),
@@ -290,8 +283,8 @@ router.post("/api/admin/prep/access/config", async (req, res) => {
       whatsappNumber: String(b.whatsappNumber || ""),
       whatsappText: String(b.whatsappText || ""),
     };
-    await saveDB(db);
-    return res.json({ success: true, config: db.config });
+    const cfg = await saveConfig(data);
+    return res.json({ success: true, config: cfg });
   } catch (e) {
     console.error("[admin/config:post] error:", e);
     return res.status(500).json({ success: false, error: "Internal error" });
@@ -305,12 +298,16 @@ router.get("/api/admin/prep/access/requests", async (req, res) => {
     const status = String(req.query.status || "").trim();
     const limit = Math.max(1, Math.min(500, Number(req.query.limit || 50)));
 
-    const db = await loadDB();
-    let list = db.requests.slice().sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-    if (examId) list = list.filter((r) => r.examId === examId);
-    if (status) list = list.filter((r) => r.status === status);
+    let q = {};
+    if (examId) q.examId = examId;
+    if (status) q.status = status;
 
-    return res.json({ success: true, items: list.slice(0, limit) });
+    const list = await RequestModel.find(q)
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .lean();
+
+    return res.json({ success: true, items: list });
   } catch (e) {
     console.error("[admin/requests:list] error:", e);
     return res.status(500).json({ success: false, error: "Internal error" });
@@ -322,23 +319,17 @@ router.post("/api/admin/prep/access/approve", async (req, res) => {
   try {
     const { id } = req.body || {};
     let { examId, email } = req.body || {};
-    const db = await loadDB();
 
-    let rec = null;
-    if (id) rec = db.requests.find((r) => r.id === id);
-    else if (examId && email) {
-      examId = normExamId(examId);
-      email = normEmail(email);
-      rec = db.requests
-        .filter((r) => r.examId === examId && normEmail(r.email) === email)
-        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0];
-    }
+    let rec = id
+      ? await RequestModel.findOne({ id })
+      : await RequestModel.findOne({ examId, email }).sort({ createdAt: -1 });
+
     if (!rec) return res.status(404).json({ success: false, error: "Request not found" });
 
     rec.status = "approved";
-    rec.updatedAt = nowISO();
-    upsertGrant(db, rec.examId, rec.email, "active");
-    await saveDB(db);
+    rec.updatedAt = new Date();
+    await rec.save();
+    await upsertGrant(rec.examId, rec.email, "active");
 
     return res.json({ success: true, request: rec });
   } catch (e) {
@@ -352,21 +343,16 @@ router.post("/api/admin/prep/access/reject", async (req, res) => {
   try {
     const { id } = req.body || {};
     let { examId, email } = req.body || {};
-    const db = await loadDB();
-    let rec = null;
-    if (id) rec = db.requests.find((r) => r.id === id);
-    else if (examId && email) {
-      examId = normExamId(examId);
-      email = normEmail(email);
-      rec = db.requests
-        .filter((r) => r.examId === examId && normEmail(r.email) === email)
-        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0];
-    }
+
+    let rec = id
+      ? await RequestModel.findOne({ id })
+      : await RequestModel.findOne({ examId, email }).sort({ createdAt: -1 });
+
     if (!rec) return res.status(404).json({ success: false, error: "Request not found" });
 
     rec.status = "rejected";
-    rec.updatedAt = nowISO();
-    await saveDB(db);
+    rec.updatedAt = new Date();
+    await rec.save();
 
     return res.json({ success: true, request: rec });
   } catch (e) {
@@ -375,7 +361,7 @@ router.post("/api/admin/prep/access/reject", async (req, res) => {
   }
 });
 
-// Revoke grant
+// Revoke
 router.post("/api/admin/prep/access/revoke", async (req, res) => {
   try {
     const examId = normExamId(req.body?.examId);
@@ -383,9 +369,7 @@ router.post("/api/admin/prep/access/revoke", async (req, res) => {
     if (!examId || !email)
       return res.status(400).json({ success: false, error: "Missing examId or email" });
 
-    const db = await loadDB();
-    const g = upsertGrant(db, examId, email, "revoked");
-    await saveDB(db);
+    const g = await upsertGrant(examId, email, "revoked");
     return res.json({ success: true, grant: g });
   } catch (e) {
     console.error("[admin/revoke] error:", e);
@@ -393,19 +377,14 @@ router.post("/api/admin/prep/access/revoke", async (req, res) => {
   }
 });
 
-// Delete request
+// Delete
 router.post("/api/admin/prep/access/delete", async (req, res) => {
   try {
     const { id } = req.body || {};
     if (!id) return res.status(400).json({ success: false, error: "Missing id" });
 
-    const db = await loadDB();
-    const before = db.requests.length;
-    db.requests = db.requests.filter((r) => r.id !== id);
-    const removed = before - db.requests.length;
-    await saveDB(db);
-
-    return res.json({ success: true, removed });
+    const r = await RequestModel.deleteOne({ id });
+    return res.json({ success: true, removed: r.deletedCount });
   } catch (e) {
     console.error("[admin/delete] error:", e);
     return res.status(500).json({ success: false, error: "Internal error" });
@@ -420,20 +399,14 @@ router.post("/api/admin/prep/access/batch-delete", async (req, res) => {
     const emails = Array.isArray(req.body?.emails)
       ? req.body.emails.map(normEmail).filter(Boolean)
       : [];
-    const db = await loadDB();
-    const before = db.requests.length;
 
-    db.requests = db.requests.filter((r) => {
-      if (ids.length && ids.includes(r.id)) return false;
-      if (examId && emails.length)
-        return !(r.examId === examId && emails.includes(normEmail(r.email)));
-      if (examId && !emails.length) return true;
-      return true;
-    });
+    const filter = {};
+    if (ids.length) filter.id = { $in: ids };
+    if (examId) filter.examId = examId;
+    if (emails.length) filter.email = { $in: emails };
 
-    const removed = before - db.requests.length;
-    await saveDB(db);
-    return res.json({ success: true, removed });
+    const r = await RequestModel.deleteMany(filter);
+    return res.json({ success: true, removed: r.deletedCount });
   } catch (e) {
     console.error("[admin/batch-delete] error:", e);
     return res.status(500).json({ success: false, error: "Internal error" });
