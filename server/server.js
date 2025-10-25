@@ -156,8 +156,6 @@ import prepAccessRoutes from "./routes/prep_access.js";
 import filesRoutes from "./routes/files.js";
 import testseriesRoutes from "./routes/testseries.js";
 import plagiarismRoutes from "./routes/plagiarism.js";
-
-/* ---------- ✅ New Research Drafting Route ---------- */
 import researchDraftingRoutes from "./routes/researchDrafting.js";
 
 /* ---------- Use Routes ---------- */
@@ -172,10 +170,13 @@ app.use("/api/submissions", submissionsRoutes);
 app.use("/api/qr", qrRoutes);
 app.use("/api/exams", examRoutes);
 
-/* ✅ Correct Mounting for Prep Routes */
-app.use("/api/prep", prepAccessRoutes);          // /api/prep/access/... (user side)
-app.use("/api/admin/prep", prepAccessRoutes);    // /api/admin/prep/access/... (admin side)
-app.use("/api/prep", prepRoutes);   
+/* ✅ FIXED MOUNTING ORDER  
+   prep_access.js already defines full /api/prep/... and /api/admin/prep/... routes.
+   So we mount both to serve user + admin endpoints.
+*/
+app.use("/api/prep", prepAccessRoutes);          // for user requests (/api/prep/access/…)
+app.use("/api/admin/prep", prepAccessRoutes);    // for admin panel (/api/admin/prep/access/…)
+app.use("/api/prep", prepRoutes);                // /api/prep/exams, /user/today, etc.
 
 app.use("/api/files", filesRoutes);
 app.use("/api/testseries", testseriesRoutes);
@@ -183,17 +184,14 @@ app.use("/api/plagiarism", plagiarismRoutes);
 app.use("/api/research-drafting", researchDraftingRoutes);
 
 /* ---------- Health & 404 ---------- */
-app.get("/api/access/status", (_req, res) =>
-  res.json({ access: false })
-);
+app.get("/api/access/status", (_req, res) => res.json({ access: false }));
 app.get("/api/ping", (_req, res) => res.json({ ok: true, ts: Date.now() }));
 app.get("/", (_req, res) => res.json({ ok: true, root: true }));
 
 app.use((req, res) =>
-  res.status(404).json({
-    success: false,
-    message: `Not Found: ${req.method} ${req.originalUrl}`,
-  })
+  res
+    .status(404)
+    .json({ success: false, message: `Not Found: ${req.method} ${req.originalUrl}` })
 );
 
 /* ---------- Error handler ---------- */
@@ -217,14 +215,11 @@ if (!MONGO) {
   mongoose
     .connect(MONGO, { dbName: process.env.MONGO_DB || undefined })
     .then(() => console.log("✅ MongoDB connected"))
-    .catch((err) =>
-      console.error("✗ MongoDB connection failed:", err.message)
-    );
+    .catch((err) => console.error("✗ MongoDB connection failed:", err.message));
 }
 
 /* ---------- Startup log ---------- */
-console.log("✅ Prep Access API mounted at /api/prep/*");
-console.log("✅ Prep Main API mounted at /api/prep/*");
+console.log("✅ Prep Access Routes mounted at: /api/prep/* and /api/admin/prep/*");
 
 /* ---------- Start ---------- */
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
