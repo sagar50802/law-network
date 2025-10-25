@@ -198,38 +198,18 @@ router.get("/exams", async (_req, res) => {
   res.json({ success: true, exams });
 });
 
-/* ✅ FINAL FIX — Correct multipart & JSON handling */
-router.post(
-  "/exams",
-  isAdmin,
-  (req, res, next) => {
-    const ct = req.headers["content-type"] || "";
-    if (ct.includes("multipart/form-data")) {
-      multer().none()(req, res, next);
-    } else if (ct.includes("application/json") || ct.includes("application/x-www-form-urlencoded")) {
-      express.urlencoded({ extended: true })(req, res, next);
-    } else next();
-  },
-  async (req, res) => {
-    try {
-      const { examId, name, scheduleMode = "cohort" } = req.body || {};
-      if (!examId || !name)
-        return res.status(400).json({ success: false, error: "examId & name required" });
+router.post("/exams", isAdmin, async (req, res) => {
+  const { examId, name, scheduleMode = "cohort" } = req.body || {};
+  if (!examId || !name)
+    return res.status(400).json({ success: false, error: "examId & name required" });
+  const doc = await PrepExam.findOneAndUpdate(
+    { examId },
+    { $set: { name, scheduleMode } },
+    { upsert: true, new: true }
+  );
+  res.json({ success: true, exam: doc });
+});
 
-      const doc = await PrepExam.findOneAndUpdate(
-        { examId },
-        { $set: { name, scheduleMode } },
-        { upsert: true, new: true }
-      );
-      res.json({ success: true, exam: doc });
-    } catch (e) {
-      console.error("[POST /exams] error:", e);
-      res.status(500).json({ success: false, message: e.message || "Unexpected server error" });
-    }
-  }
-);
-
-/* ------------------------ Delete / Overlay / Meta ------------------------ */
 router.delete("/exams/:examId", isAdmin, async (req, res) => {
   try {
     const examId = req.params.examId;
@@ -314,7 +294,7 @@ router.get("/exams/:examId/meta", async (req, res) => {
   }
 });
 
-/* ✅ POST /exams/:examId/meta/test */
+/* ✅ NEW: POST /exams/:examId/meta/test (admin-only quick overlay preview) */
 router.post("/exams/:examId/meta/test", isAdmin, async (req, res) => {
   try {
     const { examId } = req.params;
@@ -330,7 +310,7 @@ router.post("/exams/:examId/meta/test", isAdmin, async (req, res) => {
   }
 });
 
-/* ------------------------------ Status & Access -------------------------- */
+/* ------------------------------- Status ---------------------------------- */
 
 router.get("/access/status-raw", async (req, res) => {
   try {
@@ -358,6 +338,7 @@ router.get("/user/summary", async (req, res) => {
   }
 });
 
+/* ✅ Overlay enforcement before sending modules */
 router.get("/user/today", async (req, res) => {
   try {
     const { examId, email } = req.query || {};
@@ -367,7 +348,6 @@ router.get("/user/today", async (req, res) => {
     const status = await buildAccessStatusPayload(examId, email);
     const accessStatus = status?.access?.status || "none";
 
-    // 🚫 Hard gate: Unauthorized → trigger overlay
     if (accessStatus !== "active" && accessStatus !== "trial") {
       noStore(res);
       return res.json({
@@ -378,7 +358,6 @@ router.get("/user/today", async (req, res) => {
       });
     }
 
-    // ✅ Authorized → show today's content
     const day = status?.access?.todayDay || 1;
     const items = await PrepModule.find({ examId, dayIndex: day })
       .sort({ releaseAt: 1, slotMin: 1 })
@@ -390,6 +369,8 @@ router.get("/user/today", async (req, res) => {
     res.status(500).json({ success: false, error: e?.message || "server error" });
   }
 });
+
+/* ------------------------------ User flows ------------------------------- */
 
 router.post("/access/start-trial", async (req, res) => {
   try {
