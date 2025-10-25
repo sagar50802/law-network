@@ -84,7 +84,8 @@ app.use((req, res, next) => {
   next();
 });
 
-/* ---------- Body parsers ---------- */
+/* ---------- ✅ FIXED: Body parsers FIRST ---------- */
+/* These must come BEFORE any routes or multer usage */
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
@@ -170,13 +171,10 @@ app.use("/api/submissions", submissionsRoutes);
 app.use("/api/qr", qrRoutes);
 app.use("/api/exams", examRoutes);
 
-/* ✅ FIXED MOUNTING ORDER  
-   prep_access.js already defines full /api/prep/... and /api/admin/prep/... routes.
-   So we mount both to serve user + admin endpoints.
-*/
-app.use("/api/prep", prepAccessRoutes);          // for user requests (/api/prep/access/…)
-app.use("/api/admin/prep", prepAccessRoutes);    // for admin panel (/api/admin/prep/access/…)
-app.use("/api/prep", prepRoutes);                // /api/prep/exams, /user/today, etc.
+/* ✅ Correct mounting order */
+app.use("/api/prep", prepAccessRoutes);       // user access routes
+app.use("/api/admin/prep", prepAccessRoutes); // admin access routes
+app.use("/api/prep", prepRoutes);             // core prep endpoints
 
 app.use("/api/files", filesRoutes);
 app.use("/api/testseries", testseriesRoutes);
