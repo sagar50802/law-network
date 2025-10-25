@@ -198,16 +198,23 @@ router.get("/exams", async (_req, res) => {
   res.json({ success: true, exams });
 });
 
-router.post("/exams", isAdmin, async (req, res) => {
-  const { examId, name, scheduleMode = "cohort" } = req.body || {};
-  if (!examId || !name)
-    return res.status(400).json({ success: false, error: "examId & name required" });
-  const doc = await PrepExam.findOneAndUpdate(
-    { examId },
-    { $set: { name, scheduleMode } },
-    { upsert: true, new: true }
-  );
-  res.json({ success: true, exam: doc });
+/* ✅ FIXED: Accept JSON normally — no multer parsing */
+router.post("/exams", isAdmin, express.json(), async (req, res) => {
+  try {
+    const { examId, name, scheduleMode = "cohort" } = req.body || {};
+    if (!examId || !name)
+      return res.status(400).json({ success: false, error: "examId & name required" });
+
+    const doc = await PrepExam.findOneAndUpdate(
+      { examId },
+      { $set: { name, scheduleMode } },
+      { upsert: true, new: true }
+    );
+    res.json({ success: true, exam: doc });
+  } catch (e) {
+    console.error("[POST /exams] error:", e);
+    res.status(500).json({ success: false, message: e.message || "Unexpected server error" });
+  }
 });
 
 router.delete("/exams/:examId", isAdmin, async (req, res) => {
