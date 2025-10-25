@@ -1,5 +1,12 @@
 // prep_access.js — Final corrected version (Render-safe, Mongo persistent)
-// Prefix fixes applied — fully compatible with your current frontend
+// Single router mounted at two bases:
+//   app.use("/api/prep", prepAccessRoutes)          → USER routes
+//   app.use("/api/admin/prep", prepAccessRoutes)    → ADMIN routes
+//
+// IMPORTANT: All paths below start with "/access/..." ONLY.
+// So they resolve to:
+//   USER  : /api/prep/access/... 
+//   ADMIN : /api/admin/prep/access/...
 
 import express, { Router } from "express";
 import mongoose from "mongoose";
@@ -171,7 +178,7 @@ function adminExamName(examId) {
  * ---------------------------------------------------------------------------- */
 const router = Router();
 
-/* Body parsing */
+/* Relaxed body parsing for mislabelled requests */
 router.use(express.text({ type: () => true }));
 router.use((req, _res, next) => {
   try {
@@ -186,7 +193,11 @@ router.use((req, _res, next) => {
 router.use(express.json());
 
 /* ----------------------------------------------------------------------------
- * PUBLIC ROUTES (Fixed prefixes)
+ * USER ROUTES  (mount base: /api/prep)
+ * Final paths:
+ *   GET  /api/prep/access/status/guard
+ *   POST /api/prep/access/request
+ *   GET  /api/prep/access/request/status
  * ---------------------------------------------------------------------------- */
 
 /* Guard: are we active / inactive, and what should overlay show? */
@@ -209,8 +220,7 @@ router.get("/access/status/guard", async (req, res) => {
     };
 
     let overlay = { mode: "purchase" };
-    if (!active && lastReq && lastReq.status === "pending")
-      overlay.mode = "waiting";
+    if (!active && lastReq && lastReq.status === "pending") overlay.mode = "waiting";
 
     res.json({ success: true, exam, access, overlay });
   } catch (e) {
@@ -293,11 +303,20 @@ router.get("/access/request/status", async (req, res) => {
 });
 
 /* ----------------------------------------------------------------------------
- * ADMIN ROUTES (Fixed prefixes)
+ * ADMIN ROUTES (mount base: /api/admin/prep)
+ * Final paths:
+ *   GET  /api/admin/prep/access/config
+ *   POST /api/admin/prep/access/config
+ *   GET  /api/admin/prep/access/requests
+ *   POST /api/admin/prep/access/approve
+ *   POST /api/admin/prep/access/reject
+ *   POST /api/admin/prep/access/revoke
+ *   POST /api/admin/prep/access/delete
+ *   POST /api/admin/prep/access/batch-delete
  * ---------------------------------------------------------------------------- */
 
 /* Get config */
-router.get("/admin/prep/access/config", async (_req, res) => {
+router.get("/access/config", async (_req, res) => {
   try {
     const cfg = await getConfig();
     res.json({ success: true, config: cfg });
@@ -308,7 +327,7 @@ router.get("/admin/prep/access/config", async (_req, res) => {
 });
 
 /* Save config */
-router.post("/admin/prep/access/config", async (req, res) => {
+router.post("/access/config", async (req, res) => {
   try {
     const b = req.body || {};
     const data = {
@@ -328,7 +347,7 @@ router.post("/admin/prep/access/config", async (req, res) => {
 });
 
 /* List requests */
-router.get("/admin/prep/access/requests", async (req, res) => {
+router.get("/access/requests", async (req, res) => {
   try {
     const examId = normExamId(req.query.examId);
     const status = String(req.query.status || "").trim();
@@ -351,7 +370,7 @@ router.get("/admin/prep/access/requests", async (req, res) => {
 });
 
 /* Approve */
-router.post("/admin/prep/access/approve", async (req, res) => {
+router.post("/access/approve", async (req, res) => {
   try {
     const { id } = req.body || {};
     let { examId, email } = req.body || {};
@@ -384,7 +403,7 @@ router.post("/admin/prep/access/approve", async (req, res) => {
 });
 
 /* Reject */
-router.post("/admin/prep/access/reject", async (req, res) => {
+router.post("/access/reject", async (req, res) => {
   try {
     const { id } = req.body || {};
     let { examId, email } = req.body || {};
@@ -415,7 +434,7 @@ router.post("/admin/prep/access/reject", async (req, res) => {
 });
 
 /* Revoke active grant */
-router.post("/admin/prep/access/revoke", async (req, res) => {
+router.post("/access/revoke", async (req, res) => {
   try {
     const examId = normExamId(req.body?.examId);
     const email = normEmail(req.body?.email);
@@ -434,7 +453,7 @@ router.post("/admin/prep/access/revoke", async (req, res) => {
 });
 
 /* Delete one request by id */
-router.post("/admin/prep/access/delete", async (req, res) => {
+router.post("/access/delete", async (req, res) => {
   try {
     const { id } = req.body || {};
     if (!id)
@@ -449,7 +468,7 @@ router.post("/admin/prep/access/delete", async (req, res) => {
 });
 
 /* Batch delete */
-router.post("/admin/prep/access/batch-delete", async (req, res) => {
+router.post("/access/batch-delete", async (req, res) => {
   try {
     const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
     const examId = normExamId(req.body?.examId);
