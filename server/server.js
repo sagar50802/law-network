@@ -84,8 +84,7 @@ app.use((req, res, next) => {
   next();
 });
 
-/* ---------- ✅ FIXED: Body parsers FIRST ---------- */
-/* These must come BEFORE any routes or multer usage */
+/* ---------- Body parsers ---------- */
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 
@@ -157,6 +156,8 @@ import prepAccessRoutes from "./routes/prep_access.js";
 import filesRoutes from "./routes/files.js";
 import testseriesRoutes from "./routes/testseries.js";
 import plagiarismRoutes from "./routes/plagiarism.js";
+
+/* ---------- ✅ New Research Drafting Route ---------- */
 import researchDraftingRoutes from "./routes/researchDrafting.js";
 
 /* ---------- Use Routes ---------- */
@@ -171,14 +172,20 @@ app.use("/api/submissions", submissionsRoutes);
 app.use("/api/qr", qrRoutes);
 app.use("/api/exams", examRoutes);
 
-/* ✅ Correct mounting order */
-app.use("/api/prep", prepAccessRoutes);       // user access routes
-app.use("/api/admin/prep", prepAccessRoutes); // admin access routes
-app.use("/api/prep", prepRoutes);             // core prep endpoints
+/* ✅ FIXED MOUNTING ORDER
+   prep_access.js already defines full /api/prep/... paths,
+   so mount at root instead of /api/prep to avoid /api/prep/api/prep/... duplication.
+*/
+app.use("/", prepAccessRoutes);
+
+/* ✅ prep.js defines relative endpoints, so keep under /api/prep */
+app.use("/api/prep", prepRoutes);
 
 app.use("/api/files", filesRoutes);
 app.use("/api/testseries", testseriesRoutes);
 app.use("/api/plagiarism", plagiarismRoutes);
+
+/* ✅ Added Research Drafting API */
 app.use("/api/research-drafting", researchDraftingRoutes);
 
 /* ---------- Health & 404 ---------- */
@@ -216,8 +223,8 @@ if (!MONGO) {
     .catch((err) => console.error("✗ MongoDB connection failed:", err.message));
 }
 
-/* ---------- Startup log ---------- */
-console.log("✅ Prep Access Routes mounted at: /api/prep/* and /api/admin/prep/*");
+/* ---------- Startup log for prep_access ---------- */
+console.log("✅ Prep Access Routes mounted at: /api/prep/* (via root mapping)");
 
 /* ---------- Start ---------- */
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
