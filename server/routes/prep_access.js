@@ -9,7 +9,21 @@ import crypto from "crypto";
 // ----------------------------------------------------------------------------
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const DATA_DIR = path.join(__dirname, "..", "data");
+
+// ✅ Try project /data first, fallback to writable /tmp/data on Render
+const DATA_DIR_PRIMARY = path.join(__dirname, "..", "data");
+const DATA_DIR_FALLBACK = "/tmp/data";
+let DATA_DIR = DATA_DIR_PRIMARY;
+
+try {
+  await fs.mkdir(DATA_DIR_PRIMARY, { recursive: true });
+  await fs.access(DATA_DIR_PRIMARY, fs.constants.W_OK);
+} catch {
+  console.warn("⚠️ [prep_access] Primary data dir not writable, using /tmp/data");
+  DATA_DIR = DATA_DIR_FALLBACK;
+  await fs.mkdir(DATA_DIR, { recursive: true });
+}
+
 const DB_FILE = path.join(DATA_DIR, "prep_access.json");
 
 // Very small write lock to serialize writes to the JSON file
