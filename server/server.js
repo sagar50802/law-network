@@ -172,31 +172,27 @@ app.use("/api/submissions", submissionsRoutes);
 app.use("/api/qr", qrRoutes);
 app.use("/api/exams", examRoutes);
 
-/* ✅ FIXED MOUNTING ORDER
-   prep_access.js already defines full /api/prep/... paths,
-   so mount at root instead of /api/prep to avoid /api/prep/api/prep/... duplication.
-*/
-app.use("/", prepAccessRoutes);
-
-/* ✅ prep.js defines relative endpoints, so keep under /api/prep */
-app.use("/api/prep", prepRoutes);
+/* ✅ Correct Mounting for Prep Routes */
+app.use("/api/prep", prepAccessRoutes);  // handles /api/prep/access/... endpoints
+app.use("/api/prep", prepRoutes);        // handles /api/prep/exams, /user/today, etc.
 
 app.use("/api/files", filesRoutes);
 app.use("/api/testseries", testseriesRoutes);
 app.use("/api/plagiarism", plagiarismRoutes);
-
-/* ✅ Added Research Drafting API */
 app.use("/api/research-drafting", researchDraftingRoutes);
 
 /* ---------- Health & 404 ---------- */
-app.get("/api/access/status", (_req, res) => res.json({ access: false }));
+app.get("/api/access/status", (_req, res) =>
+  res.json({ access: false })
+);
 app.get("/api/ping", (_req, res) => res.json({ ok: true, ts: Date.now() }));
 app.get("/", (_req, res) => res.json({ ok: true, root: true }));
 
 app.use((req, res) =>
-  res
-    .status(404)
-    .json({ success: false, message: `Not Found: ${req.method} ${req.originalUrl}` })
+  res.status(404).json({
+    success: false,
+    message: `Not Found: ${req.method} ${req.originalUrl}`,
+  })
 );
 
 /* ---------- Error handler ---------- */
@@ -220,11 +216,14 @@ if (!MONGO) {
   mongoose
     .connect(MONGO, { dbName: process.env.MONGO_DB || undefined })
     .then(() => console.log("✅ MongoDB connected"))
-    .catch((err) => console.error("✗ MongoDB connection failed:", err.message));
+    .catch((err) =>
+      console.error("✗ MongoDB connection failed:", err.message)
+    );
 }
 
-/* ---------- Startup log for prep_access ---------- */
-console.log("✅ Prep Access Routes mounted at: /api/prep/* (via root mapping)");
+/* ---------- Startup log ---------- */
+console.log("✅ Prep Access API mounted at /api/prep/*");
+console.log("✅ Prep Main API mounted at /api/prep/*");
 
 /* ---------- Start ---------- */
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
