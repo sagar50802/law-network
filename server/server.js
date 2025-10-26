@@ -90,6 +90,7 @@ app.use(express.urlencoded({ extended: true, limit: "100mb" }));
 
 /* ---------- Tiny logger ---------- */
 app.use((req, _res, next) => {
+  if (req.path === "/favicon.ico") return next(); // avoid noisy logs
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
   next();
 });
@@ -188,7 +189,8 @@ app.use("/api/plagiarism", plagiarismRoutes);
 /* ✅ Added Research Drafting API */
 app.use("/api/research-drafting", researchDraftingRoutes);
 
-/* ---------- Health & 404 ---------- */
+/* ---------- Health, favicon & 404 ---------- */
+app.get("/favicon.ico", (_req, res) => res.sendStatus(204));
 app.get("/api/access/status", (_req, res) => res.json({ access: false }));
 app.get("/api/ping", (_req, res) => res.json({ ok: true, ts: Date.now() }));
 app.get("/", (_req, res) => res.json({ ok: true, root: true }));
@@ -229,7 +231,30 @@ if (!MONGO) {
 }
 
 /* ---------- Startup log for prep_access ---------- */
-console.log("✅ Prep Access Routes mounted at: /api/prep/* (via root mapping)");
+console.log("✅ prep_access.js mounted at root ('/'). It serves /api/prep/* endpoints.");
 
-/* ---------- Start ---------- */
-app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+/* ---------- Start & graceful shutdown ---------- */
+const server = app.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+});
+
+const shutdown = async (signal) => {
+  try {
+    console.log(`\n${signal} received. Shutting down gracefully...`);
+    server.close(() => {
+      console.log("HTTP server closed.");
+    });
+    await mongoose.connection.close();
+    console.log("MongoDB connection closed.");
+  } catch (e) {
+    console.error("Error during shutdown:", e);
+  } finally {
+    process.exit(0);
+  }
+};
+
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("unhandledRejection", (err) => {
+  console.error("Unhandled Rejection:", err);
+});
