@@ -12,19 +12,15 @@ import PrepProgress from "../models/PrepProgress.js";
 
 const router = express.Router();
 
-/* ───────────────────────── Upload (Multer) ─────────────────────────
-   IMPORTANT:
-   - Do NOT mount express.json/urlencoded in this router before Multer.
-   - App-level parsers stay in server.js, they won’t touch multipart.
--------------------------------------------------------------------- */
+/* ───────────────────────── Upload (Multer) ───────────────────────── */
 
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
     fileSize: 40 * 1024 * 1024, // 40 MB per file
-    files: 16,                  // safety cap for number of files
-    fields: 200,                // safety cap for text fields
-    fieldSize: 5 * 1024 * 1024, // 5 MB per field string
+    files: 16,
+    fields: 200,
+    fieldSize: 5 * 1024 * 1024,
   },
 });
 
@@ -32,7 +28,7 @@ function safeName(filename = "file") {
   return String(filename).replace(/\s+/g, "_").replace(/[^\w.\-]/g, "");
 }
 
-// Optional Cloudflare R2 helper
+/* Optional Cloudflare R2 helper */
 let R2 = null;
 try {
   R2 = await import("../utils/r2.js");
@@ -84,47 +80,32 @@ async function planDaysForExam(examId) {
   if (!days.length) return 1;
   return Math.max(...days.map(Number).filter(Number.isFinite));
 }
+
 function dayIndexFrom(startAt, now = new Date()) {
   return Math.max(1, Math.floor((now - new Date(startAt)) / 86400000) + 1);
 }
 
-function tzParts(date, timeZone) {
-  const fmt = new Intl.DateTimeFormat("en-GB", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
+/* ───────────────────────── Approval Model ───────────────────────── */
+
+let PrepAccessGrant;
+try {
+  PrepAccessGrant = mongoose.model("PrepAccessGrant");
+} catch {
+  const grantSchema = new mongoose.Schema({
+    examId: String,
+    email: { type: String, lowercase: true, trim: true },
+    status: { type: String, default: "active", enum: ["active", "revoked"] },
+    grantedAt: Date,
+    revokedAt: Date,
   });
-  const parts = Object.fromEntries(fmt.formatToParts(date).map((p) => [p.type, p.value]));
-  return {
-    year: +parts.year,
-    month: +parts.month,
-    day: +parts.day,
-    hour: +parts.hour,
-    minute: +parts.minute,
-  };
+  PrepAccessGrant = mongoose.model("PrepAccessGrant", grantSchema);
 }
-function tzYMD(date, timeZone) {
-  const p = tzParts(date, timeZone);
-  return { year: p.year, month: p.month, day: p.day };
-}
-function daysBetweenTZ(aDate, bDate, timeZone) {
-  const a = tzYMD(aDate, timeZone),
-    b = tzYMD(bDate, timeZone);
-  return Math.round((Date.UTC(b.year, b.month - 1, b.day) - Date.UTC(a.year, a.month - 1, a.day)) / 86400000);
-}
-function isTimeReachedInTZ(now, hhmm, timeZone) {
-  const p = tzParts(now, timeZone);
-  const [hh, mm] = String(hhmm || "09:00")
-    .split(":")
-    .map((x) => parseInt(x, 10) || 0);
-  if (p.hour > hh) return true;
-  if (p.hour < hh) return false;
-  return p.minute >= mm;
-}
+
+function normExamId(s) { return String(s || "").trim(); }
+function normEmail(s) { return String(s || "").trim().toLowerCase(); }
+
+/* ───────────────────────── Overlay Computation ───────────────────────── */
+
 function computeOverlayAt(exam, access) {
   if (!exam?.overlay || exam.overlay.mode === "never") {
     return { openAt: null, planTimeShow: false };
@@ -137,8 +118,10 @@ function computeOverlayAt(exam, access) {
     const startAt = access?.startAt ? new Date(access.startAt) : null;
     if (!startAt) return { openAt: null, planTimeShow: false };
     const now = new Date();
-    const todayDay = Math.max(1, daysBetweenTZ(startAt, now, tz) + 1);
-    return { openAt: null, planTimeShow: todayDay >= showOnDay && isTimeReachedInTZ(now, showAtLocal, tz) };
+    const todayDay = Math.max(1, Math.floor((now - startAt) / 86400000) + 1);
+    const [hh, mm] = showAtLocal.split(":").map((x) => parseInt(x, 10) || 0);
+    const reached = now.getHours() > hh || (now.getHours() === hh && now.getMinutes() >= mm);
+    return { openAt: null, planTimeShow: todayDay >= showOnDay && reached };
   }
   if (mode === "fixed-date") {
     const dt = exam.overlay.fixedAt ? new Date(exam.overlay.fixedAt) : null;
@@ -149,28 +132,7 @@ function computeOverlayAt(exam, access) {
   return { openAt: new Date(+base + days * 86400000), planTimeShow: false };
 }
 
-/* ───────────────────────── NEW: recognize approvals from prep_access.js ───────────────────────── */
-// Reuse model if registered by prep_access.js; otherwise define a compatible minimal schema.
-let PrepAccessGrant;
-try {
-  PrepAccessGrant = mongoose.model("PrepAccessGrant");
-} catch {
-  const grantSchema = new mongoose.Schema(
-    {
-      examId: String,
-      email: { type: String, lowercase: true, trim: true },
-      status: { type: String, default: "active", enum: ["active", "revoked"] },
-      grantedAt: Date,
-      revokedAt: Date,
-    },
-    // model name in prep_access.js is "PrepAccessGrant" — default collection will be "prepaccessgrants"
-  );
-  PrepAccessGrant = mongoose.model("PrepAccessGrant", grantSchema);
-}
-function normExamId(s) { return String(s || "").trim(); }
-function normEmail(s) { return String(s || "").trim().toLowerCase(); }
-
-/* ───────────────────────── Access payload ───────────────────────── */
+/* ───────────────────────── Access Payload ───────────────────────── */
 
 async function buildAccessStatusPayload(examId, email) {
   const exam = await PrepExam.findOne({ examId }).lean();
@@ -180,10 +142,7 @@ async function buildAccessStatusPayload(examId, email) {
 
   const planDays = await planDaysForExam(examId);
 
-  // Legacy access (PrepAccess model)
   const access = email ? await PrepAccess.findOne({ examId, userEmail: email }).lean() : null;
-
-  // NEW: Also honor approvals stored by prep_access.js (PrepAccessGrant model)
   const grant = (email
     ? await PrepAccessGrant.findOne({
         examId: new RegExp(`^${normExamId(examId)}$`, "i"),
@@ -192,7 +151,6 @@ async function buildAccessStatusPayload(examId, email) {
       }).lean()
     : null);
 
-  // Determine status and startAt, preferring legacy PrepAccess if present
   let status = access?.status || "none";
   let startAt = access?.startAt ? new Date(access.startAt) : null;
 
@@ -201,14 +159,13 @@ async function buildAccessStatusPayload(examId, email) {
     startAt = grant.grantedAt ? new Date(grant.grantedAt) : null;
   }
 
-  let todayDay = 1;
-  if (startAt) todayDay = Math.min(planDays, dayIndexFrom(startAt));
-
+  const todayDay = startAt ? Math.min(planDays, dayIndexFrom(startAt)) : 1;
   const trialDays = Number(exam?.trialDays ?? 0);
   const canRestart = status === "active" && todayDay >= planDays;
 
   const { openAt, planTimeShow } = computeOverlayAt(exam, { startAt });
   const pay = exam?.overlay?.payment || {};
+
   const overlay = {
     show: false,
     mode: exam?.overlay?.mode || "planDayTime",
@@ -247,7 +204,6 @@ router.get("/exams", async (_req, res) => {
   res.json({ success: true, exams });
 });
 
-// Accept JSON for creating exams (app-level express.json is enough)
 router.post("/exams", isAdmin, async (req, res) => {
   try {
     const { examId, name, scheduleMode = "cohort" } = req.body || {};
@@ -289,7 +245,8 @@ router.delete("/exams/:examId", isAdmin, async (req, res) => {
   }
 });
 
-// Save overlay + payment config (JSON)
+/* ───────────────────────── Overlay Config ───────────────────────── */
+
 router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
   try {
     const examId = req.params.examId;
@@ -300,7 +257,7 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
       price: Number(b.price || 0),
       trialDays: Number(b.trialDays || 0),
       overlay: {
-        mode: b.mode || "planDayTime",                          // "planDayTime" | "offset-days" | "fixed-date" | "never"
+        mode: b.mode || "planDayTime",
         offsetDays: Number(b.offsetDays || 0),
         fixedAt: b.fixedAt ? new Date(b.fixedAt) : undefined,
         showOnDay: Number(b.showOnDay || 1),
@@ -328,171 +285,46 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
   }
 });
 
-// Meta (JSON)
-router.get("/exams/:examId/meta", async (req, res) => {
-  try {
-    const { examId } = req.params;
-    if (!examId) return res.status(400).json({ success: false, error: "examId required" });
-    const exam = await PrepExam.findOne({ examId }).lean();
-    if (!exam) return res.status(404).json({ success: false, error: "Exam not found" });
-    res.json({
-      success: true,
-      examId: exam.examId,
-      name: exam.name,
-      price: exam.price ?? 0,
-      trialDays: exam.trialDays ?? 0,
-      overlay: exam.overlay || {},
-      payment: (exam.overlay && exam.overlay.payment) || {},
-    });
-  } catch (e) {
-    console.error("[GET meta] error:", e);
-    res.status(500).json({ success: false, error: e.message || "server error" });
-  }
-});
-
-// Admin-only preview
-router.post("/exams/:examId/meta/test", isAdmin, async (req, res) => {
-  try {
-    const { examId } = req.params;
-    const { email } = req.body || {};
-    if (!examId) return res.status(400).json({ success: false, error: "examId required" });
-
-    const payload = await buildAccessStatusPayload(examId, email);
-    noStore(res);
-    res.json(payload);
-  } catch (e) {
-    console.error("[POST meta/test] error:", e);
-    res.status(500).json({ success: false, error: e.message || "server error" });
-  }
-});
-
-/* ───────────────────────── Status / User ───────────────────────── */
-
-router.get("/access/status-raw", async (req, res) => {
-  try {
-    const { examId, email } = req.query || {};
-    if (!examId)
-      return res.status(400).json({ success: false, error: "examId required" });
-    const payload = await buildAccessStatusPayload(examId, email);
-    noStore(res);
-    res.json(payload);
-  } catch (e) {
-    res.status(500).json({ success: false, error: e?.message || "server error" });
-  }
-});
-
-router.get("/user/summary", async (req, res) => {
-  try {
-    const { examId, email } = req.query || {};
-    if (!examId)
-      return res.status(400).json({ success: false, error: "examId required" });
-    const payload = await buildAccessStatusPayload(examId, email);
-    noStore(res);
-    res.json(payload);
-  } catch (e) {
-    res.status(500).json({ success: false, error: e?.message || "server error" });
-  }
-});
-
-router.get("/user/today", async (req, res) => {
-  try {
-    const { examId, email } = req.query || {};
-    if (!examId)
-      return res.status(400).json({ success: false, error: "examId required" });
-
-    const status = await buildAccessStatusPayload(examId, email);
-    const accessStatus = status?.access?.status || "none";
-
-    if (accessStatus !== "active" && accessStatus !== "trial") {
-      noStore(res);
-      return res.json({
-        success: false,
-        locked: true,
-        overlay: { ...(status.overlay || {}), show: true },
-        message: null,
-      });
-    }
-
-    const day = status?.access?.todayDay || 1;
-    const items = await PrepModule.find({ examId, dayIndex: day })
-      .sort({ releaseAt: 1, slotMin: 1 })
-      .lean();
-
-    noStore(res);
-    res.json({ success: true, items, todayDay: day, summary: status });
-  } catch (e) {
-    res.status(500).json({ success: false, error: e?.message || "server error" });
-  }
-});
-
-/* ───────────────────────── User flows ───────────────────────── */
-
-router.post("/access/start-trial", async (req, res) => {
-  try {
-    const { examId, email } = req.body || {};
-    if (!examId || !email)
-      return res.status(400).json({ success: false, error: "examId & email required" });
-
-    const planDays = await planDaysForExam(examId);
-    const now = new Date();
-
-    const existing = await PrepAccess.findOne({ examId, userEmail: email }).lean();
-    if (existing && existing.status === "active") {
-      return res.json({ success: true, access: existing, message: "already active" });
-    }
-
-    const doc = await PrepAccess.findOneAndUpdate(
-      { examId, userEmail: email },
-      { $set: { status: "trial", planDays, startAt: now } },
-      { upsert: true, new: true }
-    );
-    res.json({ success: true, access: doc });
-  } catch (e) {
-    res.status(500).json({ success: false, error: e?.message || "server error" });
-  }
-});
-
 /* ───────────────────────── Templates (Modules) ───────────────────────── */
 
-// List
-router.get("/templates", async (req, res) => {
-  const { examId } = req.query || {};
-  if (!examId)
-    return res.status(400).json({ success: false, error: "examId required" });
-  const items = await PrepModule.find({ examId })
-    .sort({ dayIndex: 1, slotMin: 1 })
-    .lean();
-  res.json({ success: true, items });
-});
-
-// Create (multipart)
 const fieldsUpload = upload.fields([
   { name: "images", maxCount: 12 },
-  { name: "pdf",    maxCount: 1 },
-  { name: "audio",  maxCount: 1 },
-  { name: "video",  maxCount: 1 },
+  { name: "pdf", maxCount: 1 },
+  { name: "audio", maxCount: 1 },
+  { name: "video", maxCount: 1 },
 ]);
 
+// 🧩 FIXED: handles empty/malformed multipart safely — avoids "Unexpected end of form"
 router.post("/templates", isAdmin, (req, res, next) => {
-  // Multer handler with explicit error pipe
-  fieldsUpload(req, res, function (err) {
-    if (!err) return next();
-    if (err instanceof multer.MulterError) {
-      const map = {
-        LIMIT_FILE_SIZE: "One of the files is too large (max 40MB each).",
-        LIMIT_PART_COUNT: "Too many parts in form.",
-        LIMIT_FILE_COUNT: "Too many files.",
-        LIMIT_FIELD_KEY: "Field name too long.",
-        LIMIT_FIELD_VALUE: "A field value is too long.",
-        LIMIT_FIELD_COUNT: "Too many fields.",
-        LIMIT_UNEXPECTED_FILE: "Unexpected file field.",
-      };
-      const msg = map[err.code] || `Upload error: ${err.message}`;
-      return res.status(400).json({ success: false, error: msg, code: err.code });
-    }
-    // Unexpected end of form or other stream errors
-    return res.status(400).json({ success: false, error: err.message || "Upload failed" });
-  });
+  try {
+    fieldsUpload(req, res, function (err) {
+      if (!err) return next();
+      if (err instanceof multer.MulterError) {
+        const map = {
+          LIMIT_FILE_SIZE: "One of the files is too large (max 40MB each).",
+          LIMIT_PART_COUNT: "Too many parts in form.",
+          LIMIT_FILE_COUNT: "Too many files.",
+          LIMIT_FIELD_KEY: "Field name too long.",
+          LIMIT_FIELD_VALUE: "A field value is too long.",
+          LIMIT_FIELD_COUNT: "Too many fields.",
+          LIMIT_UNEXPECTED_FILE: "Unexpected file field.",
+        };
+        const msg = map[err.code] || `Upload error: ${err.message}`;
+        return res.status(400).json({ success: false, error: msg, code: err.code });
+      }
+      // Handle empty-body or unexpected-end cases gracefully
+      if (err && /Unexpected end of form/i.test(err.message)) {
+        return res.status(400).json({
+          success: false,
+          error: "Incomplete form submission. Try again after reloading the page.",
+        });
+      }
+      return res.status(400).json({ success: false, error: err.message || "Upload failed" });
+    });
+  } catch (e) {
+    console.error("[prep/templates] pre-multer error:", e);
+    return res.status(400).json({ success: false, error: e.message || "Upload failed" });
+  }
 }, async (req, res) => {
   try {
     const {
@@ -570,12 +402,13 @@ router.post("/templates", isAdmin, (req, res, next) => {
       message: `Uploaded ${files.length} file(s)`,
     });
   } catch (e) {
-    console.error("[prep] create template failed:", e);
+    console.error("[prep/templates] create failed:", e);
     res.status(500).json({ success: false, error: e?.message || "server error" });
   }
 });
 
-// Delete
+/* ───────────────────────── Delete Template ───────────────────────── */
+
 router.delete("/templates/:id", isAdmin, async (req, res) => {
   try {
     const r = await PrepModule.findByIdAndDelete(req.params.id);
@@ -586,7 +419,7 @@ router.delete("/templates/:id", isAdmin, async (req, res) => {
   }
 });
 
-/* ───────────── Optional: Multer/global error guard for this router ───────────── */
+/* ───────────────────────── Global Error Guard ───────────────────────── */
 
 router.use((err, _req, res, _next) => {
   if (err instanceof multer.MulterError) {
@@ -594,7 +427,9 @@ router.use((err, _req, res, _next) => {
   }
   if (err) {
     console.error("[prep] unhandled error:", err);
-    return res.status(err.status || 500).json({ success: false, error: err.message || "server error" });
+    return res
+      .status(err.status || 500)
+      .json({ success: false, error: err.message || "server error" });
   }
   res.status(404).json({ success: false, error: "Not found" });
 });
