@@ -1,5 +1,4 @@
-// LawNetwork Prep Routes — Exams, Modules, Access, Progress (NO request/admin endpoints here)
-
+// LawNetwork Prep Routes — Exams, Modules, Access, Progress
 import express from "express";
 import multer from "multer";
 import mongoose from "mongoose";
@@ -12,11 +11,13 @@ import PrepProgress from "../models/PrepProgress.js";
 
 const router = express.Router();
 
-/* ------------------------------- Upload ---------------------------------- */
+/* -------------------------------------------------------------------------- */
+/*                                  Upload                                    */
+/* -------------------------------------------------------------------------- */
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 40 * 1024 * 1024 },
+  limits: { fileSize: 40 * 1024 * 1024 }, // 40 MB per file
 });
 
 function safeName(filename = "file") {
@@ -64,7 +65,9 @@ async function storeBuffer({ buffer, filename, mime, bucket = "prep" }) {
   return { url: `/api/files/${bucket}/${String(id)}`, via: "gridfs" };
 }
 
-/* ---------------------------- helpers ------------------------------------ */
+/* -------------------------------------------------------------------------- */
+/*                                 Helpers                                    */
+/* -------------------------------------------------------------------------- */
 
 function truthy(v) {
   return ["true", "1", "on", "yes"].includes(String(v).trim().toLowerCase());
@@ -77,6 +80,7 @@ async function planDaysForExam(examId) {
   if (!days.length) return 1;
   return Math.max(...days.map(Number).filter(Number.isFinite));
 }
+
 function dayIndexFrom(startAt, now = new Date()) {
   return Math.max(1, Math.floor((now - new Date(startAt)) / 86400000) + 1);
 }
@@ -100,15 +104,20 @@ function tzParts(date, timeZone) {
     minute: +parts.minute,
   };
 }
+
 function tzYMD(date, timeZone) {
   const p = tzParts(date, timeZone);
   return { year: p.year, month: p.month, day: p.day };
 }
+
 function daysBetweenTZ(aDate, bDate, timeZone) {
   const a = tzYMD(aDate, timeZone),
     b = tzYMD(bDate, timeZone);
-  return Math.round((Date.UTC(b.year, b.month - 1, b.day) - Date.UTC(a.year, a.month - 1, a.day)) / 86400000);
+  return Math.round(
+    (Date.UTC(b.year, b.month - 1, b.day) - Date.UTC(a.year, a.month - 1, a.day)) / 86400000
+  );
 }
+
 function isTimeReachedInTZ(now, hhmm, timeZone) {
   const p = tzParts(now, timeZone);
   const [hh, mm] = String(hhmm || "09:00")
@@ -118,11 +127,14 @@ function isTimeReachedInTZ(now, hhmm, timeZone) {
   if (p.hour < hh) return false;
   return p.minute >= mm;
 }
+
+/** Supports: planDayTime | fixed-date | offset-days | never */
 function computeOverlayAt(exam, access) {
   if (!exam?.overlay || exam.overlay.mode === "never") {
     return { openAt: null, planTimeShow: false };
   }
   const mode = exam.overlay.mode;
+
   if (mode === "planDayTime") {
     const tz = exam.overlay.tz || "Asia/Kolkata";
     const showOnDay = Number(exam.overlay.showOnDay ?? 1);
@@ -133,10 +145,13 @@ function computeOverlayAt(exam, access) {
     const todayDay = Math.max(1, daysBetweenTZ(startAt, now, tz) + 1);
     return { openAt: null, planTimeShow: todayDay >= showOnDay && isTimeReachedInTZ(now, showAtLocal, tz) };
   }
+
   if (mode === "fixed-date") {
     const dt = exam.overlay.fixedAt ? new Date(exam.overlay.fixedAt) : null;
     return { openAt: dt && !isNaN(+dt) ? dt : null, planTimeShow: false };
   }
+
+  // offset-days
   const base = access?.startAt ? new Date(access.startAt) : new Date();
   const days = Number(exam.overlay.offsetDays ?? 3);
   return { openAt: new Date(+base + days * 86400000), planTimeShow: false };
@@ -161,7 +176,7 @@ async function buildAccessStatusPayload(examId, email) {
   const pay = exam?.overlay?.payment || {};
   const overlay = {
     show: false,
-    mode: null,
+    mode: exam?.overlay?.mode || "planDayTime",
     openAt: openAt ? openAt.toISOString() : null,
     tz: exam?.overlay?.tz || "Asia/Kolkata",
     payment: {
@@ -198,7 +213,7 @@ router.get("/exams", async (_req, res) => {
   res.json({ success: true, exams });
 });
 
-/* ✅ FIXED: Accept JSON normally — no multer parsing */
+/* Accept JSON normally — your app already has global body parser; this keeps route-safe */
 router.post("/exams", isAdmin, express.json(), async (req, res) => {
   try {
     const { examId, name, scheduleMode = "cohort" } = req.body || {};
@@ -240,7 +255,7 @@ router.delete("/exams/:examId", isAdmin, async (req, res) => {
   }
 });
 
-/* ✅ PATCH: Save overlay + payment config for AdminPrepPanel */
+/* Save overlay + payment config for AdminPrepPanel */
 router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
   try {
     const examId = req.params.examId;
@@ -251,7 +266,7 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
       price: Number(b.price || 0),
       trialDays: Number(b.trialDays || 0),
       overlay: {
-        mode: b.mode || "planDayTime",
+        mode: b.mode || "planDayTime", // planDayTime | offset-days | fixed-date | never
         offsetDays: Number(b.offsetDays || 0),
         fixedAt: b.fixedAt ? new Date(b.fixedAt) : undefined,
         showOnDay: Number(b.showOnDay || 1),
@@ -279,7 +294,7 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
   }
 });
 
-/* ✅ NEW: GET /exams/:examId/meta */
+/* GET /exams/:examId/meta */
 router.get("/exams/:examId/meta", async (req, res) => {
   try {
     const { examId } = req.params;
@@ -301,7 +316,7 @@ router.get("/exams/:examId/meta", async (req, res) => {
   }
 });
 
-/* ✅ NEW: POST /exams/:examId/meta/test (admin-only quick overlay preview) */
+/* ✅ Admin-only quick overlay preview (you used this earlier) */
 router.post("/exams/:examId/meta/test", isAdmin, async (req, res) => {
   try {
     const { examId } = req.params;
