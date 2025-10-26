@@ -13,7 +13,6 @@ import PrepProgress from "../models/PrepProgress.js";
 const router = express.Router();
 
 /* ───────────────────────── Upload (Multer) ───────────────────────── */
-
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
@@ -70,7 +69,6 @@ async function storeBuffer({ buffer, filename, mime, bucket = "prep" }) {
 }
 
 /* ───────────────────────── Helpers ───────────────────────── */
-
 function truthy(v) {
   return ["true", "1", "on", "yes"].includes(String(v).trim().toLowerCase());
 }
@@ -86,7 +84,6 @@ function dayIndexFrom(startAt, now = new Date()) {
 }
 
 /* ───────────────────────── Approval Model ───────────────────────── */
-
 let PrepAccessGrant;
 try {
   PrepAccessGrant = mongoose.model("PrepAccessGrant");
@@ -105,7 +102,6 @@ function normExamId(s) { return String(s || "").trim(); }
 function normEmail(s) { return String(s || "").trim().toLowerCase(); }
 
 /* ───────────────────────── Overlay Computation ───────────────────────── */
-
 function computeOverlayAt(exam, access) {
   if (!exam?.overlay || exam.overlay.mode === "never") {
     return { openAt: null, planTimeShow: false };
@@ -133,7 +129,6 @@ function computeOverlayAt(exam, access) {
 }
 
 /* ───────────────────────── Access Payload ───────────────────────── */
-
 async function buildAccessStatusPayload(examId, email) {
   const exam = await PrepExam.findOne({ examId }).lean();
   if (!exam) {
@@ -198,7 +193,6 @@ function noStore(res) {
 }
 
 /* ───────────────────────── Exams ───────────────────────── */
-
 router.get("/exams", async (_req, res) => {
   const exams = await PrepExam.find({}, { examId: 1, name: 1 }).sort({ name: 1 }).lean();
   res.json({ success: true, exams });
@@ -246,7 +240,6 @@ router.delete("/exams/:examId", isAdmin, async (req, res) => {
 });
 
 /* ───────────────────────── Overlay Config ───────────────────────── */
-
 router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
   try {
     const examId = req.params.examId;
@@ -286,7 +279,6 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
 });
 
 /* ───────────────────────── Templates (Modules) ───────────────────────── */
-
 const fieldsUpload = upload.fields([
   { name: "images", maxCount: 12 },
   { name: "pdf", maxCount: 1 },
@@ -294,37 +286,41 @@ const fieldsUpload = upload.fields([
   { name: "video", maxCount: 1 },
 ]);
 
-// 🧩 FIXED: handles empty/malformed multipart safely — avoids "Unexpected end of form"
+// ✅ FIX: Skip Multer when not multipart — prevents "Unexpected end of form"
 router.post("/templates", isAdmin, (req, res, next) => {
-  try {
-    fieldsUpload(req, res, function (err) {
-      if (!err) return next();
-      if (err instanceof multer.MulterError) {
-        const map = {
-          LIMIT_FILE_SIZE: "One of the files is too large (max 40MB each).",
-          LIMIT_PART_COUNT: "Too many parts in form.",
-          LIMIT_FILE_COUNT: "Too many files.",
-          LIMIT_FIELD_KEY: "Field name too long.",
-          LIMIT_FIELD_VALUE: "A field value is too long.",
-          LIMIT_FIELD_COUNT: "Too many fields.",
-          LIMIT_UNEXPECTED_FILE: "Unexpected file field.",
-        };
-        const msg = map[err.code] || `Upload error: ${err.message}`;
-        return res.status(400).json({ success: false, error: msg, code: err.code });
-      }
-      // Handle empty-body or unexpected-end cases gracefully
-      if (err && /Unexpected end of form/i.test(err.message)) {
-        return res.status(400).json({
-          success: false,
-          error: "Incomplete form submission. Try again after reloading the page.",
-        });
-      }
-      return res.status(400).json({ success: false, error: err.message || "Upload failed" });
-    });
-  } catch (e) {
-    console.error("[prep/templates] pre-multer error:", e);
-    return res.status(400).json({ success: false, error: e.message || "Upload failed" });
+  const ctype = req.headers["content-type"] || "";
+  if (!ctype.includes("multipart/form-data")) {
+    req.files = {}; // no uploads, safe default
+    return next();
   }
+
+  // Normal Multer processing
+  fieldsUpload(req, res, function (err) {
+    if (!err) return next();
+
+    if (err instanceof multer.MulterError) {
+      const map = {
+        LIMIT_FILE_SIZE: "One of the files is too large (max 40MB each).",
+        LIMIT_PART_COUNT: "Too many parts in form.",
+        LIMIT_FILE_COUNT: "Too many files.",
+        LIMIT_FIELD_KEY: "Field name too long.",
+        LIMIT_FIELD_VALUE: "A field value is too long.",
+        LIMIT_FIELD_COUNT: "Too many fields.",
+        LIMIT_UNEXPECTED_FILE: "Unexpected file field.",
+      };
+      const msg = map[err.code] || `Upload error: ${err.message}`;
+      return res.status(400).json({ success: false, error: msg, code: err.code });
+    }
+
+    if (err && /Unexpected end of form/i.test(err.message)) {
+      return res.status(400).json({
+        success: false,
+        error: "Incomplete form submission — please try again.",
+      });
+    }
+
+    return res.status(400).json({ success: false, error: err.message || "Upload failed" });
+  });
 }, async (req, res) => {
   try {
     const {
@@ -408,7 +404,6 @@ router.post("/templates", isAdmin, (req, res, next) => {
 });
 
 /* ───────────────────────── Delete Template ───────────────────────── */
-
 router.delete("/templates/:id", isAdmin, async (req, res) => {
   try {
     const r = await PrepModule.findByIdAndDelete(req.params.id);
@@ -420,7 +415,6 @@ router.delete("/templates/:id", isAdmin, async (req, res) => {
 });
 
 /* ───────────────────────── Global Error Guard ───────────────────────── */
-
 router.use((err, _req, res, _next) => {
   if (err instanceof multer.MulterError) {
     return res.status(400).json({ success: false, error: err.message, code: err.code });
