@@ -84,9 +84,9 @@ app.use((req, res, next) => {
   next();
 });
 
-/* ---------- Body parsers ---------- */
-app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+/* ---------- Body parsers (✅ increased limits for uploads) ---------- */
+app.use(express.json({ limit: "100mb" }));
+app.use(express.urlencoded({ extended: true, limit: "100mb" }));
 
 /* ---------- Tiny logger ---------- */
 app.use((req, _res, next) => {
@@ -199,8 +199,13 @@ app.use((req, res) =>
     .json({ success: false, message: `Not Found: ${req.method} ${req.originalUrl}` })
 );
 
-/* ---------- Error handler ---------- */
+/* ---------- Error handler (✅ upload safety added) ---------- */
 app.use((err, _req, res, _next) => {
+  if (err?.type === "entity.too.large") {
+    return res
+      .status(413)
+      .json({ success: false, message: "Upload too large (max 100MB total request)" });
+  }
   console.error("Server error:", err);
   res
     .status(err.status || 500)
