@@ -94,14 +94,16 @@ async function getConfig() {
     await seed.save();
     cfgDoc = await ConfigModel.findOne().lean();
   }
-  return cfgDoc.config || {
-    autoGrant: false,
-    priceINR: 0,
-    upiId: "",
-    upiName: "",
-    whatsappNumber: "",
-    whatsappText: "",
-  };
+  return (
+    cfgDoc.config || {
+      autoGrant: false,
+      priceINR: 0,
+      upiId: "",
+      upiName: "",
+      whatsappNumber: "",
+      whatsappText: "",
+    }
+  );
 }
 
 async function saveConfig(data) {
@@ -120,15 +122,30 @@ async function findActiveGrant(examId, email) {
   }).lean();
 }
 
+/**
+ * FIXED: correctly apply $unset when making a grant active again.
+ * Previously, {$set: { ..., $unset: {revokedAt:1}}} would store a literal "$unset" field.
+ */
 async function upsertGrant(examId, email, status) {
   const now = new Date();
-  const update =
-    status === "active"
-      ? { status: "active", grantedAt: now, $unset: { revokedAt: 1 } }
-      : { status: "revoked", revokedAt: now };
+
+  if (status === "active") {
+    const update = {
+      $set: { status: "active", grantedAt: now, examId: normExamId(examId), email: normEmail(email) },
+      $unset: { revokedAt: 1 },
+    };
+    const g = await GrantModel.findOneAndUpdate(
+      { examId: normExamId(examId), email: normEmail(email) },
+      update,
+      { upsert: true, new: true }
+    );
+    return g;
+  }
+
+  // status === "revoked"
   const g = await GrantModel.findOneAndUpdate(
     { examId: normExamId(examId), email: normEmail(email) },
-    { $set: update },
+    { $set: { status: "revoked", revokedAt: now } },
     { upsert: true, new: true }
   );
   return g;
@@ -248,7 +265,7 @@ router.post("/api/prep/access/request", async (req, res) => {
     if (cfg.autoGrant) {
       rec.status = "approved";
       rec.updatedAt = new Date();
-      await upsertGrant(ex, em, "active");
+      await upsertGrant(ex, em, "active"); // properly unsets revokedAt if any
       approved = true;
     }
 
@@ -300,10 +317,10 @@ router.post("/api/admin/prep/access/config", async (req, res) => {
     const data = {
       autoGrant: Boolean(b.autoGrant),
       priceINR: Number(b.priceINR || 0),
-      upiId: String(b.upiId || ""),
-      upiName: String(b.upiName || ""),
-      whatsappNumber: String(b.whatsappNumber || ""),
-      whatsappText: String(b.whatsappText || ""),
+      upiId: String(b.upiId || "").trim(),
+      upiName: String(b.upiName || "").trim(),
+      whatsappNumber: String(b.whatsappNumber || "").trim(),
+      whatsappText: String(b.whatsappText || "").trim(),
     };
     const cfg = await saveConfig(data);
     res.json({ success: true, config: cfg });
