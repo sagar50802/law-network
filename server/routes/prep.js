@@ -149,6 +149,29 @@ function computeOverlayAt(exam, access) {
   return { openAt: new Date(+base + days * 86400000), planTimeShow: false };
 }
 
+/* ───────────────────────── NEW: recognize approvals from prep_access.js ───────────────────────── */
+// Reuse model if registered by prep_access.js; otherwise define a compatible minimal schema.
+let PrepAccessGrant;
+try {
+  PrepAccessGrant = mongoose.model("PrepAccessGrant");
+} catch {
+  const grantSchema = new mongoose.Schema(
+    {
+      examId: String,
+      email: { type: String, lowercase: true, trim: true },
+      status: { type: String, default: "active", enum: ["active", "revoked"] },
+      grantedAt: Date,
+      revokedAt: Date,
+    },
+    // model name in prep_access.js is "PrepAccessGrant" — default collection will be "prepaccessgrants"
+  );
+  PrepAccessGrant = mongoose.model("PrepAccessGrant", grantSchema);
+}
+function normExamId(s) { return String(s || "").trim(); }
+function normEmail(s) { return String(s || "").trim().toLowerCase(); }
+
+/* ───────────────────────── Access payload ───────────────────────── */
+
 async function buildAccessStatusPayload(examId, email) {
   const exam = await PrepExam.findOne({ examId }).lean();
   if (!exam) {
@@ -156,15 +179,35 @@ async function buildAccessStatusPayload(examId, email) {
   }
 
   const planDays = await planDaysForExam(examId);
+
+  // Legacy access (PrepAccess model)
   const access = email ? await PrepAccess.findOne({ examId, userEmail: email }).lean() : null;
 
+  // NEW: Also honor approvals stored by prep_access.js (PrepAccessGrant model)
+  const grant = (email
+    ? await PrepAccessGrant.findOne({
+        examId: new RegExp(`^${normExamId(examId)}$`, "i"),
+        email: normEmail(email),
+        status: "active",
+      }).lean()
+    : null);
+
+  // Determine status and startAt, preferring legacy PrepAccess if present
   let status = access?.status || "none";
+  let startAt = access?.startAt ? new Date(access.startAt) : null;
+
+  if (!startAt && grant) {
+    status = "active";
+    startAt = grant.grantedAt ? new Date(grant.grantedAt) : null;
+  }
+
   let todayDay = 1;
-  if (access?.startAt) todayDay = Math.min(planDays, dayIndexFrom(access.startAt));
+  if (startAt) todayDay = Math.min(planDays, dayIndexFrom(startAt));
+
   const trialDays = Number(exam?.trialDays ?? 0);
   const canRestart = status === "active" && todayDay >= planDays;
 
-  const { openAt, planTimeShow } = computeOverlayAt(exam, access);
+  const { openAt, planTimeShow } = computeOverlayAt(exam, { startAt });
   const pay = exam?.overlay?.payment || {};
   const overlay = {
     show: false,
@@ -185,7 +228,7 @@ async function buildAccessStatusPayload(examId, email) {
   return {
     success: true,
     exam: { examId: exam.examId, name: exam.name, price: exam.price, overlay: exam.overlay },
-    access: { status, planDays, todayDay, canRestart, startAt: access?.startAt || null, trialDays },
+    access: { status, planDays, todayDay, canRestart, startAt: startAt || null, trialDays },
     overlay,
     serverNow: Date.now(),
   };
