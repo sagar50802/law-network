@@ -1,5 +1,3 @@
-// LawNetwork Prep Routes — Exams, Modules, Access, Progress
-
 import express from "express";
 import multer from "multer";
 import mongoose from "mongoose";
@@ -9,6 +7,9 @@ import PrepExam from "../models/PrepExam.js";
 import PrepModule from "../models/PrepModule.js";
 import PrepAccess from "../models/PrepAccess.js";
 import PrepProgress from "../models/PrepProgress.js";
+
+// ✅ NEW: Import shared config getter for Option A sync
+import { getConfig } from "../routes/prep_access.js"; // adjust path if needed
 
 const router = express.Router();
 
@@ -271,7 +272,7 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
   }
 });
 
-/* ───────────────────────── Exam Meta Fetch ───────────────────────── */
+/* ───────────────────────── Exam Meta Fetch (Enhanced with prep_access Config) ───────────────────────── */
 router.get("/exams/:examId/meta", isAdmin, async (req, res) => {
   try {
     const examId = req.params.examId;
@@ -287,14 +288,27 @@ router.get("/exams/:examId/meta", isAdmin, async (req, res) => {
       examId: new RegExp(`^${String(examId).trim()}$`, "i"),
     }).distinct("dayIndex");
 
+    // ✅ NEW: Merge prep_access.js global config (Option A)
+    const globalCfg = await getConfig();
+    const payment = {
+      priceINR: Number(globalCfg.priceINR || exam.price || 0),
+      upiId: globalCfg.upiId || exam.overlay?.payment?.upiId || "",
+      upiName: globalCfg.upiName || exam.overlay?.payment?.upiName || "",
+      whatsappNumber:
+        globalCfg.whatsappNumber || exam.overlay?.payment?.whatsappNumber || "",
+      whatsappText:
+        globalCfg.whatsappText || exam.overlay?.payment?.whatsappText || "",
+    };
+
     res.json({
       success: true,
       exam: {
         examId: exam.examId,
         name: exam.name,
-        price: exam.price,
+        price: payment.priceINR,
         totalModules,
         totalDays: days.length,
+        overlay: { payment },
       },
     });
   } catch (e) {
@@ -418,7 +432,7 @@ router.post("/templates", isAdmin, (req, res, next) => {
       success: true,
       item: { ...doc.toObject(), files },
       message: `Uploaded ${files.length} file(s) via ${useR2 ? "R2" : "GridFS"}`,
-    });
+   ... });
   } catch (e) {
     console.error("[prep/templates] create failed:", e);
     res.status(500).json({ success: false, error: e?.message || "server error" });
