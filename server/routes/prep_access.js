@@ -78,7 +78,7 @@ const rid = () => crypto.randomBytes(12).toString("hex");
 const normEmail = (s) => String(s || "").trim().toLowerCase();
 const normExamId = (s) => String(s || "").trim();
 
-async function getConfig() {
+ export async function getConfig() {
   let cfgDoc = await ConfigModel.findOne().lean();
   if (!cfgDoc) {
     const seed = new ConfigModel({
