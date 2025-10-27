@@ -1,5 +1,6 @@
 // routes/prep.js
 // LawNetwork Prep Routes — Exams, Modules, Access, Progress
+
 import express from "express";
 import multer from "multer";
 import mongoose from "mongoose";
@@ -27,7 +28,7 @@ function safeName(filename = "file") {
   return String(filename).replace(/\s+/g, "_").replace(/[^\w.\-]/g, "");
 }
 
-/* Optional Cloudflare R2 helper */
+/* ───────────────────────── Optional Cloudflare R2 helper ───────────────────────── */
 let R2 = null;
 try {
   R2 = await import("../utils/r2.js");
@@ -56,7 +57,7 @@ async function storeBuffer({ buffer, filename, mime, bucket = "prep" }) {
     }
   }
 
-  // Fallback to GridFS
+  // Fallback → GridFS
   const g = grid(bucket);
   if (!g) throw Object.assign(new Error("DB not connected"), { status: 503 });
   const id = await new Promise((resolve, reject) => {
@@ -83,7 +84,7 @@ function dayIndexFrom(startAt, now = new Date()) {
   return Math.max(1, Math.floor((now - new Date(startAt)) / 86400000) + 1);
 }
 
-/* ───────────────────────── Approval Model ───────────────────────── */
+/* ───────────────────────── Access Approval Model ───────────────────────── */
 let PrepAccessGrant;
 try {
   PrepAccessGrant = mongoose.model("PrepAccessGrant");
@@ -128,7 +129,7 @@ function computeOverlayAt(exam, access) {
   return { openAt: new Date(+base + days * 86400000), planTimeShow: false };
 }
 
-/* ───────────────────────── Access Payload ───────────────────────── */
+/* ───────────────────────── Access Payload Builder ───────────────────────── */
 async function buildAccessStatusPayload(examId, email) {
   const exam = await PrepExam.findOne({ examId }).lean();
   if (!exam) {
@@ -148,7 +149,6 @@ async function buildAccessStatusPayload(examId, email) {
 
   let status = access?.status || "none";
   let startAt = access?.startAt ? new Date(access.startAt) : null;
-
   if (!startAt && grant) {
     status = "active";
     startAt = grant.grantedAt ? new Date(grant.grantedAt) : null;
@@ -186,13 +186,7 @@ async function buildAccessStatusPayload(examId, email) {
   };
 }
 
-function noStore(res) {
-  res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
-  res.set("Pragma", "no-cache");
-  res.set("Expires", "0");
-}
-
-/* ───────────────────────── Exams ───────────────────────── */
+/* ───────────────────────── Exams CRUD ───────────────────────── */
 router.get("/exams", async (_req, res) => {
   const exams = await PrepExam.find({}, { examId: 1, name: 1 }).sort({ name: 1 }).lean();
   res.json({ success: true, exams });
@@ -278,7 +272,7 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
   }
 });
 
-/* ───────────────────────── Templates (Modules) ───────────────────────── */
+/* ───────────────────────── Templates (Modules) — R2 Enabled ───────────────────────── */
 const fieldsUpload = upload.fields([
   { name: "images", maxCount: 12 },
   { name: "pdf", maxCount: 1 },
@@ -286,21 +280,18 @@ const fieldsUpload = upload.fields([
   { name: "video", maxCount: 1 },
 ]);
 
-// ✅ FIX: Skip Multer when not multipart — prevents "Unexpected end of form"
 router.post("/templates", isAdmin, (req, res, next) => {
   const ctype = req.headers["content-type"] || "";
   if (!ctype.includes("multipart/form-data")) {
-    req.files = {}; // no uploads, safe default
+    req.files = {};
     return next();
   }
 
-  // Normal Multer processing
   fieldsUpload(req, res, function (err) {
     if (!err) return next();
-
     if (err instanceof multer.MulterError) {
       const map = {
-        LIMIT_FILE_SIZE: "One of the files is too large (max 40MB each).",
+        LIMIT_FILE_SIZE: "One of the files is too large (max 40 MB each).",
         LIMIT_PART_COUNT: "Too many parts in form.",
         LIMIT_FILE_COUNT: "Too many files.",
         LIMIT_FIELD_KEY: "Field name too long.",
@@ -311,14 +302,12 @@ router.post("/templates", isAdmin, (req, res, next) => {
       const msg = map[err.code] || `Upload error: ${err.message}`;
       return res.status(400).json({ success: false, error: msg, code: err.code });
     }
-
     if (err && /Unexpected end of form/i.test(err.message)) {
       return res.status(400).json({
         success: false,
         error: "Incomplete form submission — please try again.",
       });
     }
-
     return res.status(400).json({ success: false, error: err.message || "Upload failed" });
   });
 }, async (req, res) => {
@@ -341,33 +330,35 @@ router.post("/templates", isAdmin, (req, res, next) => {
     if (!examId || !dayIndex)
       return res.status(400).json({ success: false, error: "examId & dayIndex required" });
 
+    const useR2 = R2?.r2Enabled?.();
     const files = [];
-    const saveFile = async (f) =>
-      storeBuffer({
-        buffer: f.buffer,
-        filename: f.originalname || f.fieldname,
-        mime: f.mimetype || "application/octet-stream",
-      });
 
-    if (req.files?.images)
-      for (const f of req.files.images) {
-        const s = await saveFile(f);
-        files.push({ kind: "image", url: s.url, mime: f.mimetype });
+    async function saveFile(f) {
+      const name = f.originalname || f.fieldname;
+      const mime = f.mimetype || "application/octet-stream";
+      const buffer = f.buffer;
+      if (useR2 && typeof R2.uploadBuffer === "function") {
+        const key = `prep/${safeName(name)}`;
+        const url = await R2.uploadBuffer(key, buffer, mime);
+        return { url, via: "r2" };
       }
-    if (req.files?.pdf?.[0]) {
-      const f = req.files.pdf[0];
-      const s = await saveFile(f);
-      files.push({ kind: "pdf", url: s.url, mime: f.mimetype });
+      return await storeBuffer({ buffer, filename: name, mime });
     }
-    if (req.files?.audio?.[0]) {
-      const f = req.files.audio[0];
-      const s = await saveFile(f);
-      files.push({ kind: "audio", url: s.url, mime: f.mimetype });
-    }
-    if (req.files?.video?.[0]) {
-      const f = req.files.video[0];
-      const s = await saveFile(f);
-      files.push({ kind: "video", url: s.url, mime: f.mimetype });
+
+    const groups = [
+      ["images", "image"],
+      ["pdf", "pdf"],
+      ["audio", "audio"],
+      ["video", "video"],
+    ];
+
+    for (const [field, kind] of groups) {
+      if (req.files?.[field]) {
+        for (const f of req.files[field]) {
+          const s = await saveFile(f);
+          files.push({ kind, url: s.url, mime: f.mimetype });
+        }
+      }
     }
 
     const manualOrPasted = (manualText || content || "").trim();
@@ -395,7 +386,7 @@ router.post("/templates", isAdmin, (req, res, next) => {
     res.json({
       success: true,
       item: { ...doc.toObject(), files },
-      message: `Uploaded ${files.length} file(s)`,
+      message: `Uploaded ${files.length} file(s) via ${useR2 ? "R2" : "GridFS"}`,
     });
   } catch (e) {
     console.error("[prep/templates] create failed:", e);
