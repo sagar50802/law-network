@@ -76,7 +76,7 @@ const GrantModel = mongoose.model("PrepAccessGrant", grantSchema);
  * ---------------------------------------------------------------------------- */
 const rid = () => crypto.randomBytes(12).toString("hex");
 const normEmail = (s) => String(s || "").trim().toLowerCase();
-const normExamId = (s) => String(s || "").trim();
+const normExamId = (s) => String(s || "").trim().toLowerCase().replace(/\s+/g, "");
 
  export async function getConfig() {
   let cfgDoc = await ConfigModel.findOne().lean();
