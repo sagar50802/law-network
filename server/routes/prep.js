@@ -99,8 +99,12 @@ try {
   PrepAccessGrant = mongoose.model("PrepAccessGrant", grantSchema);
 }
 
-function normExamId(s) { return String(s || "").trim(); }
-function normEmail(s) { return String(s || "").trim().toLowerCase(); }
+function normExamId(s) {
+  return String(s || "").trim();
+}
+function normEmail(s) {
+  return String(s || "").trim().toLowerCase();
+}
 
 /* ───────────────────────── Overlay Computation ───────────────────────── */
 function computeOverlayAt(exam, access) {
@@ -117,7 +121,8 @@ function computeOverlayAt(exam, access) {
     const now = new Date();
     const todayDay = Math.max(1, Math.floor((now - startAt) / 86400000) + 1);
     const [hh, mm] = showAtLocal.split(":").map((x) => parseInt(x, 10) || 0);
-    const reached = now.getHours() > hh || (now.getHours() === hh && now.getMinutes() >= mm);
+    const reached =
+      now.getHours() > hh || (now.getHours() === hh && now.getMinutes() >= mm);
     return { openAt: null, planTimeShow: todayDay >= showOnDay && reached };
   }
   if (mode === "fixed-date") {
@@ -133,19 +138,27 @@ function computeOverlayAt(exam, access) {
 async function buildAccessStatusPayload(examId, email) {
   const exam = await PrepExam.findOne({ examId }).lean();
   if (!exam) {
-    return { success: true, exam: null, access: { status: "none" }, overlay: {}, serverNow: Date.now() };
+    return {
+      success: true,
+      exam: null,
+      access: { status: "none" },
+      overlay: {},
+      serverNow: Date.now(),
+    };
   }
 
   const planDays = await planDaysForExam(examId);
 
-  const access = email ? await PrepAccess.findOne({ examId, userEmail: email }).lean() : null;
-  const grant = (email
+  const access = email
+    ? await PrepAccess.findOne({ examId, userEmail: email }).lean()
+    : null;
+  const grant = email
     ? await PrepAccessGrant.findOne({
         examId: new RegExp(`^${normExamId(examId)}$`, "i"),
         email: normEmail(email),
         status: "active",
       }).lean()
-    : null);
+    : null;
 
   let status = access?.status || "none";
   let startAt = access?.startAt ? new Date(access.startAt) : null;
@@ -188,7 +201,9 @@ async function buildAccessStatusPayload(examId, email) {
 
 /* ───────────────────────── Exams CRUD ───────────────────────── */
 router.get("/exams", async (_req, res) => {
-  const exams = await PrepExam.find({}, { examId: 1, name: 1 }).sort({ name: 1 }).lean();
+  const exams = await PrepExam.find({}, { examId: 1, name: 1 })
+    .sort({ name: 1 })
+    .lean();
   res.json({ success: true, exams });
 });
 
@@ -206,7 +221,9 @@ router.post("/exams", isAdmin, async (req, res) => {
     res.json({ success: true, exam: doc });
   } catch (e) {
     console.error("[POST /exams] error:", e);
-    res.status(500).json({ success: false, message: e.message || "Unexpected server error" });
+    res
+      .status(500)
+      .json({ success: false, message: e.message || "Unexpected server error" });
   }
 });
 
@@ -238,7 +255,8 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
   try {
     const examId = req.params.examId;
     const b = req.body || {};
-    if (!examId) return res.status(400).json({ success: false, error: "Missing examId" });
+    if (!examId)
+      return res.status(400).json({ success: false, error: "Missing examId" });
 
     const update = {
       price: Number(b.price || 0),
@@ -264,7 +282,8 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
       { new: true, upsert: false }
     );
 
-    if (!doc) return res.status(404).json({ success: false, error: "Exam not found" });
+    if (!doc)
+      return res.status(404).json({ success: false, error: "Exam not found" });
     res.json({ success: true, exam: doc });
   } catch (e) {
     console.error("[PATCH overlay-config] error:", e);
@@ -288,7 +307,7 @@ router.get("/exams/:examId/meta", isAdmin, async (req, res) => {
       examId: new RegExp(`^${String(examId).trim()}$`, "i"),
     }).distinct("dayIndex");
 
-    // ✅ NEW: Merge prep_access.js global config (Option A)
+    // ✅ Merge prep_access.js global config
     const globalCfg = await getConfig();
     const payment = {
       priceINR: Number(globalCfg.priceINR || exam.price || 0),
@@ -317,6 +336,41 @@ router.get("/exams/:examId/meta", isAdmin, async (req, res) => {
   }
 });
 
+/* --- PUBLIC meta fetch for students (no admin login needed) --- */
+router.get("/public/exams/:examId/meta", async (req, res) => {
+  try {
+    const examId = req.params.examId;
+    const exam = await PrepExam.findOne({
+      examId: new RegExp(`^${examId}$`, "i"),
+    }).lean();
+    if (!exam) return res.status(404).json({ success: false, error: "Exam not found" });
+
+    const globalCfg = await getConfig();
+    const payment = {
+      priceINR: Number(globalCfg.priceINR || exam.price || 0),
+      upiId: globalCfg.upiId || exam.overlay?.payment?.upiId || "",
+      upiName: globalCfg.upiName || exam.overlay?.payment?.upiName || "",
+      whatsappNumber:
+        globalCfg.whatsappNumber || exam.overlay?.payment?.whatsappNumber || "",
+      whatsappText:
+        globalCfg.whatsappText || exam.overlay?.payment?.whatsappText || "",
+    };
+
+    res.json({
+      success: true,
+      exam: {
+        examId: exam.examId,
+        name: exam.name,
+        price: payment.priceINR,
+        overlay: { payment },
+      },
+    });
+  } catch (e) {
+    console.error("[PUBLIC /prep/exams/:examId/meta] error:", e);
+    res.status(500).json({ success: false, error: e.message || "server error" });
+  }
+});
+
 /* ───────────────────────── Templates (Modules) — R2 Enabled ───────────────────────── */
 const fieldsUpload = upload.fields([
   { name: "images", maxCount: 12 },
@@ -325,119 +379,125 @@ const fieldsUpload = upload.fields([
   { name: "video", maxCount: 1 },
 ]);
 
-router.post("/templates", isAdmin, (req, res, next) => {
-  const ctype = req.headers["content-type"] || "";
-  if (!ctype.includes("multipart/form-data")) {
-    req.files = {};
-    return next();
-  }
-
-  fieldsUpload(req, res, function (err) {
-    if (!err) return next();
-    if (err instanceof multer.MulterError) {
-      const map = {
-        LIMIT_FILE_SIZE: "One of the files is too large (max 40 MB each).",
-        LIMIT_PART_COUNT: "Too many parts in form.",
-        LIMIT_FILE_COUNT: "Too many files.",
-        LIMIT_FIELD_KEY: "Field name too long.",
-        LIMIT_FIELD_VALUE: "A field value is too long.",
-        LIMIT_FIELD_COUNT: "Too many fields.",
-        LIMIT_UNEXPECTED_FILE: "Unexpected file field.",
-      };
-      const msg = map[err.code] || `Upload error: ${err.message}`;
-      return res.status(400).json({ success: false, error: msg, code: err.code });
+router.post(
+  "/templates",
+  isAdmin,
+  (req, res, next) => {
+    const ctype = req.headers["content-type"] || "";
+    if (!ctype.includes("multipart/form-data")) {
+      req.files = {};
+      return next();
     }
-    if (err && /Unexpected end of form/i.test(err.message)) {
-      return res.status(400).json({
-        success: false,
-        error: "Incomplete form submission — please try again.",
-      });
-    }
-    return res.status(400).json({ success: false, error: err.message || "Upload failed" });
-  });
-}, async (req, res) => {
-  try {
-    const {
-      examId,
-      dayIndex,
-      slotMin = 0,
-      title = "",
-      releaseAt,
-      manualText = "",
-      extractOCR,
-      showOriginal,
-      allowDownload,
-      highlight,
-      background,
-      content,
-    } = req.body || {};
 
-    if (!examId || !dayIndex)
-      return res.status(400).json({ success: false, error: "examId & dayIndex required" });
-
-    const useR2 = R2?.r2Enabled?.();
-    const files = [];
-
-    async function saveFile(f) {
-      const name = f.originalname || f.fieldname;
-      const mime = f.mimetype || "application/octet-stream";
-      const buffer = f.buffer;
-      if (useR2 && typeof R2.uploadBuffer === "function") {
-        const key = `prep/${safeName(name)}`;
-        const url = await R2.uploadBuffer(key, buffer, mime);
-        return { url, via: "r2" };
+    fieldsUpload(req, res, function (err) {
+      if (!err) return next();
+      if (err instanceof multer.MulterError) {
+        const map = {
+          LIMIT_FILE_SIZE: "One of the files is too large (max 40 MB each).",
+          LIMIT_PART_COUNT: "Too many parts in form.",
+          LIMIT_FILE_COUNT: "Too many files.",
+          LIMIT_FIELD_KEY: "Field name too long.",
+          LIMIT_FIELD_VALUE: "A field value is too long.",
+          LIMIT_FIELD_COUNT: "Too many fields.",
+          LIMIT_UNEXPECTED_FILE: "Unexpected file field.",
+        };
+        const msg = map[err.code] || `Upload error: ${err.message}`;
+        return res.status(400).json({ success: false, error: msg, code: err.code });
       }
-      return await storeBuffer({ buffer, filename: name, mime });
-    }
+      if (err && /Unexpected end of form/i.test(err.message)) {
+        return res
+          .status(400)
+          .json({ success: false, error: "Incomplete form submission — please try again." });
+      }
+      return res
+        .status(400)
+        .json({ success: false, error: err.message || "Upload failed" });
+    });
+  },
+  async (req, res) => {
+    try {
+      const {
+        examId,
+        dayIndex,
+        slotMin = 0,
+        title = "",
+        releaseAt,
+        manualText = "",
+        extractOCR,
+        showOriginal,
+        allowDownload,
+        highlight,
+        background,
+        content,
+      } = req.body || {};
 
-    const groups = [
-      ["images", "image"],
-      ["pdf", "pdf"],
-      ["audio", "audio"],
-      ["video", "video"],
-    ];
+      if (!examId || !dayIndex)
+        return res.status(400).json({ success: false, error: "examId & dayIndex required" });
 
-    for (const [field, kind] of groups) {
-      if (req.files?.[field]) {
-        for (const f of req.files[field]) {
-          const s = await saveFile(f);
-          files.push({ kind, url: s.url, mime: f.mimetype });
+      const useR2 = R2?.r2Enabled?.();
+      const files = [];
+
+      async function saveFile(f) {
+        const name = f.originalname || f.fieldname;
+        const mime = f.mimetype || "application/octet-stream";
+        const buffer = f.buffer;
+        if (useR2 && typeof R2.uploadBuffer === "function") {
+          const key = `prep/${safeName(name)}`;
+          const url = await R2.uploadBuffer(key, buffer, mime);
+          return { url, via: "r2" };
+        }
+        return await storeBuffer({ buffer, filename: name, mime });
+      }
+
+      const groups = [
+        ["images", "image"],
+        ["pdf", "pdf"],
+        ["audio", "audio"],
+        ["video", "video"],
+      ];
+
+      for (const [field, kind] of groups) {
+        if (req.files?.[field]) {
+          for (const f of req.files[field]) {
+            const s = await saveFile(f);
+            files.push({ kind, url: s.url, mime: f.mimetype });
+          }
         }
       }
+
+      const manualOrPasted = (manualText || content || "").trim();
+      const relAt = releaseAt ? new Date(releaseAt) : null;
+      const status = relAt && relAt > new Date() ? "scheduled" : "released";
+
+      const doc = await PrepModule.create({
+        examId,
+        dayIndex: Number(dayIndex),
+        slotMin: Number(slotMin),
+        title,
+        text: manualOrPasted,
+        files,
+        flags: {
+          extractOCR: truthy(extractOCR),
+          showOriginal: truthy(showOriginal),
+          allowDownload: truthy(allowDownload),
+          highlight: truthy(highlight),
+          background,
+        },
+        releaseAt: relAt || undefined,
+        status,
+      });
+
+      res.json({
+        success: true,
+        item: { ...doc.toObject(), files },
+        message: `Uploaded ${files.length} file(s) via ${useR2 ? "R2" : "GridFS"}`,
+      });
+    } catch (e) {
+      console.error("[prep/templates] create failed:", e);
+      res.status(500).json({ success: false, error: e?.message || "server error" });
     }
-
-    const manualOrPasted = (manualText || content || "").trim();
-    const relAt = releaseAt ? new Date(releaseAt) : null;
-    const status = relAt && relAt > new Date() ? "scheduled" : "released";
-
-    const doc = await PrepModule.create({
-      examId,
-      dayIndex: Number(dayIndex),
-      slotMin: Number(slotMin),
-      title,
-      text: manualOrPasted,
-      files,
-      flags: {
-        extractOCR: truthy(extractOCR),
-        showOriginal: truthy(showOriginal),
-        allowDownload: truthy(allowDownload),
-        highlight: truthy(highlight),
-        background,
-      },
-      releaseAt: relAt || undefined,
-      status,
-    });
-
-     res.json({
-  success: true,
-  item: { ...doc.toObject(), files },
-  message: `Uploaded ${files.length} file(s) via ${useR2 ? "R2" : "GridFS"}`,
-});
-  } catch (e) {
-    console.error("[prep/templates] create failed:", e);
-    res.status(500).json({ success: false, error: e?.message || "server error" });
   }
-});
+);
 
 /* ───────── Fetch Existing Templates ───────── */
 router.get("/templates", isAdmin, async (req, res) => {
@@ -453,7 +513,6 @@ router.get("/templates", isAdmin, async (req, res) => {
       .sort({ dayIndex: 1, slotMin: 1 })
       .lean();
 
-    // Return both keys for compatibility
     res.json({ success: true, modules, items: modules });
   } catch (e) {
     console.error("[GET /prep/templates] error:", e);
