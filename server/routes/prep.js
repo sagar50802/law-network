@@ -272,6 +272,32 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
   }
 });
 
+/* ───────────────────────── Exam Meta Fetch ───────────────────────── */
+router.get("/exams/:examId/meta", isAdmin, async (req, res) => {
+  try {
+    const examId = req.params.examId;
+    const exam = await PrepExam.findOne({ examId }).lean();
+    if (!exam) return res.status(404).json({ success: false, error: "Exam not found" });
+
+    const totalModules = await PrepModule.countDocuments({ examId });
+    const days = await PrepModule.find({ examId }).distinct("dayIndex");
+
+    res.json({
+      success: true,
+      exam: {
+        examId: exam.examId,
+        name: exam.name,
+        price: exam.price,
+        totalModules,
+        totalDays: days.length,
+      },
+    });
+  } catch (e) {
+    console.error("[GET /prep/exams/:examId/meta] error:", e);
+    res.status(500).json({ success: false, error: e.message || "server error" });
+  }
+});
+
 /* ───────────────────────── Templates (Modules) — R2 Enabled ───────────────────────── */
 const fieldsUpload = upload.fields([
   { name: "images", maxCount: 12 },
