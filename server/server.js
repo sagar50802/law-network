@@ -1,3 +1,7 @@
+/* -------------------------------------------------------------------------- */
+/* ✅ Law Network — Backend Entry (server.js, full production version)        */
+/* -------------------------------------------------------------------------- */
+
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
@@ -6,6 +10,9 @@ import fs from "fs";
 import mongoose from "mongoose";
 import { fileURLToPath } from "url";
 
+/* -------------------------------------------------------------------------- */
+/* ✅ Express app initialization                                              */
+/* -------------------------------------------------------------------------- */
 const app = express();
 const PORT = process.env.PORT || 5000;
 
@@ -13,12 +20,15 @@ const PORT = process.env.PORT || 5000;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-/* ---------- CORS (robust Render setup) ---------- */
+/* -------------------------------------------------------------------------- */
+/* ✅ CORS Setup (Render-safe, includes Option A recommended configuration)    */
+/* -------------------------------------------------------------------------- */
 const CLIENT_URL =
   process.env.CLIENT_URL ||
   process.env.VITE_BACKEND_URL ||
   "https://law-network-client.onrender.com";
 
+/* Safe whitelist for all expected environments */
 const ALLOWED = new Set([
   CLIENT_URL,
   "https://law-network-client.onrender.com",
@@ -27,6 +37,20 @@ const ALLOWED = new Set([
   "http://localhost:3000",
 ]);
 
+/* Option A recommended quick CORS initialization (ensures headers early) */
+app.use(
+  cors({
+    origin: [
+      "https://law-network-client.onrender.com",
+      "https://law-network.onrender.com",
+      "http://localhost:5173",
+      "http://localhost:3000",
+    ],
+    credentials: true,
+  })
+);
+
+/* Robust custom CORS options for advanced control */
 const corsOptions = {
   origin(origin, cb) {
     if (!origin) return cb(null, true);
@@ -53,7 +77,7 @@ app.set("trust proxy", 1);
 app.use(cors(corsOptions));
 app.options("*", cors(corsOptions));
 
-/* Always attach CORS headers for allowed origins */
+/* Always attach CORS headers manually for allowed origins (safety fallback) */
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   let ok = false;
@@ -84,18 +108,24 @@ app.use((req, res, next) => {
   next();
 });
 
-/* ---------- Body parsers (✅ increased limits for uploads) ---------- */
+/* -------------------------------------------------------------------------- */
+/* ✅ Body parsers (large limit for file uploads)                             */
+/* -------------------------------------------------------------------------- */
 app.use(express.json({ limit: "100mb" }));
 app.use(express.urlencoded({ extended: true, limit: "100mb" }));
 
-/* ---------- Tiny logger ---------- */
+/* -------------------------------------------------------------------------- */
+/* ✅ Tiny logger for incoming requests                                       */
+/* -------------------------------------------------------------------------- */
 app.use((req, _res, next) => {
   if (req.path === "/favicon.ico") return next(); // avoid noisy logs
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
   next();
 });
 
-/* ---------- Fix accidental /api/api/* ---------- */
+/* -------------------------------------------------------------------------- */
+/* ✅ Fix accidental /api/api/* rewrites                                      */
+/* -------------------------------------------------------------------------- */
 app.use((req, _res, next) => {
   if (req.url.startsWith("/api/api/")) {
     const before = req.url;
@@ -105,7 +135,9 @@ app.use((req, _res, next) => {
   next();
 });
 
-/* ---------- Ensure upload folders exist ---------- */
+/* -------------------------------------------------------------------------- */
+/* ✅ Ensure upload folders exist                                             */
+/* -------------------------------------------------------------------------- */
 [
   "uploads",
   "uploads/articles",
@@ -121,7 +153,9 @@ app.use((req, _res, next) => {
   if (!fs.existsSync(full)) fs.mkdirSync(full, { recursive: true });
 });
 
-/* ---------- Static /uploads ---------- */
+/* -------------------------------------------------------------------------- */
+/* ✅ Static uploads serving (with cache headers)                             */
+/* -------------------------------------------------------------------------- */
 const UPLOADS_DIR_A = path.join(__dirname, "uploads");
 const UPLOADS_DIR_B = path.join(process.cwd(), "server", "uploads");
 
@@ -141,7 +175,9 @@ const staticHeaders = {
 app.use("/uploads", express.static(UPLOADS_DIR_A, staticHeaders));
 app.use("/uploads", express.static(UPLOADS_DIR_B, staticHeaders));
 
-/* ---------- Routes ---------- */
+/* -------------------------------------------------------------------------- */
+/* ✅ Import all route modules                                                */
+/* -------------------------------------------------------------------------- */
 import articleRoutes from "./routes/articles.js";
 import bannerRoutes from "./routes/banners.js";
 import consultancyRoutes from "./routes/consultancy.js";
@@ -161,7 +197,9 @@ import plagiarismRoutes from "./routes/plagiarism.js";
 /* ---------- ✅ New Research Drafting Route ---------- */
 import researchDraftingRoutes from "./routes/researchDrafting.js";
 
-/* ---------- Use Routes ---------- */
+/* -------------------------------------------------------------------------- */
+/* ✅ Mount routes                                                            */
+/* -------------------------------------------------------------------------- */
 app.use("/api/articles", articleRoutes);
 app.use("/api/banners", bannerRoutes);
 app.use("/api/consultancy", consultancyRoutes);
@@ -174,12 +212,11 @@ app.use("/api/qr", qrRoutes);
 app.use("/api/exams", examRoutes);
 
 /* ✅ FIXED MOUNTING ORDER
-   prep_access.js already defines full /api/prep/... paths,
-   so mount at root instead of /api/prep to avoid /api/prep/api/prep/... duplication.
+   prep_access.js defines full /api/prep/... paths, so mount at root.
 */
 app.use("/", prepAccessRoutes);
 
-/* ✅ prep.js defines relative endpoints, so keep under /api/prep */
+/* ✅ prep.js defines relative endpoints, so mount under /api/prep */
 app.use("/api/prep", prepRoutes);
 
 app.use("/api/files", filesRoutes);
@@ -189,19 +226,26 @@ app.use("/api/plagiarism", plagiarismRoutes);
 /* ✅ Added Research Drafting API */
 app.use("/api/research-drafting", researchDraftingRoutes);
 
-/* ---------- Health, favicon & 404 ---------- */
+/* -------------------------------------------------------------------------- */
+/* ✅ Health, favicon & root endpoints                                        */
+/* -------------------------------------------------------------------------- */
 app.get("/favicon.ico", (_req, res) => res.sendStatus(204));
 app.get("/api/access/status", (_req, res) => res.json({ access: false }));
 app.get("/api/ping", (_req, res) => res.json({ ok: true, ts: Date.now() }));
 app.get("/", (_req, res) => res.json({ ok: true, root: true }));
 
+/* -------------------------------------------------------------------------- */
+/* ✅ 404 Handler                                                             */
+/* -------------------------------------------------------------------------- */
 app.use((req, res) =>
   res
     .status(404)
     .json({ success: false, message: `Not Found: ${req.method} ${req.originalUrl}` })
 );
 
-/* ---------- Error handler (✅ upload safety added) ---------- */
+/* -------------------------------------------------------------------------- */
+/* ✅ Global Error Handler (with upload safety)                               */
+/* -------------------------------------------------------------------------- */
 app.use((err, _req, res, _next) => {
   if (err?.type === "entity.too.large") {
     return res
@@ -214,7 +258,9 @@ app.use((err, _req, res, _next) => {
     .json({ success: false, message: err.message || "Server error" });
 });
 
-/* ---------- Mongo ---------- */
+/* -------------------------------------------------------------------------- */
+/* ✅ MongoDB Connection (robust)                                             */
+/* -------------------------------------------------------------------------- */
 const MONGO =
   process.env.MONGO_URI ||
   process.env.MONGO_URL ||
@@ -230,10 +276,14 @@ if (!MONGO) {
     .catch((err) => console.error("✗ MongoDB connection failed:", err.message));
 }
 
-/* ---------- Startup log for prep_access ---------- */
+/* -------------------------------------------------------------------------- */
+/* ✅ Startup Log                                                             */
+/* -------------------------------------------------------------------------- */
 console.log("✅ prep_access.js mounted at root ('/'). It serves /api/prep/* endpoints.");
 
-/* ---------- Start & graceful shutdown ---------- */
+/* -------------------------------------------------------------------------- */
+/* ✅ Server Startup & Graceful Shutdown                                      */
+/* -------------------------------------------------------------------------- */
 const server = app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
@@ -258,3 +308,7 @@ process.on("SIGTERM", () => shutdown("SIGTERM"));
 process.on("unhandledRejection", (err) => {
   console.error("Unhandled Rejection:", err);
 });
+
+/* -------------------------------------------------------------------------- */
+/* ✅ End of server.js                                                        */
+/* -------------------------------------------------------------------------- */
