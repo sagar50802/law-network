@@ -428,11 +428,11 @@ router.post("/templates", isAdmin, (req, res, next) => {
       status,
     });
 
-    res.json({
-      success: true,
-      item: { ...doc.toObject(), files },
-      message: `Uploaded ${files.length} file(s) via ${useR2 ? "R2" : "GridFS"}`,
-   ... });
+     res.json({
+  success: true,
+  item: { ...doc.toObject(), files },
+  message: `Uploaded ${files.length} file(s) via ${useR2 ? "R2" : "GridFS"}`,
+});
   } catch (e) {
     console.error("[prep/templates] create failed:", e);
     res.status(500).json({ success: false, error: e?.message || "server error" });
