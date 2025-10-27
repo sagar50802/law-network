@@ -394,6 +394,25 @@ router.post("/templates", isAdmin, (req, res, next) => {
   }
 });
 
+/* ───────────────────────── Fetch Existing Templates ───────────────────────── */
+router.get("/templates", isAdmin, async (req, res) => {
+  try {
+    const { examId } = req.query;
+    if (!examId) {
+      return res.status(400).json({ success: false, error: "examId required" });
+    }
+
+    const modules = await PrepModule.find({ examId })
+      .sort({ dayIndex: 1, slotMin: 1 })
+      .lean();
+
+    res.json({ success: true, modules });
+  } catch (e) {
+    console.error("[GET /prep/templates] error:", e);
+    res.status(500).json({ success: false, error: e.message || "server error" });
+  }
+});
+
 /* ───────────────────────── Delete Template ───────────────────────── */
 router.delete("/templates/:id", isAdmin, async (req, res) => {
   try {
@@ -418,6 +437,7 @@ router.use((err, _req, res, _next) => {
   }
   res.status(404).json({ success: false, error: "Not found" });
 });
+
 console.log("✅ prep.js routes registered successfully");
 
 export default router;
