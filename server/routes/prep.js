@@ -1,4 +1,3 @@
-// routes/prep.js
 // LawNetwork Prep Routes — Exams, Modules, Access, Progress
 
 import express from "express";
@@ -426,7 +425,7 @@ router.post("/templates", isAdmin, (req, res, next) => {
   }
 });
 
-/* ───────────────────────── Fetch Existing Templates ───────────────────────── */
+/* ───────── Fetch Existing Templates ───────── */
 router.get("/templates", isAdmin, async (req, res) => {
   try {
     const { examId } = req.query;
@@ -435,12 +434,13 @@ router.get("/templates", isAdmin, async (req, res) => {
     }
 
     const modules = await PrepModule.find({
-      examId: new RegExp(`^${String(examId).trim()}$`, "i"), // case-insensitive
+      examId: new RegExp(`^${String(examId).trim()}$`, "i"),
     })
       .sort({ dayIndex: 1, slotMin: 1 })
       .lean();
 
-    res.json({ success: true, modules });
+    // Return both keys for compatibility
+    res.json({ success: true, modules, items: modules });
   } catch (e) {
     console.error("[GET /prep/templates] error:", e);
     res.status(500).json({ success: false, error: e.message || "server error" });
