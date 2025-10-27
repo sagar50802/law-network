@@ -276,11 +276,17 @@ router.patch("/exams/:examId/overlay-config", isAdmin, async (req, res) => {
 router.get("/exams/:examId/meta", isAdmin, async (req, res) => {
   try {
     const examId = req.params.examId;
-    const exam = await PrepExam.findOne({ examId }).lean();
+    const exam = await PrepExam.findOne({
+      examId: new RegExp(`^${String(examId).trim()}$`, "i"),
+    }).lean();
     if (!exam) return res.status(404).json({ success: false, error: "Exam not found" });
 
-    const totalModules = await PrepModule.countDocuments({ examId });
-    const days = await PrepModule.find({ examId }).distinct("dayIndex");
+    const totalModules = await PrepModule.countDocuments({
+      examId: new RegExp(`^${String(examId).trim()}$`, "i"),
+    });
+    const days = await PrepModule.find({
+      examId: new RegExp(`^${String(examId).trim()}$`, "i"),
+    }).distinct("dayIndex");
 
     res.json({
       success: true,
@@ -428,7 +434,9 @@ router.get("/templates", isAdmin, async (req, res) => {
       return res.status(400).json({ success: false, error: "examId required" });
     }
 
-    const modules = await PrepModule.find({ examId })
+    const modules = await PrepModule.find({
+      examId: new RegExp(`^${String(examId).trim()}$`, "i"), // case-insensitive
+    })
       .sort({ dayIndex: 1, slotMin: 1 })
       .lean();
 
