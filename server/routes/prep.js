@@ -418,5 +418,6 @@ router.use((err, _req, res, _next) => {
   }
   res.status(404).json({ success: false, error: "Not found" });
 });
+console.log("✅ prep.js routes registered successfully");
 
 export default router;
