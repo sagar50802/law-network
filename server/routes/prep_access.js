@@ -1,5 +1,5 @@
 // prep_access.js — Final production version (Mongo persistent, Render-safe)
-// Public + Admin routes fully compatible with your current frontend
+// Public + Admin routes fully compatible with current frontend
 
 import express, { Router } from "express";
 import mongoose from "mongoose";
@@ -20,7 +20,9 @@ if (!mongoose.connection.readyState) {
       dbName: process.env.MONGO_DB || undefined,
     })
     .then(() => console.log("[prep_access] ✅ MongoDB connected"))
-    .catch((err) => console.error("[prep_access] ❌ MongoDB error:", err.message));
+    .catch((err) =>
+      console.error("[prep_access] ❌ MongoDB error:", err.message)
+    );
 }
 
 /* ----------------------------------------------------------------------------
@@ -44,13 +46,17 @@ const dbSchema = new mongoose.Schema({
 
 const requestSchema = new mongoose.Schema({
   id: { type: String, required: true, unique: true },
-  examId: { type: String, required: true }, // stored as provided; matching is case-insensitive where needed
+  examId: { type: String, required: true },
   email: { type: String, required: true, lowercase: true, trim: true },
   intent: { type: String, default: "purchase" },
   name: String,
   phone: String,
   note: String,
-  status: { type: String, default: "pending", enum: ["pending", "approved", "rejected"] },
+  status: {
+    type: String,
+    default: "pending",
+    enum: ["pending", "approved", "rejected"],
+  },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
 });
@@ -63,7 +69,6 @@ const grantSchema = new mongoose.Schema({
   revokedAt: { type: Date },
 });
 
-/* Helpful indexes for speed */
 requestSchema.index({ examId: 1, email: 1, createdAt: -1 });
 grantSchema.index({ examId: 1, email: 1, status: 1 });
 
@@ -76,9 +81,10 @@ const GrantModel = mongoose.model("PrepAccessGrant", grantSchema);
  * ---------------------------------------------------------------------------- */
 const rid = () => crypto.randomBytes(12).toString("hex");
 const normEmail = (s) => String(s || "").trim().toLowerCase();
-const normExamId = (s) => String(s || "").trim().toLowerCase().replace(/\s+/g, "");
+const normExamId = (s) =>
+  String(s || "").trim().toLowerCase().replace(/\s+/g, "");
 
- export async function getConfig() {
+export async function getConfig() {
   let cfgDoc = await ConfigModel.findOne().lean();
   if (!cfgDoc) {
     const seed = new ConfigModel({
@@ -122,33 +128,30 @@ async function findActiveGrant(examId, email) {
   }).lean();
 }
 
-/**
- * FIXED: correctly apply $unset when making a grant active again.
- * Previously, {$set: { ..., $unset: {revokedAt:1}}} would store a literal "$unset" field.
- */
 async function upsertGrant(examId, email, status) {
   const now = new Date();
-
   if (status === "active") {
     const update = {
-      $set: { status: "active", grantedAt: now, examId: normExamId(examId), email: normEmail(email) },
+      $set: {
+        status: "active",
+        grantedAt: now,
+        examId: normExamId(examId),
+        email: normEmail(email),
+      },
       $unset: { revokedAt: 1 },
     };
-    const g = await GrantModel.findOneAndUpdate(
+    return GrantModel.findOneAndUpdate(
       { examId: normExamId(examId), email: normEmail(email) },
       update,
       { upsert: true, new: true }
     );
-    return g;
+  } else {
+    return GrantModel.findOneAndUpdate(
+      { examId: normExamId(examId), email: normEmail(email) },
+      { $set: { status: "revoked", revokedAt: now } },
+      { upsert: true, new: true }
+    );
   }
-
-  // status === "revoked"
-  const g = await GrantModel.findOneAndUpdate(
-    { examId: normExamId(examId), email: normEmail(email) },
-    { $set: { status: "revoked", revokedAt: now } },
-    { upsert: true, new: true }
-  );
-  return g;
 }
 
 async function latestRequest(examId, email) {
@@ -180,9 +183,7 @@ function adminExamName(examId) {
  * ---------------------------------------------------------------------------- */
 const router = Router();
 
-/* Robust body parsing:
-   - Accept proper JSON bodies
-   - Also tolerate text bodies containing JSON (if client mislabels content-type) */
+/* Middleware */
 router.use(express.text({ type: () => true }));
 router.use((req, _res, next) => {
   try {
@@ -190,7 +191,7 @@ router.use((req, _res, next) => {
       req.body = JSON.parse(req.body);
     }
   } catch {
-    // ignore; we'll still allow fallback to express.json
+    // ignore malformed body
   }
   next();
 });
@@ -200,12 +201,17 @@ router.use(express.json());
  * PUBLIC ROUTES
  * ---------------------------------------------------------------------------- */
 
-/* Guard: are we active / inactive, and what should overlay show? */
+/**
+ * ✅ NEW FIXED ROUTE:
+ * Guard — checks if the user already has active access.
+ * Used by both PrepWizard and PrepAccessOverlay.
+ */
 router.get("/api/prep/access/status/guard", async (req, res) => {
   try {
     const examId = normExamId(req.query.examId);
     const email = normEmail(req.query.email);
-    if (!examId) return res.status(400).json({ success: false, error: "Missing examId" });
+    if (!examId)
+      return res.status(400).json({ success: false, error: "Missing examId" });
 
     const cfg = await getConfig();
     const active = email ? await findActiveGrant(examId, email) : null;
@@ -219,7 +225,8 @@ router.get("/api/prep/access/status/guard", async (req, res) => {
     };
 
     let overlay = { mode: "purchase" };
-    if (!active && lastReq && lastReq.status === "pending") overlay.mode = "waiting";
+    if (!active && lastReq && lastReq.status === "pending")
+      overlay.mode = "waiting";
 
     res.json({ success: true, exam, access, overlay });
   } catch (e) {
@@ -238,12 +245,12 @@ router.post("/api/prep/access/request", async (req, res) => {
 
     const ex = normExamId(examId);
     const em = normEmail(email);
-    if (!ex || !em) {
-      return res.status(400).json({ success: false, error: "Missing examId or email" });
-    }
+    if (!ex || !em)
+      return res
+        .status(400)
+        .json({ success: false, error: "Missing examId or email" });
 
     const cfg = await getConfig();
-
     const already = await findActiveGrant(ex, em);
     if (already) return res.json({ success: true, code: "ALREADY_ACTIVE" });
 
@@ -265,7 +272,7 @@ router.post("/api/prep/access/request", async (req, res) => {
     if (cfg.autoGrant) {
       rec.status = "approved";
       rec.updatedAt = new Date();
-      await upsertGrant(ex, em, "active"); // properly unsets revokedAt if any
+      await upsertGrant(ex, em, "active");
       approved = true;
     }
 
@@ -273,18 +280,21 @@ router.post("/api/prep/access/request", async (req, res) => {
     res.json({ success: true, id: reqId, approved });
   } catch (e) {
     console.error("[access/request] error:", e);
-    res.status(500).json({ success: false, error: e.message || "Internal error" });
+    res
+      .status(500)
+      .json({ success: false, error: e.message || "Internal error" });
   }
 });
 
-/* Poll last request status */
+/* Poll request status */
 router.get("/api/prep/access/request/status", async (req, res) => {
   try {
     const examId = normExamId(req.query.examId);
     const email = normEmail(req.query.email);
-    if (!examId || !email) {
-      return res.status(400).json({ success: false, error: "Missing examId or email" });
-    }
+    if (!examId || !email)
+      return res
+        .status(400)
+        .json({ success: false, error: "Missing examId or email" });
 
     const last = await latestRequest(examId, email);
     if (!last) return res.json({ success: true, status: null });
@@ -299,7 +309,6 @@ router.get("/api/prep/access/request/status", async (req, res) => {
  * ADMIN ROUTES
  * ---------------------------------------------------------------------------- */
 
-/* Get config */
 router.get("/api/admin/prep/access/config", async (_req, res) => {
   try {
     const cfg = await getConfig();
@@ -310,7 +319,6 @@ router.get("/api/admin/prep/access/config", async (_req, res) => {
   }
 });
 
-/* Save config */
 router.post("/api/admin/prep/access/config", async (req, res) => {
   try {
     const b = req.body || {};
@@ -330,7 +338,7 @@ router.post("/api/admin/prep/access/config", async (req, res) => {
   }
 });
 
-/* List requests (case-insensitive examId; supports no examId for global view) */
+/* List requests */
 router.get("/api/admin/prep/access/requests", async (req, res) => {
   try {
     const examId = normExamId(req.query.examId);
@@ -338,7 +346,7 @@ router.get("/api/admin/prep/access/requests", async (req, res) => {
     const limit = Math.max(1, Math.min(500, Number(req.query.limit || 50)));
 
     const q = {};
-    if (examId) q.examId = new RegExp(`^${examId}$`, "i"); // tolerant match
+    if (examId) q.examId = new RegExp(`^${examId}$`, "i");
     if (status) q.status = status;
 
     const list = await RequestModel.find(q)
@@ -353,16 +361,15 @@ router.get("/api/admin/prep/access/requests", async (req, res) => {
   }
 });
 
-/* Approve latest request for (examId,email) or by id */
+/* Approve request */
 router.post("/api/admin/prep/access/approve", async (req, res) => {
   try {
     const { id } = req.body || {};
     let { examId, email } = req.body || {};
-
     let rec = null;
-    if (id) {
-      rec = await RequestModel.findOne({ id });
-    } else if (examId && email) {
+
+    if (id) rec = await RequestModel.findOne({ id });
+    else if (examId && email) {
       rec = await RequestModel.findOne({
         examId: new RegExp(`^${normExamId(examId)}$`, "i"),
         email: normEmail(email),
@@ -370,14 +377,14 @@ router.post("/api/admin/prep/access/approve", async (req, res) => {
         .sort({ createdAt: -1 })
         .exec();
     }
-    if (!rec) return res.status(404).json({ success: false, error: "Request not found" });
+
+    if (!rec)
+      return res.status(404).json({ success: false, error: "Request not found" });
 
     rec.status = "approved";
     rec.updatedAt = new Date();
     await rec.save();
-
     await upsertGrant(rec.examId, rec.email, "active");
-
     res.json({ success: true, request: rec.toObject() });
   } catch (e) {
     console.error("[admin/approve] error:", e);
@@ -390,11 +397,10 @@ router.post("/api/admin/prep/access/reject", async (req, res) => {
   try {
     const { id } = req.body || {};
     let { examId, email } = req.body || {};
-
     let rec = null;
-    if (id) {
-      rec = await RequestModel.findOne({ id });
-    } else if (examId && email) {
+
+    if (id) rec = await RequestModel.findOne({ id });
+    else if (examId && email) {
       rec = await RequestModel.findOne({
         examId: new RegExp(`^${normExamId(examId)}$`, "i"),
         email: normEmail(email),
@@ -402,12 +408,13 @@ router.post("/api/admin/prep/access/reject", async (req, res) => {
         .sort({ createdAt: -1 })
         .exec();
     }
-    if (!rec) return res.status(404).json({ success: false, error: "Request not found" });
+
+    if (!rec)
+      return res.status(404).json({ success: false, error: "Request not found" });
 
     rec.status = "rejected";
     rec.updatedAt = new Date();
     await rec.save();
-
     res.json({ success: true, request: rec.toObject() });
   } catch (e) {
     console.error("[admin/reject] error:", e);
@@ -415,14 +422,15 @@ router.post("/api/admin/prep/access/reject", async (req, res) => {
   }
 });
 
-/* Revoke active grant */
+/* Revoke grant */
 router.post("/api/admin/prep/access/revoke", async (req, res) => {
   try {
     const examId = normExamId(req.body?.examId);
     const email = normEmail(req.body?.email);
-    if (!examId || !email) {
-      return res.status(400).json({ success: false, error: "Missing examId or email" });
-    }
+    if (!examId || !email)
+      return res
+        .status(400)
+        .json({ success: false, error: "Missing examId or email" });
 
     const g = await upsertGrant(examId, email, "revoked");
     res.json({ success: true, grant: g.toObject() });
@@ -432,11 +440,12 @@ router.post("/api/admin/prep/access/revoke", async (req, res) => {
   }
 });
 
-/* Delete one request by id */
+/* Delete single */
 router.post("/api/admin/prep/access/delete", async (req, res) => {
   try {
     const { id } = req.body || {};
-    if (!id) return res.status(400).json({ success: false, error: "Missing id" });
+    if (!id)
+      return res.status(400).json({ success: false, error: "Missing id" });
 
     const r = await RequestModel.deleteOne({ id });
     res.json({ success: true, removed: r.deletedCount || 0 });
@@ -446,7 +455,7 @@ router.post("/api/admin/prep/access/delete", async (req, res) => {
   }
 });
 
-/* Batch delete by ids (or optional examId+emails) */
+/* Batch delete */
 router.post("/api/admin/prep/access/batch-delete", async (req, res) => {
   try {
     const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
@@ -460,9 +469,8 @@ router.post("/api/admin/prep/access/batch-delete", async (req, res) => {
     if (examId) filter.examId = new RegExp(`^${examId}$`, "i");
     if (emails.length) filter.email = { $in: emails };
 
-    if (!Object.keys(filter).length) {
+    if (!Object.keys(filter).length)
       return res.json({ success: true, removed: 0 });
-    }
 
     const r = await RequestModel.deleteMany(filter);
     res.json({ success: true, removed: r.deletedCount || 0 });
@@ -473,6 +481,6 @@ router.post("/api/admin/prep/access/batch-delete", async (req, res) => {
 });
 
 /* ----------------------------------------------------------------------------
- * Export
+ * Export router
  * ---------------------------------------------------------------------------- */
 export default router;
