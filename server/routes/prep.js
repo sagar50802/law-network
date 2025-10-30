@@ -402,21 +402,22 @@ router.get("/exams/:examId/meta", isAdmin, async (req, res) => {
       Math.floor((Date.now() - startAt.getTime()) / 86400000) + 1;
 
     // FETCH RELEASED MODULES
-     const modules = await PrepModule.find({
-        examId: new RegExp(`^${String(examId).trim()}$`, "i"),
-       dayIndex: todayDay,
-       status: { $in: ["released", "scheduled"] },
-    })
-      .sort({ slotMin: 1 })
-      .lean();
+      const modules = await PrepModule.find({
+  examId: new RegExp(`^${String(examId).trim()}$`, "i"),
+  dayIndex: { $gte: todayDay },   // ✅ show Day 2, 3 etc.
+  status: { $in: ["released", "scheduled"] },
+})
+  .sort({ dayIndex: 1, slotMin: 1, releaseAt: 1 })
+  .lean();
 
     res.json({
-      success: true,
-      locked: false,
-      items: modules,
-      todayDay,
-      total: modules.length,
-    });
+  success: true,
+  locked: false,
+  items: modules || [],
+  todayDay,
+  total: modules?.length || 0,
+});
+
   } catch (err) {
     console.error("[Prep user/today error]", err);
     res.status(500).json({ success: false, error: err.message });
