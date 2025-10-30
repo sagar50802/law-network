@@ -466,7 +466,7 @@ router.post(
       }
 
       const manualOrPasted = (manualText || content || "").trim();
-      const relAt = releaseAt ? new Date(releaseAt) : null;
+       const relAt = releaseAt ? new Date(releaseAt).toISOString() : null;
       const status = relAt && relAt > new Date() ? "scheduled" : "released";
 
       const doc = await PrepModule.create({
