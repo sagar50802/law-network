@@ -337,40 +337,93 @@ router.get("/exams/:examId/meta", isAdmin, async (req, res) => {
   }
 });
 
-/* --- PUBLIC meta fetch for students (no admin login needed) --- */
-router.get("/public/exams/:examId/meta", async (req, res) => {
+/* ───────────────────────── User Today's Modules ───────────────────────── */
+ router.get("/user/today", async (req, res) => {
   try {
-    const examId = req.params.examId;
-    const exam = await PrepExam.findOne({
-      examId: new RegExp(`^${examId}$`, "i"),
-    }).lean();
-    if (!exam) return res.status(404).json({ success: false, error: "Exam not found" });
+    const { examId, email } = req.query;
+    if (!examId) {
+      return res.status(400).json({ success: false, error: "examId required" });
+    }
 
-    const globalCfg = await getConfig();
-    const payment = {
-      priceINR: Number(globalCfg.priceINR || exam.price || 0),
-      upiId: globalCfg.upiId || exam.overlay?.payment?.upiId || "",
-      upiName: globalCfg.upiName || exam.overlay?.payment?.upiName || "",
-      whatsappNumber:
-        globalCfg.whatsappNumber || exam.overlay?.payment?.whatsappNumber || "",
-      whatsappText:
-        globalCfg.whatsappText || exam.overlay?.payment?.whatsappText || "",
-    };
+    // AUTO RELEASE MODULES
+    try {
+      const auto = await PrepModule.updateMany(
+        {
+          examId: new RegExp(`^${String(examId).trim()}$`, "i"),
+          status: "scheduled",
+          releaseAt: { $lte: new Date() },
+        },
+        { $set: { status: "released" } }
+      );
+      if (auto.modifiedCount > 0) {
+        console.log(`[AutoRelease] ${auto.modifiedCount} modules released for ${examId}`);
+      }
+    } catch (err) {
+      console.error("[AutoRelease Error]", err.message);
+    }
+
+    // FIND USER ACCESS OR GRANT
+    let access = email
+      ? await PrepAccess.findOne({
+          examId: new RegExp(`^${String(examId).trim()}$`, "i"),
+          userEmail: email,
+        }).lean()
+      : null;
+
+    let grant = null;
+    if (!access && email) {
+      grant = await mongoose
+        .model("PrepAccessGrant")
+        .findOne({
+          examId: new RegExp(`^${String(examId).trim()}$`, "i"),
+          email: String(email).trim().toLowerCase(),
+          status: { $in: ["active", "approved"] },
+        })
+        .lean();
+    }
+
+    if (!access && !grant) {
+      return res.json({
+        success: true,
+        locked: true,
+        items: [],
+        todayDay: 1,
+        reason: "no access",
+      });
+    }
+
+    // CALCULATE TODAY’S DAY
+    const startAt =
+      (access && access.startAt && new Date(access.startAt)) ||
+      (grant && grant.grantedAt && new Date(grant.grantedAt)) ||
+      new Date();
+
+    const todayDay =
+      Math.floor((Date.now() - startAt.getTime()) / 86400000) + 1;
+
+    // FETCH RELEASED MODULES
+    const modules = await PrepModule.find({
+      examId: new RegExp(`^${String(examId).trim()}$`, "i"),
+      dayIndex: todayDay,
+      status: "released",
+    })
+      .sort({ slotMin: 1 })
+      .lean();
 
     res.json({
       success: true,
-      exam: {
-        examId: exam.examId,
-        name: exam.name,
-        price: payment.priceINR,
-        overlay: { payment },
-      },
+      locked: false,
+      items: modules,
+      todayDay,
+      total: modules.length,
     });
-  } catch (e) {
-    console.error("[PUBLIC /prep/exams/:examId/meta] error:", e);
-    res.status(500).json({ success: false, error: e.message || "server error" });
+  } catch (err) {
+    console.error("[Prep user/today error]", err);
+    res.status(500).json({ success: false, error: err.message });
   }
 });
+
+
 
 /* ───────────────────────── Templates (Modules) — R2 Enabled ───────────────────────── */
 const fieldsUpload = upload.fields([
