@@ -467,8 +467,23 @@ router.post(
       }
 
       const manualOrPasted = (manualText || content || "").trim();
-       const relAt = releaseAt ? new Date(releaseAt + " +05:30") : null;
-       const status = relAt && relAt.getTime() > Date.now() ? "scheduled" : "released";
+       let relAt = null;
+if (releaseAt) {
+  // Try direct parse first
+  const parsed = new Date(releaseAt);
+  if (!isNaN(parsed)) {
+    relAt = parsed;
+  } else {
+    // Try to handle "DD-MM-YYYY HH:mm" manually
+    const parts = releaseAt.trim().split(/[\sT:\/-]+/);
+    if (parts.length >= 5) {
+      const [dd, mm, yyyy, hh, min] = parts.map(Number);
+      relAt = new Date(Date.UTC(yyyy, mm - 1, dd, hh - 5, min - 30)); // Convert IST to UTC
+    }
+  }
+}
+
+        const status = relAt && relAt.getTime() > Date.now() ? "scheduled" : "released";
 
 
       const doc = await PrepModule.create({
