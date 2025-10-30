@@ -467,8 +467,9 @@ router.post(
       }
 
       const manualOrPasted = (manualText || content || "").trim();
-       const relAt = releaseAt ? new Date(releaseAt + " +05:30").toISOString() : null;
-      const status = relAt && relAt > new Date() ? "scheduled" : "released";
+       const relAt = releaseAt ? new Date(releaseAt + " +05:30") : null;
+       const status = relAt && relAt.getTime() > Date.now() ? "scheduled" : "released";
+
 
       const doc = await PrepModule.create({
         examId,
