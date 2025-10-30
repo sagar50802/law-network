@@ -9,6 +9,7 @@ import path from "path";
 import fs from "fs";
 import mongoose from "mongoose";
 import { fileURLToPath } from "url";
+import PrepModule from "./models/PrepModule.js";
 
 /* -------------------------------------------------------------------------- */
 /* ✅ Express app initialization                                              */
@@ -275,6 +276,23 @@ if (!MONGO) {
     .then(() => console.log("✅ MongoDB connected"))
     .catch((err) => console.error("✗ MongoDB connection failed:", err.message));
 }
+
+/* -------------------------------------------------------------------------- */
+/* ✅ Auto Release Cron for Prep Modules                                      */
+/* -------------------------------------------------------------------------- */
+setInterval(async () => {
+  try {
+    const result = await PrepModule.updateMany(
+      { status: "scheduled", releaseAt: { $lte: new Date() } },
+      { $set: { status: "released" } }
+    );
+    if (result.modifiedCount > 0) {
+      console.log(`[AutoRelease] ${result.modifiedCount} modules released automatically`);
+    }
+  } catch (err) {
+    console.error("[AutoRelease Cron] Error:", err.message);
+  }
+}, 5 * 60 * 1000);
 
 /* -------------------------------------------------------------------------- */
 /* ✅ Startup Log                                                             */
