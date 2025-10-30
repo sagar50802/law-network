@@ -402,13 +402,15 @@ router.get("/exams/:examId/meta", isAdmin, async (req, res) => {
       Math.floor((Date.now() - startAt.getTime()) / 86400000) + 1;
 
     // FETCH RELEASED MODULES
-      const modules = await PrepModule.find({
+    // ✅ Include all modules from today and upcoming days
+const modules = await PrepModule.find({
   examId: new RegExp(`^${String(examId).trim()}$`, "i"),
-  dayIndex: { $gte: todayDay },   // ✅ show Day 2, 3 etc.
+  dayIndex: { $gte: todayDay },            // allow Day 2, 3, etc.
   status: { $in: ["released", "scheduled"] },
 })
-  .sort({ dayIndex: 1, slotMin: 1, releaseAt: 1 })
+  .sort({ dayIndex: 1, releaseAt: 1 })
   .lean();
+
 
     res.json({
   success: true,
