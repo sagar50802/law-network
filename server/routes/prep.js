@@ -152,15 +152,16 @@ async function buildAccessStatusPayload(examId, email) {
   const access = email
     ? await PrepAccess.findOne({ examId, userEmail: email }).lean()
     : null;
-  const grant = email
-    ? await PrepAccessGrant.findOne({
-        examId: new RegExp(`^${normExamId(examId)}$`, "i"),
-        email: normEmail(email),
-        status: "active",
-      }).lean()
-    : null;
+   const grant = email
+  ? await PrepAccessGrant.findOne({
+      examId: new RegExp(`^${normExamId(examId)}$`, "i"),
+      email: normEmail(email),
+      status: { $in: ["active", "approved"] },
+    }).lean()
+  : null;
 
-  let status = access?.status || "none";
+
+  let status = access?.status === "approved" ? "active" : (access?.status || "none");
   let startAt = access?.startAt ? new Date(access.startAt) : null;
   if (!startAt && grant) {
     status = "active";
@@ -466,7 +467,7 @@ router.post(
       }
 
       const manualOrPasted = (manualText || content || "").trim();
-       const relAt = releaseAt ? new Date(releaseAt).toISOString() : null;
+       const relAt = releaseAt ? new Date(releaseAt + " +05:30").toISOString() : null;
       const status = relAt && relAt > new Date() ? "scheduled" : "released";
 
       const doc = await PrepModule.create({
