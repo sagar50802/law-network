@@ -106,7 +106,24 @@ async function getConfig(examId) {
       price: 0,
       trialDays: 0,
       autoGrant: false,
+      upiId: "lawnetwork@upi",
+      upiName: "Law Network",
+      whatsappNumber: "+919999999999",
+      whatsappText: "Hello, I would like to purchase access",
     });
+    cfg = cfg.toObject();
+  }
+  // 🔧 ensure old configs have required keys
+  const patch = {};
+  if (!cfg.upiId) patch.upiId = "lawnetwork@upi";
+  if (!cfg.upiName) patch.upiName = "Law Network";
+  if (!cfg.whatsappNumber) patch.whatsappNumber = "+919999999999";
+  if (!cfg.whatsappText)
+    patch.whatsappText = "Hello, I would like to purchase access";
+
+  if (Object.keys(patch).length) {
+    await ConfigModel.updateOne({ _id: cfg._id }, { $set: patch });
+    cfg = { ...cfg, ...patch };
   }
   return cfg;
 }
