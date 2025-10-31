@@ -1,6 +1,7 @@
 // prep_access.js — Final merged production version (Mongo persistent, Render-safe)
 // Combines: old 487-line full implementation + new flattened schema + per-exam support
 // ✅ Fully compatible with PrepAccessAdmin.jsx (2025-10 build)
+// ✅ Now also compatible with AdminPrepPanel.jsx (overlay-config PATCH + meta GET)
 
 import express, { Router } from "express";
 import mongoose from "mongoose";
@@ -32,15 +33,27 @@ if (!mongoose.connection.readyState) {
 const configSchema = new mongoose.Schema(
   {
     examId: { type: String, default: "" },
-    overlayMode: { type: String, default: "planDayTime" },
+    overlayMode: { type: String, default: "planDayTime" }, // planDayTime | offset-days | fixed-date | never
     course: { type: String, default: "" },
+
+    // pricing
     price: { type: Number, default: 0 },
     trialDays: { type: Number, default: 0 },
+
+    // auto approval
     autoGrant: { type: Boolean, default: false },
+
+    // payment overlay
     upiId: { type: String, default: "" },
     upiName: { type: String, default: "" },
     whatsappNumber: { type: String, default: "" },
     whatsappText: { type: String, default: "" },
+
+    // schedule-specific fields (optional, used by AdminPrepPanel.jsx)
+    showOnDay: { type: Number, default: 1 },
+    showAtLocal: { type: String, default: "09:00" },
+    offsetDays: { type: Number, default: 0 },
+    fixedAt: { type: Date },
   },
   { timestamps: true, collection: "prepaccessconfigs" }
 );
@@ -91,14 +104,22 @@ const normEmail = (s) => String(s || "").trim().toLowerCase();
 const normExamId = (s) =>
   String(s || "").trim().toLowerCase().replace(/\s+/g, "");
 
+/**
+ * Load config for exam (or global fallback) and make sure UPI/WhatsApp
+ * fields are always present so that the overlay buttons become green/active.
+ */
 async function getConfig(examId) {
   let cfg = null;
+
   if (examId)
     cfg = await ConfigModel.findOne({
       examId: new RegExp(`^${normExamId(examId)}$`, "i"),
     }).lean();
+
   if (!cfg) cfg = await ConfigModel.findOne().lean();
+
   if (!cfg) {
+    // seed brand-new config
     cfg = await ConfigModel.create({
       examId: examId || "",
       overlayMode: "planDayTime",
@@ -109,29 +130,30 @@ async function getConfig(examId) {
       upiId: "lawnetwork@upi",
       upiName: "Law Network",
       whatsappNumber: "+919999999999",
-      whatsappText: "Hello, I would like to purchase access",
+      whatsappText: "hello  I paid for upapo",
     });
     cfg = cfg.toObject();
   }
-  // 🔧 ensure old configs have required keys
+
+  // 🔧 ensure old configs have required keys (so overlay buttons stay active)
   const patch = {};
   if (!cfg.upiId) patch.upiId = "lawnetwork@upi";
   if (!cfg.upiName) patch.upiName = "Law Network";
   if (!cfg.whatsappNumber) patch.whatsappNumber = "+919999999999";
-  if (!cfg.whatsappText)
-    patch.whatsappText = "Hello, I would like to purchase access";
+  if (!cfg.whatsappText) patch.whatsappText = "hello  I paid for upapo";
 
   if (Object.keys(patch).length) {
     await ConfigModel.updateOne({ _id: cfg._id }, { $set: patch });
     cfg = { ...cfg, ...patch };
   }
+
   return cfg;
 }
 
 async function saveConfig(data) {
   const examId = normExamId(data.examId || "");
   let cfg = await ConfigModel.findOne({ examId });
-  if (!cfg) cfg = new ConfigModel({});
+  if (!cfg) cfg = new ConfigModel({ examId });
   Object.assign(cfg, data);
   await cfg.save();
   return cfg.toObject();
@@ -227,8 +249,10 @@ router.get("/api/prep/access/status/guard", async (req, res) => {
     const access = { status: active ? "active" : "inactive" };
     const exam = {
       id: examId,
-      name: (examId || "").toUpperCase(),
+      name: (cfg.course || examId || "").toUpperCase(),
       overlay: { payment: overlayPayment(cfg) },
+      price: cfg.price,
+      trialDays: cfg.trialDays,
     };
 
     res.json({ success: true, exam, access, overlay });
@@ -300,7 +324,7 @@ router.get("/api/prep/access/request/status", async (req, res) => {
 });
 
 /**
- * ✅ Public exam meta — Fixes “Failed to load admin data”
+ * ✅ Public exam meta — original route (used by PrepAccessAdmin.jsx)
  */
 router.get("/api/prep/public/exams/:examId/meta", async (req, res) => {
   try {
@@ -319,6 +343,115 @@ router.get("/api/prep/public/exams/:examId/meta", async (req, res) => {
     res.json({ success: true, exam });
   } catch (e) {
     console.error("[public/exams/meta] error:", e);
+    res.status(500).json({ success: false, error: "Internal error" });
+  }
+});
+
+/**
+ * ✅ NEW: meta alias for AdminPrepPanel.jsx
+ * frontend calls: GET /api/prep/exams/:examId/meta
+ */
+router.get("/api/prep/exams/:examId/meta", async (req, res) => {
+  try {
+    const examId = normExamId(req.params.examId);
+    const cfg = await getConfig(examId);
+    if (!cfg)
+      return res.status(404).json({ success: false, error: "Config not found" });
+
+    const exam = {
+      id: examId,
+      name: (cfg.course || examId).toUpperCase(),
+      overlay: {
+        mode: cfg.overlayMode,
+        showOnDay: cfg.showOnDay,
+        showAtLocal: cfg.showAtLocal,
+        offsetDays: cfg.offsetDays,
+        fixedAt: cfg.fixedAt,
+        payment: overlayPayment(cfg),
+      },
+      payment: overlayPayment(cfg),
+      price: cfg.price,
+      trialDays: cfg.trialDays,
+    };
+    res.json({ success: true, ...exam, exam });
+  } catch (e) {
+    console.error("[exams/meta] error:", e);
+    res.status(500).json({ success: false, error: "Internal error" });
+  }
+});
+
+/**
+ * ✅ NEW: overlay-config PATCH for AdminPrepPanel.jsx
+ * frontend calls: PATCH /api/prep/exams/:examId/overlay-config
+ */
+router.patch("/api/prep/exams/:examId/overlay-config", async (req, res) => {
+  try {
+    const examId = normExamId(req.params.examId);
+    const body = req.body || {};
+
+    // panel sends: mode (planDayTime | offset-days | fixed-date | never) but in UI it’s planDayTime | afterN | fixed | never
+    let mode = body.mode || body.overlayMode || "planDayTime";
+    if (mode === "afterN") mode = "offset-days";
+    if (mode === "fixed") mode = "fixed-date";
+
+    const data = {
+      examId,
+      overlayMode: mode,
+      price: Number(body.price || 0),
+      trialDays: Number(body.trialDays || 0),
+      showOnDay:
+        mode === "planDayTime"
+          ? Number(body.showOnDay || 1)
+          : undefined,
+      showAtLocal:
+        mode === "planDayTime"
+          ? String(body.showAtLocal || "09:00")
+          : undefined,
+      offsetDays:
+        mode === "offset-days"
+          ? Number(body.offsetDays || body.daysAfterStart || 0)
+          : undefined,
+      fixedAt:
+        mode === "fixed-date" && body.fixedAt
+          ? new Date(body.fixedAt)
+          : undefined,
+
+      // payment: take from multiple places, like your frontend does
+      upiId: String(
+        body.upiId ||
+          body.payment?.upiId ||
+          body.overlay?.payment?.upiId ||
+          ""
+      ).trim(),
+      upiName: String(
+        body.upiName ||
+          body.payment?.upiName ||
+          body.overlay?.payment?.upiName ||
+          ""
+      ).trim(),
+      whatsappNumber: String(
+        body.whatsappNumber ||
+          body.payment?.whatsappNumber ||
+          body.overlay?.payment?.whatsappNumber ||
+          ""
+      ).trim(),
+      whatsappText: String(
+        body.whatsappText ||
+          body.payment?.whatsappText ||
+          body.overlay?.payment?.whatsappText ||
+          ""
+      ).trim(),
+    };
+
+    // if admin left WA text blank, fallback to your desired default
+    if (!data.whatsappText) {
+      data.whatsappText = "hello  I paid for upapo";
+    }
+
+    const saved = await saveConfig(data);
+    res.json({ success: true, config: saved });
+  } catch (e) {
+    console.error("[exams/overlay-config:patch] error:", e);
     res.status(500).json({ success: false, error: "Internal error" });
   }
 });
