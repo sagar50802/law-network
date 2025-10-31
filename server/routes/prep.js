@@ -106,46 +106,56 @@ function normEmail(s) {
   return String(s || "").trim().toLowerCase();
 }
 
-/* ───────────────────────── Overlay Computation ───────────────────────── */
+ /* ───────────────────────── Overlay Computation ───────────────────────── */
 function computeOverlayAt(exam, access) {
   if (!exam?.overlay || exam.overlay.mode === "never") {
     return { openAt: null, planTimeShow: false };
   }
+
   const mode = exam.overlay.mode;
+
   if (mode === "planDayTime") {
     const tz = exam.overlay.tz || "Asia/Kolkata";
     const showOnDay = Number(exam.overlay.showOnDay ?? 1);
     const showAtLocal = String(exam.overlay.showAtLocal || "09:00");
     const startAt = access?.startAt ? new Date(access.startAt) : null;
     if (!startAt) return { openAt: null, planTimeShow: false };
+
     const now = new Date();
-     let todayDay = Math.max(1, Math.floor((now - startAt) / 86400000) + 1);
+    let todayDay = Math.max(1, Math.floor((now - startAt) / 86400000) + 1);
 
-// 🩹 Auto-advance to the next day if its module has already released
-try {
-  if (exam?.modules && Array.isArray(exam.modules)) {
-    const nextDayModules = exam.modules.filter(
-      (m) => Number(m.dayIndex) === todayDay + 1
-    );
-    const anyReleased = nextDayModules.some((m) => {
-      const rel = m.releaseAt ? new Date(m.releaseAt).getTime() : 0;
-      return rel && rel <= Date.now();
-    });
-    if (anyReleased) todayDay += 1;
-  }
-} catch (err) {
-  console.warn("[computeOverlayAt] auto-advance check failed:", err);
-}
+    // 🩹 Auto-advance to the next day if its module has already released
+    try {
+      if (exam?.modules && Array.isArray(exam.modules)) {
+        const nextDayModules = exam.modules.filter(
+          (m) => Number(m.dayIndex) === todayDay + 1
+        );
+        const anyReleased = nextDayModules.some((m) => {
+          const rel = m.releaseAt ? new Date(m.releaseAt).getTime() : 0;
+          return rel && rel <= Date.now();
+        });
+        if (anyReleased) todayDay += 1;
+      }
+    } catch (err) {
+      console.warn("[computeOverlayAt] auto-advance check failed:", err);
+    }
 
+    // 🧠 Recompute release time check for the *effective* day
     const [hh, mm] = showAtLocal.split(":").map((x) => parseInt(x, 10) || 0);
-    const reached =
+    const hasReachedTime =
       now.getHours() > hh || (now.getHours() === hh && now.getMinutes() >= mm);
-    return { openAt: null, planTimeShow: todayDay >= showOnDay && reached };
+
+    // ✅ Unlock if we are on/past showOnDay AND time reached
+    const unlocked = todayDay >= showOnDay && hasReachedTime;
+
+    return { openAt: null, planTimeShow: unlocked };
   }
+
   if (mode === "fixed-date") {
     const dt = exam.overlay.fixedAt ? new Date(exam.overlay.fixedAt) : null;
     return { openAt: dt && !isNaN(+dt) ? dt : null, planTimeShow: false };
   }
+
   const base = access?.startAt ? new Date(access.startAt) : new Date();
   const days = Number(exam.overlay.offsetDays ?? 3);
   return { openAt: new Date(+base + days * 86400000), planTimeShow: false };
