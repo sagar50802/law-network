@@ -430,15 +430,15 @@ router.get("/exams/:examId/meta", isAdmin, async (req, res) => {
 
     // FETCH RELEASED MODULES
     // ✅ Include all modules from today and upcoming days
- const modules = await PrepModule.find({
+   const modules = await PrepModule.find({
   examId: new RegExp(`^${String(examId).trim()}$`, "i"),
-  dayIndex: todayDay,                        // ← only today’s day
+  dayIndex: { $lte: todayDay },   // 👈 change is here
   $or: [
     { status: "released" },
-    { releaseAt: { $lte: new Date() } },     // auto-due
+    { releaseAt: { $lte: new Date() } },
   ],
 })
-  .sort({ slotMin: 1, releaseAt: 1 })
+  .sort({ dayIndex: 1, slotMin: 1, releaseAt: 1 })
   .lean();
 
 
@@ -601,6 +601,28 @@ if (releaseAt) {
     }
   }
 );
+
+// ───────── PUBLIC templates for normal users (read-only) ─────────
+router.get("/user/templates", async (req, res) => {
+  try {
+    const { examId } = req.query;
+    if (!examId) {
+      return res.status(400).json({ success: false, error: "examId required" });
+    }
+
+    const modules = await PrepModule.find({
+      examId: new RegExp(`^${String(examId).trim()}$`, "i"),
+    })
+      .sort({ dayIndex: 1, slotMin: 1, releaseAt: 1 })
+      .lean();
+
+    // don’t leak anything admin-only, just return items
+    res.json({ success: true, items: modules });
+  } catch (e) {
+    console.error("[GET /prep/user/templates] error:", e);
+    res.status(500).json({ success: false, error: e.message || "server error" });
+  }
+});
 
 /* ───────── Fetch Existing Templates ───────── */
 router.get("/templates", isAdmin, async (req, res) => {
