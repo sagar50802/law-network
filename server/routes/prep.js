@@ -119,7 +119,24 @@ function computeOverlayAt(exam, access) {
     const startAt = access?.startAt ? new Date(access.startAt) : null;
     if (!startAt) return { openAt: null, planTimeShow: false };
     const now = new Date();
-    const todayDay = Math.max(1, Math.floor((now - startAt) / 86400000) + 1);
+     let todayDay = Math.max(1, Math.floor((now - startAt) / 86400000) + 1);
+
+// 🩹 Auto-advance to the next day if its module has already released
+try {
+  if (exam?.modules && Array.isArray(exam.modules)) {
+    const nextDayModules = exam.modules.filter(
+      (m) => Number(m.dayIndex) === todayDay + 1
+    );
+    const anyReleased = nextDayModules.some((m) => {
+      const rel = m.releaseAt ? new Date(m.releaseAt).getTime() : 0;
+      return rel && rel <= Date.now();
+    });
+    if (anyReleased) todayDay += 1;
+  }
+} catch (err) {
+  console.warn("[computeOverlayAt] auto-advance check failed:", err);
+}
+
     const [hh, mm] = showAtLocal.split(":").map((x) => parseInt(x, 10) || 0);
     const reached =
       now.getHours() > hh || (now.getHours() === hh && now.getMinutes() >= mm);
@@ -403,12 +420,15 @@ router.get("/exams/:examId/meta", isAdmin, async (req, res) => {
 
     // FETCH RELEASED MODULES
     // ✅ Include all modules from today and upcoming days
-const modules = await PrepModule.find({
+ const modules = await PrepModule.find({
   examId: new RegExp(`^${String(examId).trim()}$`, "i"),
-  dayIndex: { $gte: todayDay },            // allow Day 2, 3, etc.
-  status: { $in: ["released", "scheduled"] },
+  dayIndex: todayDay,                        // ← only today’s day
+  $or: [
+    { status: "released" },
+    { releaseAt: { $lte: new Date() } },     // auto-due
+  ],
 })
-  .sort({ dayIndex: 1, releaseAt: 1 })
+  .sort({ slotMin: 1, releaseAt: 1 })
   .lean();
 
 
