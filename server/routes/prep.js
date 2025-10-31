@@ -634,6 +634,79 @@ router.delete("/templates/:id", isAdmin, async (req, res) => {
   }
 });
 
+/* ───────────────────────── User Summary (planDays + todayDay) ───────────────────────── */
+router.get("/user/summary", async (req, res) => {
+  try {
+    const { examId, email } = req.query;
+    if (!examId)
+      return res.status(400).json({ success: false, error: "Missing examId" });
+
+    // ✅ Count all unique dayIndex values from prepmodules
+    const dayIndexes = await PrepModule.find({ examId }).distinct("dayIndex");
+    const planDays = dayIndexes.length ? Math.max(...dayIndexes.map(Number)) : 1;
+
+    // Find user’s access or grant (if exists)
+    const access = email
+      ? await PrepAccess.findOne({ examId, userEmail: email }).lean()
+      : null;
+
+    const grant = email
+      ? await mongoose
+          .model("PrepAccessGrant")
+          .findOne({
+            examId: new RegExp(`^${String(examId).trim()}$`, "i"),
+            email: String(email).trim().toLowerCase(),
+            status: { $in: ["active", "approved"] },
+          })
+          .lean()
+      : null;
+
+    // Compute todayDay
+    const startAt =
+      (access && access.startAt && new Date(access.startAt)) ||
+      (grant && grant.grantedAt && new Date(grant.grantedAt)) ||
+      new Date();
+
+    const todayDay = Math.min(
+      planDays,
+      Math.max(1, Math.floor((Date.now() - startAt.getTime()) / 86400000) + 1)
+    );
+
+    res.json({
+      success: true,
+      access: {
+        status: grant ? "active" : "none",
+        planDays,
+        todayDay,
+        startAt,
+      },
+      planDays,
+      todayDay,
+    });
+  } catch (e) {
+    console.error("[prep/user/summary] error:", e);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+/* ───────────────────────── User Progress (✅ marks) ───────────────────────── */
+router.get("/user/progress", async (req, res) => {
+  try {
+    const { examId, email } = req.query;
+    if (!examId || !email)
+      return res.status(400).json({ success: false, error: "Missing params" });
+
+    const progresses = await PrepProgress.find({ examId, userEmail: email }).lean();
+    const map = {};
+    for (const p of progresses) map[p.moduleId] = !!p.done;
+
+    res.json({ success: true, map });
+  } catch (e) {
+    console.error("[prep/user/progress] error:", e);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 /* ───────────────────────── Global Error Guard ───────────────────────── */
 router.use((err, _req, res, _next) => {
   if (err instanceof multer.MulterError) {
