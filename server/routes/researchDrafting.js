@@ -278,42 +278,59 @@ router.post("/generate", json, async (req,res)=>{
 /* --------------------------- payment + proof -------------------------- */
 // user toggles "I paid"
  // user reports payment/proof steps (explicit, no auto-check on link open)
-router.post("/:id/mark-paid", json, async (req, res) => {
+ router.post("/:id/mark-paid", json, async (req, res) => {
   try {
     const doc = await ResearchDrafting.findById(req.params.id);
     if (!doc) return res.status(404).json({ ok: false, error: "Not found" });
 
-    // basic info (safe to overwrite)
+    // basic info
     doc.name = (req.body.name ?? doc.name) || "";
     doc.email = (req.body.email ?? doc.email) || "";
     doc.phone = (req.body.phone ?? doc.phone) || "";
 
     if (!doc.payment) doc.payment = {};
+    if (!doc.admin) doc.admin = {};
 
-    // ⬇️ these are EXPLICIT signals coming from frontend
-    if (req.body.upiConfirmed === true) {
+    // little helper so we can accept true / "true" / 1
+    const isTrue = (v) => v === true || v === "true" || v === 1 || v === "1";
+
+    // 1) “I finished UPI”
+    if (isTrue(req.body.upiConfirmed)) {
       doc.payment.upiConfirmed = true;
       doc.payment.upiConfirmedAt = new Date();
     }
 
-    if (req.body.whatsappConfirmed === true) {
+    // 2) “I sent on WhatsApp”
+    if (isTrue(req.body.whatsappConfirmed)) {
       doc.payment.whatsappConfirmed = true;
       doc.payment.whatsappConfirmedAt = new Date();
     }
 
-    // old button "I Paid — Mark"
-    if (req.body.userMarkedPaid === true) {
+    // 3) old generic button
+    if (isTrue(req.body.userMarkedPaid)) {
       doc.payment.userMarkedPaid = true;
       doc.payment.markedAt = new Date();
     }
 
-    // 🔓 unlock rule: only if BOTH mini-steps are confirmed
+    // 4) optional: save screenshot / link if they send it
+    if (req.body.proofScreenshotUrl) {
+      doc.payment.proofScreenshotUrl = String(req.body.proofScreenshotUrl);
+    }
+
+    // unlock rule: BOTH mini steps done
     const upiOK = !!doc.payment.upiConfirmed;
     const waOK = !!doc.payment.whatsappConfirmed;
 
     if (upiOK && waOK) {
-      doc.payment.userMarkedPaid = true;   // so admin panel shows "Yes"
-      doc.status = "paid";                 // so frontend unblurs
+      // show “Yes” in admin table
+      doc.payment.userMarkedPaid = true;
+      doc.payment.markedAt = doc.payment.markedAt || new Date();
+
+      // unlock for user
+      doc.status = "paid";
+
+      // (optional) mark admin view
+      doc.admin.autoUnlockedFromPayment = true;
     }
 
     await doc.save();
