@@ -88,25 +88,38 @@ router.post("/", json, async (req,res)=>{
   }
 });
 
-// Get one (viewer)
-router.get("/:id", async (req,res)=>{
-  try{
+ // Get one (viewer)
+router.get("/:id", async (req, res) => {
+  try {
     const doc = await ResearchDrafting.findById(req.params.id);
-    if(!doc) return res.status(404).json({ ok:false, error:"Not found" });
-    res.json({ ok:true, draft: doc });
-  }catch(e){
-    res.status(500).json({ ok:false, error:e.message });
+    if (!doc) return res.status(404).json({ ok: false, error: "Not found" });
+
+    // ---- added blur logic ----
+    function blurText(text) {
+      if (!text) return "";
+      return "🔒 Content locked until payment.";
+    }
+
+    const locked = doc.status !== "paid" && doc.status !== "approved";
+
+    if (locked && doc.gen) {
+      for (const k in doc.gen) {
+        if (doc.gen[k]?.text) {
+          doc.gen[k].text = blurText(doc.gen[k].text);
+        }
+      }
+    }
+    // ---- end added blur logic ----
+
+    res.json({ ok: true, draft: doc, locked });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
   }
 });
 
-/* ---------------------- “generator” endpoints (local) ------------------ */
-/** NOTE: These generators are safe, local heuristic builders.
- * They avoid external calls so nothing breaks if offline.
- * You can later swap logic to your LLM or web-sourcing pipeline.
- */
 
+/* ---------------------- “generator” endpoints (local) ------------------ */
 function buildAbstract(title, subject, nature, baseAbstract){
-  // If user already wrote an abstract, keep it within 250-450 words.
   if (WORDS(baseAbstract) >= 200) {
     let parts = baseAbstract.split(/\s+/);
     if (parts.length > 460) parts = parts.slice(0, 460);
@@ -115,7 +128,7 @@ function buildAbstract(title, subject, nature, baseAbstract){
   const t = s(title)||"";
   const sub = s(subject)||"Research";
   const nat = (s(nature)||"auto").toLowerCase();
-  const lens = 320 + Math.floor(Math.random()*80); // ~320-400 words
+  const lens = 320 + Math.floor(Math.random()*80);
   const seed = [
     `${sub} has evolved as a critical field that bridges foundational theory and real-world applications.`,
     `This study, tentatively titled “${t || ("A Study on "+sub)}”, examines the contours, debates, and practical implications associated with the topic.`,
@@ -127,8 +140,6 @@ function buildAbstract(title, subject, nature, baseAbstract){
     `Expected contributions include clarifying conceptual ambiguities, synthesizing dispersed arguments, and outlining pathways for future inquiry.`,
     `Overall, the project aspires to provide a balanced, structured, and tractable account while remaining receptive to the nuances that animate ${sub.toLowerCase()}.`
   ].join(" ");
-
-  // expand to target length
   let out = seed;
   while (WORDS(out) < lens) out += " " + seed;
   return out.split(/\s+/).slice(0, 450).join(" ");
@@ -326,6 +337,34 @@ router.post("/:id/admin/revoke", json, async (req,res)=>{
     res.json({ ok:true, draft: doc });
   }catch(e){
     res.status(500).json({ ok:false, error:e.message });
+  }
+});
+
+// ✅ AUTO APPROVE ALL MARKED-PAID
+router.post("/admin/auto-approve", async (req, res) => {
+  try {
+    if (!isAdmin(req)) 
+      return res.status(403).json({ ok: false, error: "Admin only" });
+
+    const docs = await ResearchDrafting.find({
+      "payment.userMarkedPaid": true,
+      status: { $nin: ["approved", "rejected"] }
+    });
+
+    const now = new Date();
+    const until = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+
+    for (const doc of docs) {
+      doc.status = "approved";
+      doc.admin.approved = true;
+      doc.admin.revoked = false;
+      doc.admin.approvedUntil = until;
+      await doc.save();
+    }
+
+    res.json({ ok: true, count: docs.length });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
   }
 });
 
