@@ -1,6 +1,7 @@
 // server/routes/researchDrafting.js
 import express from "express";
 import mongoose from "mongoose";
+import PDFDocument from "pdfkit";               // ✅ needed for PDF download
 import { isAdmin } from "./utils.js";
 import ResearchDrafting from "../models/ResearchDrafting.js";
 import ResearchDraftingConfig from "../models/ResearchDraftingConfig.js";
@@ -88,7 +89,7 @@ router.post("/", json, async (req,res)=>{
   }
 });
 
- // Get one (viewer)
+// Get one (viewer)
 router.get("/:id", async (req, res) => {
   try {
     const doc = await ResearchDrafting.findById(req.params.id);
@@ -276,14 +277,12 @@ router.post("/generate", json, async (req,res)=>{
 });
 
 /* --------------------------- payment + proof -------------------------- */
-// user toggles "I paid"
- // user reports payment/proof steps (explicit, no auto-check on link open)
- router.post("/:id/mark-paid", json, async (req, res) => {
+// user toggles "I paid" (with UPI + WA confirmations)
+router.post("/:id/mark-paid", json, async (req, res) => {
   try {
     const doc = await ResearchDrafting.findById(req.params.id);
     if (!doc) return res.status(404).json({ ok: false, error: "Not found" });
 
-    // basic info
     doc.name = (req.body.name ?? doc.name) || "";
     doc.email = (req.body.email ?? doc.email) || "";
     doc.phone = (req.body.phone ?? doc.phone) || "";
@@ -291,45 +290,34 @@ router.post("/generate", json, async (req,res)=>{
     if (!doc.payment) doc.payment = {};
     if (!doc.admin) doc.admin = {};
 
-    // little helper so we can accept true / "true" / 1
     const isTrue = (v) => v === true || v === "true" || v === 1 || v === "1";
 
-    // 1) “I finished UPI”
     if (isTrue(req.body.upiConfirmed)) {
       doc.payment.upiConfirmed = true;
       doc.payment.upiConfirmedAt = new Date();
     }
 
-    // 2) “I sent on WhatsApp”
     if (isTrue(req.body.whatsappConfirmed)) {
       doc.payment.whatsappConfirmed = true;
       doc.payment.whatsappConfirmedAt = new Date();
     }
 
-    // 3) old generic button
     if (isTrue(req.body.userMarkedPaid)) {
       doc.payment.userMarkedPaid = true;
       doc.payment.markedAt = new Date();
     }
 
-    // 4) optional: save screenshot / link if they send it
     if (req.body.proofScreenshotUrl) {
       doc.payment.proofScreenshotUrl = String(req.body.proofScreenshotUrl);
     }
 
-    // unlock rule: BOTH mini steps done
     const upiOK = !!doc.payment.upiConfirmed;
     const waOK = !!doc.payment.whatsappConfirmed;
 
     if (upiOK && waOK) {
-      // show “Yes” in admin table
       doc.payment.userMarkedPaid = true;
       doc.payment.markedAt = doc.payment.markedAt || new Date();
-
-      // unlock for user
       doc.status = "paid";
-
-      // (optional) mark admin view
       doc.admin.autoUnlockedFromPayment = true;
     }
 
@@ -343,11 +331,43 @@ router.post("/generate", json, async (req,res)=>{
   }
 });
 
+/* ----------------------------- download PDF --------------------------- */
+// download assembled PDF (after payment approved/paid)
+router.get("/:id/download", async (req, res) => {
+  try {
+    const doc = await ResearchDrafting.findById(req.params.id);
+    if (!doc) return res.status(404).send("Not found");
+
+    // only allow if paid or approved
+    if (doc.status !== "paid" && doc.status !== "approved") {
+      return res.status(403).send("Payment required");
+    }
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${(doc.title || "research").replace(/"/g, "")}.pdf"`
+    );
+
+    const pdf = new PDFDocument();
+    pdf.pipe(res);
+
+    pdf.fontSize(14).text(`Title: ${doc.title || "-"}\nSubject: ${doc.subject || "-"}\n\n`);
+    pdf
+      .fontSize(12)
+      .text(doc.gen?.assembled?.text || "No assembled content found. Please run assemble.");
+    pdf.end();
+  } catch (err) {
+    res.status(500).send(err.message);
+  }
+});
+
 /* ------------------------------- admin -------------------------------- */
 
 // list all submissions
-router.get("/", isAdmin, async (req,res)=>{
+router.get("/", async (req,res)=>{
   try{
+    if(!isAdmin(req)) return res.status(403).json({ ok:false, error:"Admin only" });
     const list = await ResearchDrafting.find().sort({ createdAt: -1 });
     res.json({ ok:true, data: list });
   }catch(e){
@@ -355,9 +375,10 @@ router.get("/", isAdmin, async (req,res)=>{
   }
 });
 
-// approve / revoke
-router.post("/:id/admin/approve", isAdmin, json, async (req,res)=>{
+// approve
+router.post("/:id/admin/approve", json, async (req,res)=>{
   try{
+    if(!isAdmin(req)) return res.status(403).json({ ok:false, error:"Admin only" });
     const { days=30 } = req.body||{};
     const doc = await ResearchDrafting.findById(req.params.id);
     if(!doc) return res.status(404).json({ ok:false, error:"Not found" });
@@ -373,8 +394,10 @@ router.post("/:id/admin/approve", isAdmin, json, async (req,res)=>{
   }
 });
 
-router.post("/:id/admin/revoke", isAdmin, json, async (req,res)=>{
+// revoke
+router.post("/:id/admin/revoke", json, async (req,res)=>{
   try{
+    if(!isAdmin(req)) return res.status(403).json({ ok:false, error:"Admin only" });
     const doc = await ResearchDrafting.findById(req.params.id);
     if(!doc) return res.status(404).json({ ok:false, error:"Not found" });
     doc.status = "rejected";
@@ -387,8 +410,10 @@ router.post("/:id/admin/revoke", isAdmin, json, async (req,res)=>{
 });
 
 // ✅ AUTO APPROVE ALL MARKED-PAID
-router.post("/admin/auto-approve", isAdmin, async (req, res) => {
+router.post("/admin/auto-approve", async (req, res) => {
   try {
+    if(!isAdmin(req)) return res.status(403).json({ ok:false, error:"Admin only" });
+
     const docs = await ResearchDrafting.find({
       "payment.userMarkedPaid": true,
       status: { $nin: ["approved", "rejected"] }
@@ -412,8 +437,9 @@ router.post("/admin/auto-approve", isAdmin, async (req, res) => {
 });
 
 // set config (UPI, amount, WA)
-router.post("/admin/config", isAdmin, json, async (req,res)=>{
+router.post("/admin/config", json, async (req,res)=>{
   try{
+    if(!isAdmin(req)) return res.status(403).json({ ok:false, error:"Admin only" });
     const c = await ensureConfig();
     if (req.body.upiId != null) c.upiId = s(req.body.upiId);
     if (req.body.defaultAmount != null) c.defaultAmount = clamp(req.body.defaultAmount, 1, 99999);
@@ -425,8 +451,9 @@ router.post("/admin/config", isAdmin, json, async (req,res)=>{
   }
 });
 
-router.get("/admin/config", isAdmin, async (req,res)=>{
+router.get("/admin/config", async (req,res)=>{
   try{
+    if(!isAdmin(req)) return res.status(403).json({ ok:false, error:"Admin only" });
     const c = await ensureConfig();
     res.json({ ok:true, config: c });
   }catch(e){
@@ -436,9 +463,10 @@ router.get("/admin/config", isAdmin, async (req,res)=>{
 
 /* --------------------------- delete endpoints --------------------------- */
 
-// 🗑️ Delete single draft
-router.delete("/:id/admin/delete", isAdmin, async (req, res) => {
+// delete single draft
+router.delete("/:id/admin/delete", async (req, res) => {
   try {
+    if(!isAdmin(req)) return res.status(403).json({ ok:false, error:"Admin only" });
     const doc = await ResearchDrafting.findByIdAndDelete(req.params.id);
     if (!doc) return res.status(404).json({ ok: false, error: "Not found" });
     res.json({ ok: true, deleted: doc._id });
@@ -447,15 +475,16 @@ router.delete("/:id/admin/delete", isAdmin, async (req, res) => {
   }
 });
 
-// 🧹 Batch delete all rejected or draft entries
-router.delete("/admin/batch-delete", isAdmin, async (req, res) => {
+// batch delete (POST to avoid DELETE-body issues)
+router.post("/admin/delete-batch", json, async (req, res) => {
   try {
-    const { status = [] } = req.body || {};
-    const query = status.length ? { status: { $in: status } } : {};
-    const result = await ResearchDrafting.deleteMany(query);
-    res.json({ ok: true, deletedCount: result.deletedCount });
+    if(!isAdmin(req)) return res.status(403).json({ ok:false, error:"Admin only" });
+    const ids = Array.isArray(req.body.ids) ? req.body.ids : [];
+    if (!ids.length) return res.status(400).json({ ok:false, error:"No IDs provided" });
+    const r = await ResearchDrafting.deleteMany({ _id: { $in: ids } });
+    res.json({ ok:true, deleted: r.deletedCount });
   } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
+    res.status(500).json({ ok:false, error:e.message });
   }
 });
 
