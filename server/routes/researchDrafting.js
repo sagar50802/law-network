@@ -385,4 +385,29 @@ router.get("/admin/config", isAdmin, async (req,res)=>{
   }
 });
 
+/* --------------------------- delete endpoints --------------------------- */
+
+// 🗑️ Delete single draft
+router.delete("/:id/admin/delete", isAdmin, async (req, res) => {
+  try {
+    const doc = await ResearchDrafting.findByIdAndDelete(req.params.id);
+    if (!doc) return res.status(404).json({ ok: false, error: "Not found" });
+    res.json({ ok: true, deleted: doc._id });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// 🧹 Batch delete all rejected or draft entries
+router.delete("/admin/batch-delete", isAdmin, async (req, res) => {
+  try {
+    const { status = [] } = req.body || {};
+    const query = status.length ? { status: { $in: status } } : {};
+    const result = await ResearchDrafting.deleteMany(query);
+    res.json({ ok: true, deletedCount: result.deletedCount });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 export default router;
