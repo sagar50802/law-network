@@ -117,7 +117,6 @@ router.get("/:id", async (req, res) => {
   }
 });
 
-
 /* ---------------------- “generator” endpoints (local) ------------------ */
 function buildAbstract(title, subject, nature, baseAbstract){
   if (WORDS(baseAbstract) >= 200) {
@@ -277,7 +276,7 @@ router.post("/generate", json, async (req,res)=>{
 });
 
 /* --------------------------- payment + proof -------------------------- */
-// user toggles "I paid" (stores name/gmail/phone + marks paid)
+// user toggles "I paid"
 router.post("/:id/mark-paid", json, async (req,res)=>{
   try{
     const doc = await ResearchDrafting.findById(req.params.id);
@@ -296,10 +295,10 @@ router.post("/:id/mark-paid", json, async (req,res)=>{
 });
 
 /* ------------------------------- admin -------------------------------- */
+
 // list all submissions
-router.get("/", async (req,res)=>{
+router.get("/", isAdmin, async (req,res)=>{
   try{
-    if(!isAdmin(req)) return res.status(403).json({ ok:false, error:"Admin only" });
     const list = await ResearchDrafting.find().sort({ createdAt: -1 });
     res.json({ ok:true, data: list });
   }catch(e){
@@ -308,9 +307,8 @@ router.get("/", async (req,res)=>{
 });
 
 // approve / revoke
-router.post("/:id/admin/approve", json, async (req,res)=>{
+router.post("/:id/admin/approve", isAdmin, json, async (req,res)=>{
   try{
-    if(!isAdmin(req)) return res.status(403).json({ ok:false, error:"Admin only" });
     const { days=30 } = req.body||{};
     const doc = await ResearchDrafting.findById(req.params.id);
     if(!doc) return res.status(404).json({ ok:false, error:"Not found" });
@@ -326,9 +324,8 @@ router.post("/:id/admin/approve", json, async (req,res)=>{
   }
 });
 
-router.post("/:id/admin/revoke", json, async (req,res)=>{
+router.post("/:id/admin/revoke", isAdmin, json, async (req,res)=>{
   try{
-    if(!isAdmin(req)) return res.status(403).json({ ok:false, error:"Admin only" });
     const doc = await ResearchDrafting.findById(req.params.id);
     if(!doc) return res.status(404).json({ ok:false, error:"Not found" });
     doc.status = "rejected";
@@ -341,11 +338,8 @@ router.post("/:id/admin/revoke", json, async (req,res)=>{
 });
 
 // ✅ AUTO APPROVE ALL MARKED-PAID
-router.post("/admin/auto-approve", async (req, res) => {
+router.post("/admin/auto-approve", isAdmin, async (req, res) => {
   try {
-    if (!isAdmin(req)) 
-      return res.status(403).json({ ok: false, error: "Admin only" });
-
     const docs = await ResearchDrafting.find({
       "payment.userMarkedPaid": true,
       status: { $nin: ["approved", "rejected"] }
@@ -369,9 +363,8 @@ router.post("/admin/auto-approve", async (req, res) => {
 });
 
 // set config (UPI, amount, WA)
-router.post("/admin/config", json, async (req,res)=>{
+router.post("/admin/config", isAdmin, json, async (req,res)=>{
   try{
-    if(!isAdmin(req)) return res.status(403).json({ ok:false, error:"Admin only" });
     const c = await ensureConfig();
     if (req.body.upiId != null) c.upiId = s(req.body.upiId);
     if (req.body.defaultAmount != null) c.defaultAmount = clamp(req.body.defaultAmount, 1, 99999);
@@ -383,9 +376,8 @@ router.post("/admin/config", json, async (req,res)=>{
   }
 });
 
-router.get("/admin/config", async (req,res)=>{
+router.get("/admin/config", isAdmin, async (req,res)=>{
   try{
-    if(!isAdmin(req)) return res.status(403).json({ ok:false, error:"Admin only" });
     const c = await ensureConfig();
     res.json({ ok:true, config: c });
   }catch(e){
