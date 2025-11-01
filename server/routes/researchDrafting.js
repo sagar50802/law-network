@@ -1,10 +1,14 @@
 // server/routes/researchDrafting.js
 import express from "express";
 import mongoose from "mongoose";
-import PDFDocument from "pdfkit";               // ✅ needed for PDF download
+import PDFDocument from "pdfkit";               // ✅ for PDF
 import { isAdmin } from "./utils.js";
 import ResearchDrafting from "../models/ResearchDrafting.js";
 import ResearchDraftingConfig from "../models/ResearchDraftingConfig.js";
+
+// ⬇️ OPTIONAL: only if you want real .docx export
+// npm i docx
+import { Document, Packer, Paragraph } from "docx";
 
 const router = express.Router();
 const json = express.json();
@@ -331,14 +335,13 @@ router.post("/:id/mark-paid", json, async (req, res) => {
   }
 });
 
-/* ----------------------------- download PDF --------------------------- */
-// download assembled PDF (after payment approved/paid)
+/* ----------------------------- download PDF (old) --------------------- */
+// this is still OK to keep; frontend was calling /export, though
 router.get("/:id/download", async (req, res) => {
   try {
     const doc = await ResearchDrafting.findById(req.params.id);
     if (!doc) return res.status(404).send("Not found");
 
-    // only allow if paid or approved
     if (doc.status !== "paid" && doc.status !== "approved") {
       return res.status(403).send("Payment required");
     }
@@ -351,7 +354,6 @@ router.get("/:id/download", async (req, res) => {
 
     const pdf = new PDFDocument();
     pdf.pipe(res);
-
     pdf.fontSize(14).text(`Title: ${doc.title || "-"}\nSubject: ${doc.subject || "-"}\n\n`);
     pdf
       .fontSize(12)
@@ -485,6 +487,65 @@ router.post("/admin/delete-batch", json, async (req, res) => {
     res.json({ ok:true, deleted: r.deletedCount });
   } catch (e) {
     res.status(500).json({ ok:false, error:e.message });
+  }
+});
+
+/* ---------------------------- export route ---------------------------- */
+/**
+ * /api/research-drafting/:id/export?fmt=pdf|docx
+ * NOTE: this is the one your frontend is calling
+ */
+router.get("/:id/export", async (req, res) => {
+  try {
+    const { fmt = "pdf" } = req.query;
+    const doc = await ResearchDrafting.findById(req.params.id);
+    if (!doc) return res.status(404).send("Not found");
+
+    // same rule as /download — don't leak locked content
+    if (doc.status !== "paid" && doc.status !== "approved") {
+      return res.status(403).send("Payment required");
+    }
+
+    const text =
+      doc.gen?.assembled?.text ||
+      "No assembled content found. Please complete all steps.";
+
+    // 👉 DOCX branch
+    if (fmt === "docx") {
+      // if you don't want docx, delete this whole block
+      const paragraphs = text
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => new Paragraph(line));
+      const docx = new Document({ sections: [{ children: paragraphs }] });
+      const buffer = await Packer.toBuffer(docx);
+      res.setHeader(
+        "Content-Type",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+      );
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="draft_${doc._id}.docx"`
+      );
+      return res.send(buffer);
+    }
+
+    // 👉 default: PDF, streamed directly
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="draft_${doc._id}.pdf"`
+    );
+
+    const pdf = new PDFDocument();
+    pdf.pipe(res);
+    pdf.fontSize(14).text(doc.title || "Research Drafting", { underline: false });
+    pdf.moveDown();
+    pdf.fontSize(12).text(text);
+    pdf.end();
+  } catch (e) {
+    console.error(e);
+    res.status(500).send("Error generating file");
   }
 });
 
