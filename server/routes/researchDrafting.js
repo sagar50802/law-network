@@ -277,20 +277,52 @@ router.post("/generate", json, async (req,res)=>{
 
 /* --------------------------- payment + proof -------------------------- */
 // user toggles "I paid"
-router.post("/:id/mark-paid", json, async (req,res)=>{
-  try{
+ // user reports payment/proof steps (explicit, no auto-check on link open)
+router.post("/:id/mark-paid", json, async (req, res) => {
+  try {
     const doc = await ResearchDrafting.findById(req.params.id);
-    if(!doc) return res.status(404).json({ ok:false, error:"Not found" });
-    doc.name = s(req.body.name || doc.name);
-    doc.email = s(req.body.email || doc.email);
-    doc.phone = s(req.body.phone || doc.phone);
-    doc.payment.userMarkedPaid = true;
-    doc.payment.proofScreenshotUrl = s(req.body.proofScreenshotUrl || "");
-    doc.payment.markedAt = new Date();
+    if (!doc) return res.status(404).json({ ok: false, error: "Not found" });
+
+    // basic info (safe to overwrite)
+    doc.name = (req.body.name ?? doc.name) || "";
+    doc.email = (req.body.email ?? doc.email) || "";
+    doc.phone = (req.body.phone ?? doc.phone) || "";
+
+    if (!doc.payment) doc.payment = {};
+
+    // ⬇️ these are EXPLICIT signals coming from frontend
+    if (req.body.upiConfirmed === true) {
+      doc.payment.upiConfirmed = true;
+      doc.payment.upiConfirmedAt = new Date();
+    }
+
+    if (req.body.whatsappConfirmed === true) {
+      doc.payment.whatsappConfirmed = true;
+      doc.payment.whatsappConfirmedAt = new Date();
+    }
+
+    // old button "I Paid — Mark"
+    if (req.body.userMarkedPaid === true) {
+      doc.payment.userMarkedPaid = true;
+      doc.payment.markedAt = new Date();
+    }
+
+    // 🔓 unlock rule: only if BOTH mini-steps are confirmed
+    const upiOK = !!doc.payment.upiConfirmed;
+    const waOK = !!doc.payment.whatsappConfirmed;
+
+    if (upiOK && waOK) {
+      doc.payment.userMarkedPaid = true;   // so admin panel shows "Yes"
+      doc.status = "paid";                 // so frontend unblurs
+    }
+
     await doc.save();
-    res.json({ ok:true, draft: doc });
-  }catch(e){
-    res.status(500).json({ ok:false, error:e.message });
+
+    const locked = !(doc.status === "paid" || doc.status === "approved");
+
+    res.json({ ok: true, draft: doc, locked });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
   }
 });
 
