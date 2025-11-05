@@ -99,6 +99,17 @@ router.post("/", json, async (req, res) => {
             upiId: s(payload.payment?.upiId || cfg.upiId),
             waNumber: s(payload.payment?.waNumber || cfg.waNumber),
           },
+          // ✅ Prevents TypeError later when generating
+          gen: {
+            title: "",
+            abstract: { text: "", sources: [] },
+            review: { text: "", sources: [] },
+            methodology: { text: "", sources: [] },
+            aims: { text: "", sources: [] },
+            chapterization: { text: "", sources: [] },
+            conclusion: { text: "", sources: [] },
+            assembled: { text: "", sources: [] },
+          },
         });
 
     res.json({ ok: true, draft: doc });
