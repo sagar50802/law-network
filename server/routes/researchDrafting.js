@@ -108,6 +108,7 @@ router.post("/", json, async (req, res) => {
 });
 
 // Get one (viewer)
+ // Get one (viewer)
 router.get("/:id", async (req, res) => {
   try {
     const doc = await ResearchDrafting.findById(req.params.id);
@@ -115,20 +116,32 @@ router.get("/:id", async (req, res) => {
 
     const locked = doc.status !== "paid" && doc.status !== "approved";
 
-    // blur gen if locked
+    // ✅ If locked, DON'T overwrite real text.
+    //    Just send a copy where gen.text is empty, so frontend can blur it.
     if (locked && doc.gen) {
-      for (const k in doc.gen) {
-        if (doc.gen[k]?.text) {
-          doc.gen[k].text = "🔒 Content locked until payment.";
+      const clean = doc.toObject();           // clone the document safely
+
+      if (clean.gen) {
+        for (const k in clean.gen) {
+          if (clean.gen[k] && typeof clean.gen[k].text === "string") {
+            clean.gen[k] = {
+              ...clean.gen[k],
+              text: "",                        // hide text instead of replacing it
+            };
+          }
         }
       }
+
+      return res.json({ ok: true, draft: clean, locked: true });
     }
 
-    res.json({ ok: true, draft: doc, locked });
+    // ✅ Not locked → send full original content, untouched
+    res.json({ ok: true, draft: doc, locked: false });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+
 
 /* ---------------------- generator helpers ------------------------------ */
 function buildAbstract(title, subject, nature, baseAbstract) {
