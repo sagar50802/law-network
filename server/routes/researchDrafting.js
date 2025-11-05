@@ -33,92 +33,74 @@ async function ensureConfig() {
 
 /* ---------------------- basic CRUD for viewer flow -------------------- */
 // Create or update intake (id optional)
+// Create or update intake (id optional)
 router.post("/", json, async (req, res) => {
+  console.log("✅ POST /api/research-drafting called"); // debug log
   try {
     const { id } = req.query;
     const payload = req.body || {};
     const cfg = await ensureConfig();
 
-    const doc = id
-      ? await ResearchDrafting.findByIdAndUpdate(
-          id,
-          {
-            $set: {
-              email: s(payload.email),
-              phone: s(payload.phone),
-              name: s(payload.name),
-              gender: s(payload.gender),
-              place: s(payload.place),
-              nationality: s(payload.nationality),
-              country: s(payload.country),
-              instituteType: s(payload.instituteType || "college"),
-              instituteName: s(payload.instituteName),
-              qualifications: Array.isArray(payload.qualifications)
-                ? payload.qualifications
-                : [],
-              subject: s(payload.subject),
-              title: s(payload.title),
-              nature: s(payload.nature || "auto"),
-              abstract: s(payload.abstract),
-              totalPages: clamp(payload.totalPages, 1, 999),
-              "payment.amount": clamp(
-                payload.payment?.amount ?? cfg.defaultAmount,
-                1,
-                99999
-              ),
-              "payment.upiId": s(payload.payment?.upiId || cfg.upiId),
-              "payment.waNumber": s(payload.payment?.waNumber || cfg.waNumber),
-            },
-          },
-          { new: true }
-        )
-      : await ResearchDrafting.create({
-          email: s(payload.email),
-          phone: s(payload.phone),
-          name: s(payload.name),
-          gender: s(payload.gender),
-          place: s(payload.place),
-          nationality: s(payload.nationality),
-          country: s(payload.country),
-          instituteType: s(payload.instituteType || "college"),
-          instituteName: s(payload.instituteName),
-          qualifications: Array.isArray(payload.qualifications)
-            ? payload.qualifications
-            : [],
-          subject: s(payload.subject),
-          title: s(payload.title),
-          nature: s(payload.nature || "auto"),
-          abstract: s(payload.abstract),
-          totalPages: clamp(payload.totalPages, 1, 999),
-          payment: {
-            amount: clamp(
-              payload.payment?.amount ?? cfg.defaultAmount,
-              1,
-              99999
-            ),
-            upiId: s(payload.payment?.upiId || cfg.upiId),
-            waNumber: s(payload.payment?.waNumber || cfg.waNumber),
-          },
-          // ✅ Prevents TypeError later when generating
-          gen: {
-            title: "",
-            abstract: { text: "", sources: [] },
-            review: { text: "", sources: [] },
-            methodology: { text: "", sources: [] },
-            aims: { text: "", sources: [] },
-            chapterization: { text: "", sources: [] },
-            conclusion: { text: "", sources: [] },
-            assembled: { text: "", sources: [] },
-          },
-        });
+    // common data
+    const baseData = {
+      email: s(payload.email),
+      phone: s(payload.phone),
+      name: s(payload.name),
+      gender: s(payload.gender),
+      place: s(payload.place),
+      nationality: s(payload.nationality),
+      country: s(payload.country),
+      instituteType: s(payload.instituteType || "college"),
+      instituteName: s(payload.instituteName),
+      qualifications: Array.isArray(payload.qualifications)
+        ? payload.qualifications
+        : [],
+      subject: s(payload.subject),
+      title: s(payload.title),
+      nature: s(payload.nature || "auto"),
+      abstract: s(payload.abstract),
+      totalPages: clamp(payload.totalPages, 1, 999),
+      payment: {
+        amount: clamp(
+          payload.payment?.amount ?? cfg.defaultAmount,
+          1,
+          99999
+        ),
+        upiId: s(payload.payment?.upiId || cfg.upiId),
+        waNumber: s(payload.payment?.waNumber || cfg.waNumber),
+      },
+      // ✅ always include a blank "gen" object to prevent crashes
+      gen: {
+        title: "",
+        abstract: { text: "", sources: [] },
+        review: { text: "", sources: [] },
+        methodology: { text: "", sources: [] },
+        aims: { text: "", sources: [] },
+        chapterization: { text: "", sources: [] },
+        conclusion: { text: "", sources: [] },
+        assembled: { text: "", sources: [] },
+      },
+    };
 
+    let doc;
+    if (id) {
+      doc = await ResearchDrafting.findByIdAndUpdate(
+        id,
+        { $set: baseData },
+        { new: true }
+      );
+    } else {
+      doc = await ResearchDrafting.create(baseData);
+    }
+
+    console.log("✅ Draft saved:", doc?._id);
     res.json({ ok: true, draft: doc });
   } catch (e) {
+    console.error("❌ Error saving draft:", e);
     res.status(500).json({ ok: false, error: e.message });
   }
 });
 
-// Get one (viewer)
  // Get one (viewer)
 router.get("/:id", async (req, res) => {
   try {
