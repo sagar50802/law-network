@@ -59,7 +59,8 @@ router.post("/", json, async (req, res) => {
       title: s(payload.title),
       nature: s(payload.nature || "auto"),
       abstract: s(payload.abstract),
-      totalPages: clamp(payload.totalPages, 1, 999),
+      totalPages: clamp(Number(payload.totalPages || 0), 1, 999),
+
       payment: {
         amount: clamp(
           payload.payment?.amount ?? cfg.defaultAmount,
@@ -96,7 +97,7 @@ router.post("/", json, async (req, res) => {
     console.log("✅ Draft saved:", doc?._id);
     res.json({ ok: true, draft: doc });
   } catch (e) {
-    console.error("❌ Error saving draft:", e);
+    console.error("❌ Error saving draft:", e.message, e.stack);
     res.status(500).json({ ok: false, error: e.message });
   }
 });
