@@ -198,6 +198,10 @@ import plagiarismRoutes from "./routes/plagiarism.js";
 /* ---------- ✅ New Research Drafting Route ---------- */
 import researchDraftingRoutes from "./routes/researchDrafting.js";
 
+/* ---------- ✅ New Live Routes ---------- */
+import livePublic from "./routes/livePublic.js";
+import liveAdmin from "./routes/liveAdmin.js";
+
 /* -------------------------------------------------------------------------- */
 /* ✅ Mount routes                                                            */
 /* -------------------------------------------------------------------------- */
@@ -226,6 +230,10 @@ app.use("/api/plagiarism", plagiarismRoutes);
 
 /* ✅ Added Research Drafting API */
 app.use("/api/research-drafting", researchDraftingRoutes);
+
+/* ✅ Added Live Public/Admin APIs */
+app.use("/api/live", livePublic);
+app.use("/api/admin/live", liveAdmin);
 
 /* -------------------------------------------------------------------------- */
 /* ✅ Health, favicon & root endpoints                                        */
