@@ -9,6 +9,7 @@ const debateAvatarSchema = new mongoose.Schema({
     enum: ["LAWYER", "HISTORY", "POLICE", "IT"],
     default: "LAWYER"
   }
+  voiceName: { type: String, default: "" },   // ✅ added line
 }, { _id: false });
 
 const liveProgramSlideSchema = new mongoose.Schema({
