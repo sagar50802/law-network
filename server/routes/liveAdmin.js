@@ -5,7 +5,7 @@ import LiveTickerItem from "../models/LiveTickerItem.js";
 const router = express.Router();
 
 /**
- * Utility: Check admin key
+ * 🔐 Check admin key
  */
 function requireAdmin(req, res) {
   const key = req.headers["x-admin-key"];
@@ -21,34 +21,48 @@ function requireAdmin(req, res) {
 ============================================================ */
 
 /**
- * Create a new Live Slide
  * POST /api/admin/live/slide
+ * Create a new slide
  */
 router.post("/slide", async (req, res) => {
   if (!requireAdmin(req, res)) return;
 
   try {
-    // ✅ normalize field names for safety
     const body = { ...req.body };
 
-    // Support both avatars[] and debateAvatars[]
-    if (Array.isArray(body.avatars) && body.avatars.length) {
-      body.debateAvatars = body.avatars;
+    // 🧹 Normalize avatars -> debateAvatars and filter invalid
+    if (Array.isArray(body.avatars)) {
+      body.debateAvatars = body.avatars
+        .filter(
+          (a) =>
+            a &&
+            typeof a.name === "string" &&
+            a.name.trim() &&
+            typeof a.role === "string" &&
+            a.role.trim()
+        )
+        .map((a, i) => ({
+          code: a.code || `A${i + 1}`,
+          name: a.name.trim(),
+          role: a.role.trim(),
+          avatarType: a.avatarType || "LAWYER",
+        }));
     }
 
-    // Mark slide active immediately
+    // ✅ Make active by default
     body.isActive = true;
 
     const slide = await LiveProgramSlide.create(body);
     res.json(slide);
   } catch (err) {
-    console.error("Error creating slide:", err);
-    res.status(500).json({ error: "Failed to create slide" });
+    console.error("❌ Error creating slide:", err.message, err.errors);
+    res
+      .status(500)
+      .json({ error: err.message || "Failed to create slide" });
   }
 });
 
 /**
- * Get all slides (for admin console)
  * GET /api/admin/live/slides
  */
 router.get("/slides", async (req, res) => {
@@ -58,12 +72,12 @@ router.get("/slides", async (req, res) => {
     const slides = await LiveProgramSlide.find().sort({ createdAt: -1 });
     res.json(slides);
   } catch (err) {
+    console.error("❌ Error fetching slides:", err.message);
     res.status(500).json({ error: "Failed to fetch slides" });
   }
 });
 
 /**
- * Update an existing slide
  * PUT /api/admin/live/slide/:id
  */
 router.put("/slide/:id", async (req, res) => {
@@ -77,12 +91,12 @@ router.put("/slide/:id", async (req, res) => {
     );
     res.json(updated);
   } catch (err) {
+    console.error("❌ Error updating slide:", err.message);
     res.status(500).json({ error: "Failed to update slide" });
   }
 });
 
 /**
- * Delete a slide
  * DELETE /api/admin/live/slide/:id
  */
 router.delete("/slide/:id", async (req, res) => {
@@ -92,13 +106,14 @@ router.delete("/slide/:id", async (req, res) => {
     await LiveProgramSlide.findByIdAndDelete(req.params.id);
     res.json({ ok: true });
   } catch (err) {
+    console.error("❌ Error deleting slide:", err.message);
     res.status(500).json({ error: "Failed to delete slide" });
   }
 });
 
 /**
- * Clear all slides (optional cleanup route)
  * DELETE /api/admin/live/slides
+ * Clear all slides (optional)
  */
 router.delete("/slides", async (req, res) => {
   if (!requireAdmin(req, res)) return;
@@ -107,6 +122,7 @@ router.delete("/slides", async (req, res) => {
     await LiveProgramSlide.deleteMany({});
     res.json({ ok: true });
   } catch (err) {
+    console.error("❌ Error clearing slides:", err.message);
     res.status(500).json({ error: "Failed to clear slides" });
   }
 });
@@ -116,7 +132,6 @@ router.delete("/slides", async (req, res) => {
 ============================================================ */
 
 /**
- * Create a new ticker item
  * POST /api/admin/live/ticker
  */
 router.post("/ticker", async (req, res) => {
@@ -127,12 +142,12 @@ router.post("/ticker", async (req, res) => {
     const item = await LiveTickerItem.create(data);
     res.json(item);
   } catch (err) {
+    console.error("❌ Error creating ticker:", err.message);
     res.status(500).json({ error: "Failed to create ticker" });
   }
 });
 
 /**
- * Get all ticker items
  * GET /api/admin/live/tickers
  */
 router.get("/tickers", async (req, res) => {
@@ -142,12 +157,12 @@ router.get("/tickers", async (req, res) => {
     const items = await LiveTickerItem.find().sort({ createdAt: -1 });
     res.json(items);
   } catch (err) {
+    console.error("❌ Error fetching tickers:", err.message);
     res.status(500).json({ error: "Failed to fetch tickers" });
   }
 });
 
 /**
- * Update a ticker item
  * PUT /api/admin/live/ticker/:id
  */
 router.put("/ticker/:id", async (req, res) => {
@@ -161,12 +176,12 @@ router.put("/ticker/:id", async (req, res) => {
     );
     res.json(updated);
   } catch (err) {
+    console.error("❌ Error updating ticker:", err.message);
     res.status(500).json({ error: "Failed to update ticker" });
   }
 });
 
 /**
- * Delete a ticker item
  * DELETE /api/admin/live/ticker/:id
  */
 router.delete("/ticker/:id", async (req, res) => {
@@ -176,6 +191,7 @@ router.delete("/ticker/:id", async (req, res) => {
     await LiveTickerItem.findByIdAndDelete(req.params.id);
     res.json({ ok: true });
   } catch (err) {
+    console.error("❌ Error deleting ticker:", err.message);
     res.status(500).json({ error: "Failed to delete ticker" });
   }
 });
