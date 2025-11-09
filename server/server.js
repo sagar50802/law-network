@@ -188,7 +188,8 @@ import liveAdmin from "./routes/liveAdmin.js";
 import classroomRoutes from "./routes/classroom.js";
 
 /* ✅ NEW: Classroom Upload Media Route */
-import classroomUploadRoutes from "./routes/classroomUpload.js";
+import classroomUploadRoutes from "./routes/classroomMediaUpload.js";
+
 
 /* ---------- Mounting ---------- */
 app.use("/api/articles", articleRoutes);
