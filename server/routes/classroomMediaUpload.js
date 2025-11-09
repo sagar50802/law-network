@@ -1,55 +1,48 @@
 // server/routes/classroomMediaUpload.js
-// Handles direct classroom media uploads → Cloudflare R2, returns public URL
-
 import express from "express";
-import multer from "multer";
-import { r2Enabled, uploadBuffer } from "../utils/r2.js";
+import crypto from "crypto";
+import {
+  r2Enabled,
+  s3
+} from "../utils/r2.js";
+import { PutObjectCommand } from "@aws-sdk/client-s3";
 
 const router = express.Router();
 
-// Store file in memory (we push buffer to R2)
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: {
-    fileSize: 100 * 1024 * 1024, // 100MB max
-  },
-});
-
-router.post("/upload", upload.single("file"), async (req, res) => {
+/* ─────────────────────────────
+   Generate Pre-signed Upload URL
+   POST /api/classroom/media/sign
+   ───────────────────────────── */
+router.post("/sign", async (req, res) => {
   try {
     if (!r2Enabled()) {
       return res.status(503).json({
         success: false,
-        message: "Cloud storage (R2) is not configured on the server",
+        message: "R2 storage not configured",
       });
     }
 
-    if (!req.file) {
+    const { filename, mimetype } = req.body || {};
+    if (!filename) {
       return res
         .status(400)
-        .json({ success: false, message: "No file uploaded" });
+        .json({ success: false, message: "Missing filename" });
     }
 
-    const file = req.file;
+    const safeName = filename.replace(/\s+/g, "_").replace(/[^\w.\-]/g, "");
+    const key = `classroom/${Date.now()}-${crypto.randomBytes(6).toString("hex")}-${safeName}`;
 
-    // create safe key: classroom/<timestamp>-<filename>
-    const safeName = file.originalname
-      .replace(/\s+/g, "_")
-      .replace(/[^\w.\-]/g, "");
-    const key = `classroom/${Date.now()}-${safeName}`;
+    const url = await s3.getSignedUrl(new PutObjectCommand({
+      Bucket: process.env.R2_BUCKET,
+      Key: key,
+      ContentType: mimetype || "application/octet-stream",
+    }), { expiresIn: 600 }); // 10 min validity
 
-    const url = await uploadBuffer(key, file.buffer, file.mimetype);
-
-    return res.json({
-      success: true,
-      url,
-    });
+    const publicUrl = `${process.env.R2_PUBLIC_BASE.replace(/\/$/, "")}/${key}`;
+    res.json({ success: true, uploadUrl: url, fileUrl: publicUrl });
   } catch (err) {
-    console.error("Classroom media upload error:", err);
-    return res.status(500).json({
-      success: false,
-      message: "Upload failed",
-    });
+    console.error("Presign error:", err);
+    res.status(500).json({ success: false, message: "Failed to sign upload" });
   }
 });
 
