@@ -202,6 +202,9 @@ import researchDraftingRoutes from "./routes/researchDrafting.js";
 import livePublic from "./routes/livePublic.js";
 import liveAdmin from "./routes/liveAdmin.js";
 
+/* ---------- ✅ New Classroom Routes ---------- */
+import classroomRoutes from "./routes/classroom.js"; // 👈 NEW
+
 /* -------------------------------------------------------------------------- */
 /* ✅ Mount routes                                                            */
 /* -------------------------------------------------------------------------- */
@@ -234,6 +237,9 @@ app.use("/api/research-drafting", researchDraftingRoutes);
 /* ✅ Added Live Public/Admin APIs */
 app.use("/api/live", livePublic);
 app.use("/api/admin/live", liveAdmin);
+
+/* ✅ Added Classroom API */
+app.use("/api/classroom", classroomRoutes);
 
 /* -------------------------------------------------------------------------- */
 /* ✅ Health, favicon & root endpoints                                        */
