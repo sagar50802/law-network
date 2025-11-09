@@ -46,7 +46,7 @@ app.use(
   })
 );
 
-// Option B: custom dynamic CORS for unknown subdomains
+// Option B: dynamic CORS for unknown subdomains
 const corsOptions = {
   origin(origin, cb) {
     if (!origin) return cb(null, true);
@@ -187,6 +187,9 @@ import livePublic from "./routes/livePublic.js";
 import liveAdmin from "./routes/liveAdmin.js";
 import classroomRoutes from "./routes/classroom.js";
 
+/* ✅ NEW: Classroom Upload Media Route */
+import classroomUploadRoutes from "./routes/classroomUpload.js";
+
 /* ---------- Mounting ---------- */
 app.use("/api/articles", articleRoutes);
 app.use("/api/banners", bannerRoutes);
@@ -207,6 +210,9 @@ app.use("/api/research-drafting", researchDraftingRoutes);
 app.use("/api/live", livePublic);
 app.use("/api/admin/live", liveAdmin);
 app.use("/api/classroom", classroomRoutes);
+
+/* ✅ Mount new media upload route */
+app.use("/api/classroom/media", classroomUploadRoutes);
 
 /* -------------------------------------------------------------------------- */
 /* ✅ Health & Base Routes                                                    */
@@ -272,6 +278,47 @@ setInterval(async () => {
     console.error("[AutoRelease Cron] Error:", err.message);
   }
 }, 5 * 60 * 1000);
+
+/* -------------------------------------------------------------------------- */
+/* ✅ Auto Delete Old Classroom Media (10 days)                              */
+/* -------------------------------------------------------------------------- */
+import { s3, r2Enabled } from "./utils/r2.js";
+import { ListObjectsV2Command, DeleteObjectsCommand } from "@aws-sdk/client-s3";
+
+const BUCKET = process.env.R2_BUCKET;
+const TEN_DAYS = 10 * 24 * 60 * 60 * 1000;
+
+async function cleanOldFiles() {
+  if (!r2Enabled()) return;
+  try {
+    const { Contents } = await s3.send(
+      new ListObjectsV2Command({
+        Bucket: BUCKET,
+        Prefix: "classroom/",
+      })
+    );
+
+    const now = Date.now();
+    const old = (Contents || []).filter(
+      (f) => now - new Date(f.LastModified).getTime() > TEN_DAYS
+    );
+    if (!old.length) return;
+
+    await s3.send(
+      new DeleteObjectsCommand({
+        Bucket: BUCKET,
+        Delete: { Objects: old.map((f) => ({ Key: f.Key })) },
+      })
+    );
+
+    console.log(`🧹 Deleted ${old.length} classroom files older than 10 days.`);
+  } catch (err) {
+    console.error("Cleanup error:", err);
+  }
+}
+
+// Run cleanup every 24 hours
+setInterval(cleanOldFiles, 24 * 60 * 60 * 1000);
 
 /* -------------------------------------------------------------------------- */
 /* ✅ Startup & Graceful Shutdown                                            */
