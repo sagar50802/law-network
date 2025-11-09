@@ -1,5 +1,5 @@
 // server/models/Lecture.js
-const mongoose = require("mongoose");
+import mongoose from "mongoose";
 
 const mediaSchema = new mongoose.Schema(
   {
@@ -36,4 +36,7 @@ const lectureSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-module.exports = mongoose.model("Lecture", lectureSchema);
+const Lecture = mongoose.model("Lecture", lectureSchema);
+
+// ✅ ESM export
+export default Lecture;
