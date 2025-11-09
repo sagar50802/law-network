@@ -1,7 +1,10 @@
 // server/utils/r2.js
-// Cloudflare R2 helpers (AWS SDK v3) — compatible with your routes.
-// Exports: r2Enabled(), uploadBuffer(...), putR2(...), deleteByUrl(...),
-//          r2GetObjectStreamByUrl(...), getObjectByUrl(...), publicUrlForKey(...)
+// ------------------------------------------------------------
+// Cloudflare R2 Utilities — Unified Upload / Download / Delete
+// ------------------------------------------------------------
+// Supports: direct PUT uploads (pre-signed), buffer uploads, and retrievals.
+// Safe for all your routes: classroom, podcasts, tests, prep, etc.
+// ------------------------------------------------------------
 
 import {
   S3Client,
@@ -9,8 +12,9 @@ import {
   GetObjectCommand,
   DeleteObjectCommand,
 } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
-/* ---- Env ---- */
+/* -------------------- Environment -------------------- */
 const R2_ACCOUNT_ID        = process.env.R2_ACCOUNT_ID || "";
 const R2_ACCESS_KEY_ID     = process.env.R2_ACCESS_KEY_ID || "";
 const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY || "";
@@ -18,18 +22,22 @@ const R2_BUCKET            = process.env.R2_BUCKET || "";
 const R2_PUBLIC_BASE_RAW   = process.env.R2_PUBLIC_BASE || "";
 export const R2_PUBLIC_BASE = R2_PUBLIC_BASE_RAW.replace(/\/+$/, "");
 
-/* ---- Enabled ---- */
+/* -------------------- Enable Check -------------------- */
 export function r2Enabled() {
-  // do NOT require R2_PUBLIC_BASE; fall back to native endpoint if absent
-  return !!(R2_ACCOUNT_ID && R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY && R2_BUCKET);
+  return Boolean(
+    R2_ACCOUNT_ID &&
+    R2_ACCESS_KEY_ID &&
+    R2_SECRET_ACCESS_KEY &&
+    R2_BUCKET
+  );
 }
 
-/* ---- Client ---- */
+/* -------------------- Client -------------------- */
 export const s3 = r2Enabled()
   ? new S3Client({
       region: "auto",
       endpoint: `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-      forcePathStyle: true, // good with the native endpoint
+      forcePathStyle: true, // Required for Cloudflare R2
       credentials: {
         accessKeyId: R2_ACCESS_KEY_ID,
         secretAccessKey: R2_SECRET_ACCESS_KEY,
@@ -37,7 +45,7 @@ export const s3 = r2Enabled()
     })
   : null;
 
-/* ---- Helpers ---- */
+/* -------------------- Key Helpers -------------------- */
 function safeKey(k = "") {
   return String(k)
     .replace(/^\/+/, "")
@@ -45,34 +53,34 @@ function safeKey(k = "") {
     .replace(/[^\w.\-\/]/g, "");
 }
 
+/* Normalize URLs for any upload (public.dev or native R2) */
 export function publicUrlForKey(key) {
   const clean = safeKey(key);
   if (!clean) return "";
   if (R2_PUBLIC_BASE) return `${R2_PUBLIC_BASE}/${clean}`;
-  // native endpoint fallback (path-style: /bucket/key)
   return `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com/${R2_BUCKET}/${clean}`;
 }
 
+/* Extract key from either R2 public URL or native endpoint URL */
 function keyFromPublicUrl(url) {
   try {
     const u = new URL(url);
 
-    // If public base configured, try that first
+    // case 1: public.dev
     if (R2_PUBLIC_BASE) {
       const base = new URL(R2_PUBLIC_BASE);
       if (u.host === base.host) {
-        let keyPath = u.pathname;
-        if (base.pathname !== "/" && keyPath.startsWith(base.pathname)) {
-          keyPath = keyPath.slice(base.pathname.length);
-        }
-        return safeKey(keyPath);
+        let path = u.pathname;
+        if (base.pathname !== "/" && path.startsWith(base.pathname))
+          path = path.slice(base.pathname.length);
+        return safeKey(path);
       }
     }
 
-    // Fallback: native endpoint https://<acct>.r2.cloudflarestorage.com/<bucket>/<key>
+    // case 2: native endpoint
     const nativeHost = `${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`;
     if (u.host === nativeHost) {
-      const p = u.pathname.replace(/^\/+/, ""); // bucket/key...
+      const p = u.pathname.replace(/^\/+/, ""); // bucket/key
       if (p.startsWith(`${R2_BUCKET}/`)) {
         return safeKey(p.slice(R2_BUCKET.length + 1));
       }
@@ -83,7 +91,7 @@ function keyFromPublicUrl(url) {
   }
 }
 
-/* ---- Put / Upload ---- */
+/* -------------------- Core Upload -------------------- */
 export async function putR2({
   key,
   body,
@@ -105,27 +113,23 @@ export async function putR2({
       ...(contentDisposition ? { ContentDisposition: contentDisposition } : {}),
     })
   );
+
   return publicUrlForKey(Key);
 }
 
-/**
- * uploadBuffer – compatible with BOTH signatures:
- *   A) (buffer, filename, contentType)
- *   B) (key, buffer, contentType)
- */
+/* Buffer upload — backward compatible for older routes */
 export async function uploadBuffer(a, b, c) {
   if (!r2Enabled()) throw new Error("R2 not configured");
 
-  // Detect signature
   if (Buffer.isBuffer(a)) {
-    // A) (buffer, filename, contentType)
+    // Signature A: (buffer, filename, contentType)
     const buffer = a;
     const filename = b || "file";
     const contentType = c || "application/octet-stream";
-    const key = `prep/${safeKey(filename)}`;
+    const key = `misc/${safeKey(filename)}`;
     return putR2({ key, body: buffer, contentType });
   } else {
-    // B) (key, buffer, contentType)
+    // Signature B: (key, buffer, contentType)
     const key = a;
     const buffer = b;
     const contentType = c || "application/octet-stream";
@@ -133,7 +137,32 @@ export async function uploadBuffer(a, b, c) {
   }
 }
 
-/* ---- Get / Stream ---- */
+/* -------------------- Pre-signed Upload -------------------- */
+/**
+ * Create a pre-signed PUT URL for direct client upload.
+ * Example:
+ *   const { uploadUrl, fileUrl } = await createPresignedPutUrl("classroom/123.mp4", "video/mp4")
+ */
+export async function createPresignedPutUrl(
+  key,
+  contentType = "application/octet-stream",
+  expiresIn = 600
+) {
+  if (!r2Enabled()) throw new Error("R2 not configured");
+  const safe = safeKey(key);
+
+  const cmd = new PutObjectCommand({
+    Bucket: R2_BUCKET,
+    Key: safe,
+    ContentType: contentType,
+  });
+
+  const uploadUrl = await getSignedUrl(s3, cmd, { expiresIn });
+  const fileUrl = publicUrlForKey(safe);
+  return { uploadUrl, fileUrl };
+}
+
+/* -------------------- Get / Stream -------------------- */
 export async function getObjectByUrl(url, range) {
   if (!r2Enabled()) throw new Error("R2 not configured");
   const key = keyFromPublicUrl(url);
@@ -150,10 +179,10 @@ export async function getObjectByUrl(url, range) {
 
 export async function r2GetObjectStreamByUrl(url, range) {
   const { obj } = await getObjectByUrl(url, range);
-  return obj; // .Body is a Node stream
+  return obj; // .Body is a Node.js stream
 }
 
-/* ---- Delete ---- */
+/* -------------------- Delete -------------------- */
 export async function deleteByUrl(url) {
   if (!r2Enabled()) return false;
   const key = keyFromPublicUrl(url);
