@@ -9,14 +9,14 @@ import Lecture from "../models/Lecture.js";
 const router = express.Router();
 
 /* -------------------------------------------------------------------------- */
-/* ✅ Ensure Mongo is connected (safety check)                                */
+/* ✅ Ensure MongoDB Connection (safety fallback)                             */
 /* -------------------------------------------------------------------------- */
 if (mongoose.connection.readyState === 0) {
   const MONGO_FALLBACK = "mongodb://127.0.0.1:27017/classroomdb";
   mongoose
     .connect(process.env.MONGO_URI || MONGO_FALLBACK)
     .then(() => console.log("✅ [Classroom] MongoDB connected"))
-    .catch((err) => console.error("Mongo error", err));
+    .catch((err) => console.error("Mongo connection error:", err.message));
 }
 
 /* -------------------------------------------------------------------------- */
@@ -27,13 +27,12 @@ if (mongoose.connection.readyState === 0) {
 router.get("/lectures", async (req, res) => {
   try {
     const { status } = req.query;
-    const query = {};
-    if (status) query.status = status;
-    const lectures = await Lecture.find(query).sort({ releaseAt: 1 });
+    const filter = status ? { status } : {};
+    const lectures = await Lecture.find(filter).sort({ releaseAt: 1 });
     res.json(lectures);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Failed to fetch lectures" });
+    console.error("[Classroom] GET /lectures error:", err);
+    res.status(500).json({ success: false, message: "Failed to fetch lectures" });
   }
 });
 
@@ -41,11 +40,13 @@ router.get("/lectures", async (req, res) => {
 router.get("/lectures/:id", async (req, res) => {
   try {
     const lecture = await Lecture.findById(req.params.id);
-    if (!lecture) return res.status(404).json({ message: "Lecture not found" });
+    if (!lecture) {
+      return res.status(404).json({ success: false, message: "Lecture not found" });
+    }
     res.json(lecture);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Failed to fetch lecture" });
+    console.error("[Classroom] GET /lectures/:id error:", err);
+    res.status(500).json({ success: false, message: "Failed to fetch lecture" });
   }
 });
 
@@ -53,61 +54,75 @@ router.get("/lectures/:id", async (req, res) => {
 router.post("/lectures", async (req, res) => {
   try {
     const { title, subject, avatarType, releaseAt, status } = req.body;
+
+    if (!title || !subject) {
+      return res.status(400).json({ message: "Title and subject are required" });
+    }
+
     const lecture = await Lecture.create({
       title,
       subject,
       avatarType,
-      releaseAt,
+      releaseAt: releaseAt || new Date(),
       status: status || "draft",
       slides: [],
     });
+
     res.status(201).json(lecture);
   } catch (err) {
-    console.error(err);
-    res.status(400).json({ message: "Failed to create lecture" });
+    console.error("[Classroom] POST /lectures error:", err);
+    res.status(400).json({ success: false, message: "Failed to create lecture" });
   }
 });
 
-// PUT /api/classroom/lectures/:id  (update meta)
+// PUT /api/classroom/lectures/:id
 router.put("/lectures/:id", async (req, res) => {
   try {
     const { title, subject, avatarType, releaseAt, status } = req.body;
+
     const lecture = await Lecture.findByIdAndUpdate(
       req.params.id,
       { title, subject, avatarType, releaseAt, status },
-      { new: true }
+      { new: true, runValidators: true }
     );
-    if (!lecture) return res.status(404).json({ message: "Lecture not found" });
+
+    if (!lecture) {
+      return res.status(404).json({ success: false, message: "Lecture not found" });
+    }
+
     res.json(lecture);
   } catch (err) {
-    console.error(err);
-    res.status(400).json({ message: "Failed to update lecture" });
+    console.error("[Classroom] PUT /lectures/:id error:", err);
+    res.status(400).json({ success: false, message: "Failed to update lecture" });
   }
 });
 
 // DELETE /api/classroom/lectures/:id
 router.delete("/lectures/:id", async (req, res) => {
   try {
-    await Lecture.findByIdAndDelete(req.params.id);
-    res.json({ message: "Lecture deleted" });
+    const result = await Lecture.findByIdAndDelete(req.params.id);
+    if (!result) {
+      return res.status(404).json({ success: false, message: "Lecture not found" });
+    }
+    res.json({ success: true, message: "Lecture deleted" });
   } catch (err) {
-    console.error(err);
-    res.status(400).json({ message: "Failed to delete lecture" });
+    console.error("[Classroom] DELETE /lectures/:id error:", err);
+    res.status(400).json({ success: false, message: "Failed to delete lecture" });
   }
 });
 
-// DELETE /api/classroom/lectures  (batch delete: {ids: []})
+// DELETE /api/classroom/lectures  (batch delete)
 router.delete("/lectures", async (req, res) => {
   try {
     const { ids } = req.body;
     if (!Array.isArray(ids)) {
       return res.status(400).json({ message: "ids must be an array" });
     }
-    await Lecture.deleteMany({ _id: { $in: ids } });
-    res.json({ message: "Lectures deleted" });
+    const result = await Lecture.deleteMany({ _id: { $in: ids } });
+    res.json({ success: true, deleted: result.deletedCount });
   } catch (err) {
-    console.error(err);
-    res.status(400).json({ message: "Failed to batch delete" });
+    console.error("[Classroom] DELETE batch error:", err);
+    res.status(400).json({ success: false, message: "Failed to batch delete" });
   }
 });
 
@@ -118,30 +133,35 @@ router.get("/lectures/:id/slides", async (req, res) => {
     if (!lecture) return res.status(404).json({ message: "Lecture not found" });
     res.json(lecture.slides || []);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: "Failed to fetch slides" });
+    console.error("[Classroom] GET slides error:", err);
+    res.status(500).json({ success: false, message: "Failed to fetch slides" });
   }
 });
 
-// PUT /api/classroom/lectures/:id/slides  (replace slides array)
+// PUT /api/classroom/lectures/:id/slides
 router.put("/lectures/:id/slides", async (req, res) => {
   try {
-    const { slides } = req.body; // array of {topicTitle, content, media}
+    const { slides } = req.body;
+    if (!Array.isArray(slides)) {
+      return res.status(400).json({ message: "slides must be an array" });
+    }
+
     const lecture = await Lecture.findById(req.params.id);
     if (!lecture) return res.status(404).json({ message: "Lecture not found" });
 
-    lecture.slides = (slides || []).map((s, idx) => ({
-      topicTitle: s.topicTitle,
-      content: s.content,
+    lecture.slides = slides.map((s, i) => ({
+      topicTitle: s.topicTitle || `Slide ${i + 1}`,
+      content: s.content || "",
       media: s.media || {},
-      order: idx,
+      order: i,
+      updatedAt: new Date(),
     }));
 
     await lecture.save();
     res.json(lecture.slides);
   } catch (err) {
-    console.error(err);
-    res.status(400).json({ message: "Failed to save slides" });
+    console.error("[Classroom] PUT slides error:", err);
+    res.status(400).json({ success: false, message: "Failed to save slides" });
   }
 });
 
