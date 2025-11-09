@@ -1,9 +1,7 @@
 // server/routes/classroomMediaUpload.js
 import express from "express";
 import crypto from "crypto";
-import { r2Enabled, s3 } from "../utils/r2.js";
-import { PutObjectCommand } from "@aws-sdk/client-s3";
-import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { r2Enabled, createPresignedPutUrl } from "../utils/r2.js";
 
 const router = express.Router();
 
@@ -27,29 +25,24 @@ router.post("/sign", async (req, res) => {
         .json({ success: false, message: "Missing filename" });
     }
 
+    // Create a clean key name like classroom/1731160000-abc123-myvideo.mp4
     const safeName = filename.replace(/\s+/g, "_").replace(/[^\w.\-]/g, "");
     const key = `classroom/${Date.now()}-${crypto
       .randomBytes(6)
       .toString("hex")}-${safeName}`;
 
-    // ✅ Correct way to generate presigned URL
-    const command = new PutObjectCommand({
-      Bucket: process.env.R2_BUCKET,
-      Key: key,
-      ContentType: mimetype || "application/octet-stream",
-    });
+    // ✅ Use new helper from utils/r2.js
+    const { uploadUrl, fileUrl } = await createPresignedPutUrl(
+      key,
+      mimetype || "application/octet-stream"
+    );
 
-    const uploadUrl = await getSignedUrl(s3, command, { expiresIn: 600 }); // 10 min validity
-
-    const publicUrl = `${process.env.R2_PUBLIC_BASE.replace(/\/$/, "")}/${key}`;
-    return res.json({
-      success: true,
-      uploadUrl,
-      fileUrl: publicUrl,
-    });
+    return res.json({ success: true, uploadUrl, fileUrl });
   } catch (err) {
     console.error("Presign error:", err);
-    res.status(500).json({ success: false, message: "Failed to sign upload" });
+    res
+      .status(500)
+      .json({ success: false, message: "Failed to sign upload" });
   }
 });
 
