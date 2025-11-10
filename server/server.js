@@ -186,6 +186,7 @@ import researchDraftingRoutes from "./routes/researchDrafting.js";
 import livePublic from "./routes/livePublic.js";
 import liveAdmin from "./routes/liveAdmin.js";
 import classroomRoutes from "./routes/classroom.js";
+import classroomAccessRoutes from "./routes/classroomAccess.js";
 
 /* ✅ NEW: Classroom Upload Media Route */
 import classroomUploadRoutes from "./routes/classroomMediaUpload.js";
@@ -211,6 +212,7 @@ app.use("/api/research-drafting", researchDraftingRoutes);
 app.use("/api/live", livePublic);
 app.use("/api/admin/live", liveAdmin);
 app.use("/api/classroom", classroomRoutes);
+app.use("/api/classroom-access", classroomAccessRoutes);
 
 /* ✅ Mount new media upload route */
 app.use("/api/classroom/media", classroomUploadRoutes);
