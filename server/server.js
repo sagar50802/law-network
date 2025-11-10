@@ -15,7 +15,10 @@ import PrepModule from "./models/PrepModule.js";
 /* ✅ Express Initialization                                                  */
 /* -------------------------------------------------------------------------- */
 const app = express();
+
+/* 🔧 Render-safe port binding */
 const PORT = process.env.PORT || 5000;
+const HOST = "0.0.0.0"; // ✅ allows Render container to detect app readiness
 
 /* ---------- Resolve __dirname (for ES modules) ---------- */
 const __filename = fileURLToPath(import.meta.url);
@@ -38,7 +41,6 @@ const ALLOWED = new Set([
   "http://localhost:3000",
 ]);
 
-// Option A: global cors() early
 app.use(
   cors({
     origin: [...ALLOWED],
@@ -46,7 +48,6 @@ app.use(
   })
 );
 
-// Option B: dynamic CORS for unknown subdomains
 const corsOptions = {
   origin(origin, cb) {
     if (!origin) return cb(null, true);
@@ -187,10 +188,7 @@ import livePublic from "./routes/livePublic.js";
 import liveAdmin from "./routes/liveAdmin.js";
 import classroomRoutes from "./routes/classroom.js";
 import classroomAccessRoutes from "./routes/classroomAccess.js";
-
-/* ✅ NEW: Classroom Upload Media Route */
 import classroomUploadRoutes from "./routes/classroomMediaUpload.js";
-
 
 /* ---------- Mounting ---------- */
 app.use("/api/articles", articleRoutes);
@@ -213,8 +211,6 @@ app.use("/api/live", livePublic);
 app.use("/api/admin/live", liveAdmin);
 app.use("/api/classroom", classroomRoutes);
 app.use("/api/classroom-access", classroomAccessRoutes);
-
-/* ✅ Mount new media upload route */
 app.use("/api/classroom/media", classroomUploadRoutes);
 
 /* -------------------------------------------------------------------------- */
@@ -223,7 +219,9 @@ app.use("/api/classroom/media", classroomUploadRoutes);
 app.get("/favicon.ico", (_req, res) => res.sendStatus(204));
 app.get("/api/ping", (_req, res) => res.json({ ok: true, ts: Date.now() }));
 app.get("/api/access/status", (_req, res) => res.json({ access: false }));
-app.get("/", (_req, res) => res.json({ ok: true, root: true }));
+app.get("/", (_req, res) =>
+  res.json({ ok: true, service: "Law Network API", status: "running" })
+);
 
 /* -------------------------------------------------------------------------- */
 /* ✅ 404 and Global Error Handling                                           */
@@ -326,8 +324,8 @@ setInterval(cleanOldFiles, 24 * 60 * 60 * 1000);
 /* -------------------------------------------------------------------------- */
 /* ✅ Startup & Graceful Shutdown                                            */
 /* -------------------------------------------------------------------------- */
-const server = app.listen(PORT, () =>
-  console.log(`🚀 Law Network API running on port ${PORT}`)
+const server = app.listen(PORT, HOST, () =>
+  console.log(`🚀 Law Network API running on http://${HOST}:${PORT}`)
 );
 
 const shutdown = async (signal) => {
