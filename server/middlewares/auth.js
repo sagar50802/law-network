@@ -1,16 +1,18 @@
-// server/middlewares/auth.js
 import jwt from "jsonwebtoken";
 
 /**
- * ✅ verifyToken middleware
- * Verifies Bearer token sent from frontend (localStorage authToken)
- * and attaches decoded user to req.user.
+ * ✅ verifyToken middleware (guest-friendly)
+ * - If Bearer token exists → verifies & sets req.user
+ * - If no token → continues as guest (req.user = null)
+ * - Use with routes that can handle both paid/free links
  */
 export function verifyToken(req, res, next) {
   const authHeader = req.headers.authorization;
 
+  // 🟡 No token → allow guest access
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return res.status(401).json({ allowed: false, message: "No token provided" });
+    req.user = null;
+    return next();
   }
 
   const token = authHeader.split(" ")[1];
@@ -22,6 +24,8 @@ export function verifyToken(req, res, next) {
     next();
   } catch (err) {
     console.error("Token verification failed:", err.message);
-    return res.status(403).json({ allowed: false, message: "Invalid or expired token" });
+    // token invalid → treat as guest, don’t hard-block
+    req.user = null;
+    next();
   }
 }
