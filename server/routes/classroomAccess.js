@@ -2,7 +2,7 @@
 import express from "express";
 import crypto from "crypto";
 import AccessLink from "../models/AccessLink.js";
-import { verifyToken } from "../middleware/auth.js";
+import { verifyToken } from "../middlewares/auth.js"; // ✅ fixed folder name
 
 const router = express.Router();
 
