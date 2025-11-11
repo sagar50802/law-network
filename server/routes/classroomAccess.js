@@ -17,6 +17,9 @@ router.post("/create-link", async (req, res) => {
       permanent = false,
     } = req.body;
 
+    // 🧹 If a previous link exists, clean it up to prevent duplicates
+    await AccessLink.deleteMany({ lectureId });
+
     const token = crypto.randomBytes(16).toString("hex");
     const expiresAt = permanent
       ? null
@@ -27,6 +30,7 @@ router.post("/create-link", async (req, res) => {
       lectureId,
       isFree: type === "free",
       expiresAt,
+      expired: false,
       allowedUsers: [],
       visits: 0,
       visitors: [],
@@ -130,18 +134,22 @@ router.get("/check", verifyTokenOptional, async (req, res) => {
 -------------------------------------------------- */
 router.post("/regenerate-link", async (req, res) => {
   try {
-    const { lectureId, hours = 1 } = req.body;
+    const { lectureId, hours = 1, type = "paid" } = req.body;
+
     const newToken = crypto.randomBytes(16).toString("hex");
     const newExpiresAt = new Date(Date.now() + hours * 60 * 60 * 1000);
 
     const updated = await AccessLink.findOneAndUpdate(
       { lectureId },
-      { token: newToken, expiresAt: newExpiresAt, expired: false },
-      { new: true }
+      {
+        token: newToken,
+        expiresAt: newExpiresAt,
+        expired: false,
+        isFree: type === "free" ? true : false,
+        $set: { updatedAt: new Date() },
+      },
+      { new: true, upsert: true } // ✅ ensures new link if none exists
     );
-
-    if (!updated)
-      return res.status(404).json({ success: false, error: "No link found" });
 
     res.json({
       success: true,
