@@ -116,7 +116,9 @@ app.use(express.urlencoded({ extended: true, limit: "100mb" }));
 // Tiny request logger
 app.use((req, _res, next) => {
   if (req.path !== "/favicon.ico")
-    console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
+    console.log(
+      `[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`
+    );
   next();
 });
 
@@ -126,7 +128,7 @@ app.use((req, _res, next) => {
     const old = req.url;
     req.url = req.url.replace(/^\/api\/api\//, "/api/");
     console.log("↪️ Rewrote", old, "→", req.url);
-  }
+    }
   next();
 });
 
@@ -163,7 +165,10 @@ const staticHeaders = {
     }
   },
 };
-app.use("/uploads", express.static(path.join(__dirname, "uploads"), staticHeaders));
+app.use(
+  "/uploads",
+  express.static(path.join(__dirname, "uploads"), staticHeaders)
+);
 
 /* -------------------------------------------------------------------------- */
 /* ✅ Import and Mount Routes                                                 */
@@ -190,6 +195,10 @@ import classroomRoutes from "./routes/classroom.js";
 import classroomAccessRoutes from "./routes/classroomAccess.js";
 import classroomUploadRoutes from "./routes/classroomMediaUpload.js";
 
+// ⭐ NEW: footer + terms routes
+import footerRoutes from "./routes/footer.js";
+import termsRoutes from "./routes/terms.js";
+
 /* ---------- Mounting ---------- */
 app.use("/api/articles", articleRoutes);
 app.use("/api/banners", bannerRoutes);
@@ -213,12 +222,18 @@ app.use("/api/classroom", classroomRoutes);
 app.use("/api/classroom-access", classroomAccessRoutes);
 app.use("/api/classroom/media", classroomUploadRoutes);
 
+// ⭐ NEW: mount footer + terms (no /api so your frontend getJSON("/footer") works)
+app.use("/footer", footerRoutes);
+app.use("/terms", termsRoutes);
+
 /* -------------------------------------------------------------------------- */
 /* ✅ Health & Base Routes                                                    */
 /* -------------------------------------------------------------------------- */
 app.get("/favicon.ico", (_req, res) => res.sendStatus(204));
 app.get("/api/ping", (_req, res) => res.json({ ok: true, ts: Date.now() }));
-app.get("/api/access/status", (_req, res) => res.json({ access: false }));
+app.get("/api/access/status", (_req, res) =>
+  res.json({ access: false })
+);
 app.get("/", (_req, res) =>
   res.json({ ok: true, service: "Law Network API", status: "running" })
 );
@@ -260,7 +275,9 @@ if (!MONGO_URI) {
   mongoose
     .connect(MONGO_URI, { dbName: process.env.MONGO_DB || undefined })
     .then(() => console.log("✅ MongoDB connected successfully"))
-    .catch((err) => console.error("✗ MongoDB connection failed:", err.message));
+    .catch((err) =>
+      console.error("✗ MongoDB connection failed:", err.message)
+    );
 }
 
 /* -------------------------------------------------------------------------- */
@@ -273,7 +290,9 @@ setInterval(async () => {
       { $set: { status: "released" } }
     );
     if (result.modifiedCount > 0) {
-      console.log(`[AutoRelease] ${result.modifiedCount} prep modules released.`);
+      console.log(
+        `[AutoRelease] ${result.modifiedCount} prep modules released.`
+      );
     }
   } catch (err) {
     console.error("[AutoRelease Cron] Error:", err.message);
@@ -284,7 +303,10 @@ setInterval(async () => {
 /* ✅ Auto Delete Old Classroom Media (10 days)                              */
 /* -------------------------------------------------------------------------- */
 import { s3, r2Enabled } from "./utils/r2.js";
-import { ListObjectsV2Command, DeleteObjectsCommand } from "@aws-sdk/client-s3";
+import {
+  ListObjectsV2Command,
+  DeleteObjectsCommand,
+} from "@aws-sdk/client-s3";
 
 const BUCKET = process.env.R2_BUCKET;
 const TEN_DAYS = 10 * 24 * 60 * 60 * 1000;
@@ -312,7 +334,9 @@ async function cleanOldFiles() {
       })
     );
 
-    console.log(`🧹 Deleted ${old.length} classroom files older than 10 days.`);
+    console.log(
+      `🧹 Deleted ${old.length} classroom files older than 10 days.`
+    );
   } catch (err) {
     console.error("Cleanup error:", err);
   }
