@@ -32,11 +32,16 @@ const lectureSchema = new mongoose.Schema(
       default: "draft",
     },
     slides: [slideSchema],
+
+    // ✅ NEW: control who can see this lecture
+    accessType: {
+      type: String,
+      enum: ["public", "protected"], // public = visible to all; protected = link only
+      default: "public",
+    },
   },
   { timestamps: true }
 );
 
 const Lecture = mongoose.model("Lecture", lectureSchema);
-
-// ✅ ESM export
 export default Lecture;
