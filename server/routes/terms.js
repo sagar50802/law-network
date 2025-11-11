@@ -1,7 +1,7 @@
 // server/routes/terms.js
-const express = require("express");
-const mongoose = require("mongoose");
-const { isAdmin } = require("./utils");
+import express from "express";
+import mongoose from "mongoose";
+import { isAdmin } from "./utils.js";
 
 const router = express.Router();
 
@@ -49,4 +49,4 @@ router.put("/", isAdmin, async (req, res) => {
   }
 });
 
-module.exports = router;
+export default router;
