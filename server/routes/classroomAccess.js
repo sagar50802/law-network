@@ -10,10 +10,14 @@ const router = express.Router();
 -------------------------------------------------- */
 router.post("/create-link", async (req, res) => {
   try {
-    const { lectureId, type = "free", expiresInHours = 24, permanent = false } = req.body;
+    const {
+      lectureId,
+      type = "free",
+      expiresInHours = 24,
+      permanent = false,
+    } = req.body;
 
     const token = crypto.randomBytes(16).toString("hex");
-    // 🕒 Allow permanent (never-expiring) links too
     const expiresAt = permanent
       ? null
       : new Date(Date.now() + expiresInHours * 60 * 60 * 1000);
@@ -23,6 +27,9 @@ router.post("/create-link", async (req, res) => {
       lectureId,
       isFree: type === "free",
       expiresAt,
+      allowedUsers: [],
+      visits: 0,
+      visitors: [],
     });
 
     res.json({
@@ -47,17 +54,16 @@ function verifyTokenOptional(req, _res, next) {
       const secret = process.env.JWT_SECRET || "super-secret-key";
       req.user = jwt.verify(token, secret);
     } catch {
-      req.user = null; // invalid token
+      req.user = null;
     }
   } else {
-    req.user = null; // guest user
+    req.user = null;
   }
   next();
 }
 
 /* --------------------------------------------------
    ✅ Check link validity when user opens classroom
-   + track visits & visitors
 -------------------------------------------------- */
 router.get("/check", verifyTokenOptional, async (req, res) => {
   try {
@@ -69,12 +75,15 @@ router.get("/check", verifyTokenOptional, async (req, res) => {
     if (!link)
       return res.status(404).json({ allowed: false, reason: "no_link" });
 
-    // 🕒 Expiry check (if link has expiry)
-    if (link.expiresAt && new Date(link.expiresAt) < new Date())
+    // 🕒 Expiry check
+    if (link.expiresAt && new Date(link.expiresAt) < new Date()) {
+      // ⏳ Mark link as expired (for analytics)
+      await AccessLink.updateOne({ token }, { $set: { expired: true } });
       return res.status(403).json({ allowed: false, reason: "expired" });
+    }
 
-    // 🧮 Track visit for analytics
-    const visitorId = req.user ? req.user.id : req.ip; // use IP for guests
+    // 🧮 Track analytics
+    const visitorId = req.user ? req.user.id : req.ip;
     await AccessLink.updateOne(
       { token },
       {
@@ -92,18 +101,19 @@ router.get("/check", verifyTokenOptional, async (req, res) => {
       });
     }
 
-    // 🔐 Paid link: must be logged in + allowed
+    // 🔐 Paid link: must be logged in
     if (!req.user)
       return res.status(401).json({ allowed: false, reason: "no_user" });
 
     const userId = req.user.id;
-    const isAllowed = link.allowedUsers.some(
-      (id) => id.toString() === userId.toString()
-    );
+    const isAllowed =
+      Array.isArray(link.allowedUsers) &&
+      link.allowedUsers.some((id) => id.toString() === userId.toString());
 
     if (!isAllowed)
       return res.status(403).json({ allowed: false, reason: "not_in_list" });
 
+    // ✅ Allow access
     return res.json({
       allowed: true,
       mode: "paid",
@@ -116,7 +126,36 @@ router.get("/check", verifyTokenOptional, async (req, res) => {
 });
 
 /* --------------------------------------------------
-   ❌ Revoke a user from a paid classroom link
+   ♻️ Admin: Regenerate a new share link for same lecture
+-------------------------------------------------- */
+router.post("/regenerate-link", async (req, res) => {
+  try {
+    const { lectureId, hours = 1 } = req.body;
+    const newToken = crypto.randomBytes(16).toString("hex");
+    const newExpiresAt = new Date(Date.now() + hours * 60 * 60 * 1000);
+
+    const updated = await AccessLink.findOneAndUpdate(
+      { lectureId },
+      { token: newToken, expiresAt: newExpiresAt, expired: false },
+      { new: true }
+    );
+
+    if (!updated)
+      return res.status(404).json({ success: false, error: "No link found" });
+
+    res.json({
+      success: true,
+      url: `https://law-network-client.onrender.com/classroom/share?token=${updated.token}`,
+      expiresAt: updated.expiresAt,
+    });
+  } catch (err) {
+    console.error("Regenerate link failed:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/* --------------------------------------------------
+   ❌ Revoke user from paid classroom link
 -------------------------------------------------- */
 router.post("/revoke-user", async (req, res) => {
   try {
