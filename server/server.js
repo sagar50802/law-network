@@ -223,8 +223,8 @@ app.use("/api/classroom-access", classroomAccessRoutes);
 app.use("/api/classroom/media", classroomUploadRoutes);
 
 // ⭐ NEW: mount footer + terms (no /api so your frontend getJSON("/footer") works)
-app.use("/footer", footerRoutes);
-app.use("/terms", termsRoutes);
+app.use("/api/footer", footerRoutes);
+app.use("/api/terms", termsRoutes);
 
 /* -------------------------------------------------------------------------- */
 /* ✅ Health & Base Routes                                                    */
