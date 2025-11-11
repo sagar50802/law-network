@@ -98,7 +98,9 @@ const r2KeyFromUrl = (url) => {
 
 async function r2Put(file) {
   const ext = path.extname(file.originalname || "") || ".jpg";
-  const key = `consultancy/${Date.now()}_${crypto.randomBytes(6).toString("hex")}${ext}`;
+  const key = `consultancy/${Date.now()}_${crypto
+    .randomBytes(6)
+    .toString("hex")}${ext}`;
   await s3.send(
     new PutObjectCommand({
       Bucket: R2_BUCKET,
@@ -106,7 +108,9 @@ async function r2Put(file) {
       Body: file.buffer,
       ContentType: file.mimetype || "application/octet-stream",
       CacheControl: "public, max-age=31536000, immutable",
-      ContentDisposition: `inline; filename="${safeName(file.originalname || "image")}"`,
+      ContentDisposition: `inline; filename="${safeName(
+        file.originalname || "image"
+      )}"`,
     })
   );
   return `${R2_PUBLIC_BASE}/${key}`;
@@ -122,10 +126,29 @@ async function r2DelByUrl(url) {
 }
 function isR2Url(url = "") {
   try {
-    return !!R2_PUBLIC_BASE && new URL(url).host === new URL(R2_PUBLIC_BASE).host;
+    return (
+      !!R2_PUBLIC_BASE &&
+      new URL(url).host === new URL(R2_PUBLIC_BASE).host
+    );
   } catch {
     return false;
   }
+}
+
+/* ---------------- Normalizers ---------------- */
+function normalizeWhatsApp(input = "") {
+  if (!input) return "";
+  const cleaned = String(input).replace(/[^\d]/g, "");
+  if (!cleaned) return "";
+  return `https://wa.me/${cleaned}`;
+}
+
+function normalizeEmail(input = "") {
+  if (!input) return "";
+  const val = String(input).trim();
+  if (val.startsWith("mailto:")) return val;
+  if (val.includes("@")) return `mailto:${val}`;
+  return val;
 }
 
 /* ---------------- ROUTES ---------------- */
@@ -145,7 +168,7 @@ router.get("/", async (_req, res) => {
 // Create (admin)
 router.post("/", isAdmin, upload.single("image"), async (req, res) => {
   try {
-    const {
+    let {
       title,
       subtitle = "",
       intro = "",
@@ -157,10 +180,19 @@ router.post("/", isAdmin, upload.single("image"), async (req, res) => {
       website = "",
     } = req.body;
 
-    if (!title) return res.status(400).json({ success: false, error: "Title required" });
+    if (!title)
+      return res
+        .status(400)
+        .json({ success: false, error: "Title required" });
     if (!req.file?.buffer?.length) {
-      return res.status(400).json({ success: false, error: "Image required" });
+      return res
+        .status(400)
+        .json({ success: false, error: "Image required" });
     }
+
+    // normalize fields
+    whatsapp = normalizeWhatsApp(whatsapp);
+    email = normalizeEmail(email);
 
     const imageUrlStored = r2Ready
       ? await r2Put(req.file)
@@ -172,13 +204,18 @@ router.post("/", isAdmin, upload.single("image"), async (req, res) => {
       intro,
       order: Number(order || 0),
       image: imageUrlStored,
-      // NEW fields
-      whatsapp, telegram, instagram, email, website,
+      whatsapp,
+      telegram,
+      instagram,
+      email,
+      website,
     });
 
     res.json({ success: true, item });
   } catch (e) {
-    res.status(e.status || 500).json({ success: false, error: e.message });
+    res
+      .status(e.status || 500)
+      .json({ success: false, error: e.message });
   }
 });
 
@@ -186,19 +223,31 @@ router.post("/", isAdmin, upload.single("image"), async (req, res) => {
 router.patch("/:id", isAdmin, upload.single("image"), async (req, res) => {
   try {
     const prev = await Consultancy.findById(req.params.id);
-    if (!prev) return res.status(404).json({ success: false, error: "Not found" });
+    if (!prev)
+      return res
+        .status(404)
+        .json({ success: false, error: "Not found" });
 
     const patch = {
       ...(req.body.title != null ? { title: req.body.title } : {}),
       ...(req.body.subtitle != null ? { subtitle: req.body.subtitle } : {}),
       ...(req.body.intro != null ? { intro: req.body.intro } : {}),
-      ...(req.body.order != null ? { order: Number(req.body.order) } : {}),
+      ...(req.body.order != null
+        ? { order: Number(req.body.order) }
+        : {}),
     };
 
-    // NEW link fields (optional)
-    ["whatsapp", "telegram", "instagram", "email", "website"].forEach((k) => {
-      if (req.body[k] != null) patch[k] = String(req.body[k]);
-    });
+    // normalize links
+    ["whatsapp", "telegram", "instagram", "email", "website"].forEach(
+      (k) => {
+        if (req.body[k] != null) {
+          let val = String(req.body[k]);
+          if (k === "whatsapp") val = normalizeWhatsApp(val);
+          if (k === "email") val = normalizeEmail(val);
+          patch[k] = val;
+        }
+      }
+    );
 
     if (req.file?.buffer?.length) {
       if (isR2Url(prev.image)) await r2DelByUrl(prev.image);
@@ -210,10 +259,16 @@ router.patch("/:id", isAdmin, upload.single("image"), async (req, res) => {
         : fileUrl("consultancy", await gridPut("consultancy", req.file));
     }
 
-    const updated = await Consultancy.findByIdAndUpdate(req.params.id, patch, { new: true });
+    const updated = await Consultancy.findByIdAndUpdate(
+      req.params.id,
+      patch,
+      { new: true }
+    );
     res.json({ success: true, item: updated });
   } catch (e) {
-    res.status(e.status || 500).json({ success: false, error: e.message });
+    res
+      .status(e.status || 500)
+      .json({ success: false, error: e.message });
   }
 });
 
@@ -221,7 +276,10 @@ router.patch("/:id", isAdmin, upload.single("image"), async (req, res) => {
 router.delete("/:id", isAdmin, async (req, res) => {
   try {
     const doc = await Consultancy.findByIdAndDelete(req.params.id);
-    if (!doc) return res.status(404).json({ success: false, error: "Not found" });
+    if (!doc)
+      return res
+        .status(404)
+        .json({ success: false, error: "Not found" });
 
     if (isR2Url(doc.image)) await r2DelByUrl(doc.image);
     const fid = idFromUrl(doc.image, "consultancy");
@@ -229,7 +287,9 @@ router.delete("/:id", isAdmin, async (req, res) => {
 
     res.json({ success: true, removed: doc });
   } catch (e) {
-    res.status(500).json({ success: false, error: e.message });
+    res
+      .status(500)
+      .json({ success: false, error: e.message });
   }
 });
 
