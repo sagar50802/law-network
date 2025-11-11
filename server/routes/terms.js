@@ -1,6 +1,7 @@
-import express from "express";
-import mongoose from "mongoose";
-import { isAdmin } from "./utils.js";
+// server/routes/terms.js
+const express = require("express");
+const mongoose = require("mongoose");
+const { isAdmin } = require("./utils");
 
 const router = express.Router();
 
@@ -23,7 +24,10 @@ router.get("/", async (_req, res) => {
     const doc = await Terms.findOne().lean();
     res.json({ success: true, terms: doc || null });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    console.error("GET /terms error:", err);
+    res
+      .status(500)
+      .json({ success: false, error: "Failed to fetch terms." });
   }
 });
 
@@ -33,13 +37,16 @@ router.put("/", isAdmin, async (req, res) => {
     const { text = "" } = req.body || {};
     const doc = await Terms.findOneAndUpdate(
       {},
-      { text },
+      { text: String(text) },
       { new: true, upsert: true, setDefaultsOnInsert: true }
     ).lean();
     res.json({ success: true, terms: doc });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    console.error("PUT /terms error:", err);
+    res
+      .status(500)
+      .json({ success: false, error: "Failed to update terms." });
   }
 });
 
-export default router;
+module.exports = router;
