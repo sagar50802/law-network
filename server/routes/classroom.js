@@ -23,25 +23,26 @@ if (mongoose.connection.readyState === 0) {
 /* ✅ Routes                                                                  */
 /* -------------------------------------------------------------------------- */
 
-// GET /api/classroom/lectures?status=released&scope=public|protected
+// ✅ GET /api/classroom/lectures?status=released&scope=public|protected
 router.get("/lectures", async (req, res) => {
   try {
     const { status, scope } = req.query;
-
     const filter = {};
+
     if (status) filter.status = status;
 
-    // 👇 new, but fully optional
-    // - scope = "public"     → only public lectures
-    // - scope = "protected"  → only protected lectures
-    // - no scope             → all lectures (for admin panel, etc.)
+    // optional filtering by access type
     if (scope === "public") {
       filter.accessType = "public";
     } else if (scope === "protected") {
       filter.accessType = "protected";
     }
 
-    const lectures = await Lecture.find(filter).sort({ releaseAt: 1 });
+    // ✅ ensure accessType and key fields always included
+    const lectures = await Lecture.find(filter)
+      .select("title subject accessType avatarType releaseAt slides status")
+      .sort({ releaseAt: 1 });
+
     res.json({ success: true, data: lectures });
   } catch (err) {
     console.error("[Classroom] GET /lectures error:", err);
@@ -51,7 +52,7 @@ router.get("/lectures", async (req, res) => {
   }
 });
 
-// GET /api/classroom/lectures/:id
+// ✅ GET /api/classroom/lectures/:id
 router.get("/lectures/:id", async (req, res) => {
   try {
     const lecture = await Lecture.findById(req.params.id);
@@ -69,7 +70,7 @@ router.get("/lectures/:id", async (req, res) => {
   }
 });
 
-// POST /api/classroom/lectures
+// ✅ POST /api/classroom/lectures
 router.post("/lectures", async (req, res) => {
   try {
     const {
@@ -78,7 +79,7 @@ router.post("/lectures", async (req, res) => {
       avatarType,
       releaseAt,
       status,
-      accessType, // 👈 NEW, optional
+      accessType, // 👈 optional
     } = req.body;
 
     if (!title || !subject) {
@@ -93,8 +94,7 @@ router.post("/lectures", async (req, res) => {
       avatarType,
       releaseAt: releaseAt || new Date(),
       status: status || "draft",
-      // 👇 default to "public" if not provided
-      accessType: accessType || "public",
+      accessType: accessType || "public", // default
       slides: [],
     });
 
@@ -107,7 +107,7 @@ router.post("/lectures", async (req, res) => {
   }
 });
 
-// PUT /api/classroom/lectures/:id
+// ✅ PUT /api/classroom/lectures/:id
 router.put("/lectures/:id", async (req, res) => {
   try {
     const {
@@ -116,14 +116,11 @@ router.put("/lectures/:id", async (req, res) => {
       avatarType,
       releaseAt,
       status,
-      accessType, // 👈 NEW, optional
+      accessType,
     } = req.body;
 
-    // build update object carefully so we don't overwrite accidentally
     const update = { title, subject, avatarType, releaseAt, status };
-    if (accessType) {
-      update.accessType = accessType;
-    }
+    if (accessType) update.accessType = accessType;
 
     const lecture = await Lecture.findByIdAndUpdate(
       req.params.id,
@@ -146,7 +143,7 @@ router.put("/lectures/:id", async (req, res) => {
   }
 });
 
-// DELETE /api/classroom/lectures/:id
+// ✅ DELETE /api/classroom/lectures/:id
 router.delete("/lectures/:id", async (req, res) => {
   try {
     const result = await Lecture.findByIdAndDelete(req.params.id);
@@ -164,7 +161,7 @@ router.delete("/lectures/:id", async (req, res) => {
   }
 });
 
-// DELETE /api/classroom/lectures  (batch delete)
+// ✅ DELETE /api/classroom/lectures (batch delete)
 router.delete("/lectures", async (req, res) => {
   try {
     const { ids } = req.body;
@@ -183,15 +180,33 @@ router.delete("/lectures", async (req, res) => {
   }
 });
 
-// ✅ GET /api/classroom/lectures/:lectureId/slides
+/* -------------------------------------------------------------------------- */
+/* ✅ SLIDE ROUTES — Fully Isolated                                           */
+/* -------------------------------------------------------------------------- */
+
+// ✅ GET /api/classroom/lectures/:lectureId/slides (isolated fix)
 router.get("/lectures/:lectureId/slides", async (req, res) => {
   try {
-    const lecture = await Lecture.findById(req.params.lectureId);
+    const { lectureId } = req.params;
+    const lecture = await Lecture.findById(lectureId).lean();
+
     if (!lecture)
       return res
         .status(404)
         .json({ success: false, message: "Lecture not found" });
-    res.json({ success: true, slides: lecture.slides || [] });
+
+    res.json({
+      success: true,
+      data: {
+        _id: lecture._id,
+        title: lecture.title,
+        subject: lecture.subject,
+        accessType: lecture.accessType || "public",
+        status: lecture.status,
+        releaseAt: lecture.releaseAt,
+        slides: lecture.slides || [],
+      },
+    });
   } catch (err) {
     console.error("[Classroom] GET slides error:", err);
     res
