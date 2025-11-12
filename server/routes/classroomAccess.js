@@ -7,9 +7,9 @@ import jwt from "jsonwebtoken";
 
 const router = express.Router();
 
-/* -------------------------------------------------- */
-/* 🔑 Helper: hash group key                          */
-/* -------------------------------------------------- */
+/* --------------------------------------------------
+   🔐 Helper to hash group keys
+-------------------------------------------------- */
 function hashGroupKey(key) {
   const secret = process.env.GROUP_KEY_SECRET || "fallback-group-secret";
   return crypto
@@ -18,10 +18,10 @@ function hashGroupKey(key) {
     .digest("hex");
 }
 
-/* -------------------------------------------------- */
-/* 🧩 Create link (admin)                             */
-/*   Supports minutes or hours + multiple group keys  */
-/* -------------------------------------------------- */
+/* --------------------------------------------------
+   🧩 Create link (admin)
+   Supports minutes or hours + multiple group keys
+-------------------------------------------------- */
 router.post("/create-link", async (req, res) => {
   try {
     const {
@@ -33,10 +33,10 @@ router.post("/create-link", async (req, res) => {
       groupKeys = [], // [{label:"whatsapp", key:"abcd"}]
     } = req.body;
 
-    // Remove any previous links for this lecture
+    // Clean previous link(s) for this lecture
     await AccessLink.deleteMany({ lectureId });
 
-    // Expiry: store as a plain Date (Mongo will store as UTC internally)
+    // Expiry
     let expiresAt = null;
     if (!permanent) {
       const totalMs =
@@ -45,6 +45,7 @@ router.post("/create-link", async (req, res) => {
         1000;
       expiresAt = new Date(Date.now() + totalMs);
     }
+    const expiresUtc = expiresAt ? new Date(expiresAt.toISOString()) : null;
 
     // Group key hashes
     const groupKeyHashes = Array.isArray(groupKeys)
@@ -56,7 +57,8 @@ router.post("/create-link", async (req, res) => {
           }))
       : [];
 
-    const hasKeys = groupKeyHashes.length > 0;
+    const hasKeys =
+      Array.isArray(groupKeyHashes) && groupKeyHashes.length > 0;
 
     const token = crypto.randomBytes(16).toString("hex");
 
@@ -64,11 +66,12 @@ router.post("/create-link", async (req, res) => {
       token,
       lectureId,
       isFree: type === "free",
-      expiresAt,
+      expiresAt: expiresUtc,
       expired: false,
       allowedUsers: [],
       visits: 0,
       visitors: [],
+      // only require group key if keys actually exist
       requireGroupKey: type === "paid" && hasKeys,
       groupKeys: hasKeys ? groupKeyHashes : [],
     });
@@ -76,7 +79,7 @@ router.post("/create-link", async (req, res) => {
     res.json({
       success: true,
       url: `https://law-network-client.onrender.com/classroom/share?token=${link.token}`,
-      expiresAt,
+      expiresAt: expiresUtc,
     });
   } catch (err) {
     console.error("Create link failed:", err);
@@ -84,9 +87,9 @@ router.post("/create-link", async (req, res) => {
   }
 });
 
-/* -------------------------------------------------- */
-/* 🔓 Optional auth                                   */
-/* -------------------------------------------------- */
+/* --------------------------------------------------
+   🔓 Optional auth (JWT, but not required)
+-------------------------------------------------- */
 function verifyTokenOptional(req, _res, next) {
   const authHeader = req.headers.authorization;
   if (authHeader && authHeader.startsWith("Bearer ")) {
@@ -103,30 +106,29 @@ function verifyTokenOptional(req, _res, next) {
   next();
 }
 
-/* -------------------------------------------------- */
-/* ✅ Check link validity                             */
-/* -------------------------------------------------- */
+/* --------------------------------------------------
+   ✅ Check link validity
+-------------------------------------------------- */
 router.get("/check", verifyTokenOptional, async (req, res) => {
   try {
     const { token } = req.query;
-    if (!token) {
+    if (!token)
       return res
         .status(400)
         .json({ allowed: false, reason: "missing_token" });
-    }
 
     const link = await AccessLink.findOne({ token });
-    if (!link) {
-      return res.status(404).json({ allowed: false, reason: "no_link" });
-    }
+    if (!link)
+      return res
+        .status(404)
+        .json({ allowed: false, reason: "no_link" });
 
-    // Expiry (5s *grace period* AFTER expiry)
-    const nowMs = Date.now();
-    const expiresAtMs = link.expiresAt
+    // Expiry (5s tolerance)
+    const now = Date.now();
+    const expiresAt = link.expiresAt
       ? new Date(link.expiresAt).getTime()
       : null;
-
-    if (expiresAtMs && nowMs > expiresAtMs + 5000) {
+    if (expiresAt && expiresAt < now - 5000) {
       await AccessLink.updateOne(
         { token },
         { $set: { expired: true } }
@@ -143,7 +145,7 @@ router.get("/check", verifyTokenOptional, async (req, res) => {
       { $inc: { visits: 1 }, $addToSet: { visitors: visitorId } }
     );
 
-    // Free links: open for everyone
+    // Free links: open
     if (link.isFree) {
       return res.json({
         allowed: true,
@@ -173,6 +175,7 @@ router.get("/check", verifyTokenOptional, async (req, res) => {
       }
     }
 
+    // Otherwise: paid link with *no* group keys → allowed
     return res.json({
       allowed: true,
       mode: "paid",
@@ -184,59 +187,68 @@ router.get("/check", verifyTokenOptional, async (req, res) => {
   }
 });
 
-/* -------------------------------------------------- */
-/* 🎓 Visible lectures for a token                    */
-/*   (public + the protected one unlocked by token)   */
-/* -------------------------------------------------- */
+/* --------------------------------------------------
+   🎓 Visible lectures for a token
+   protected = paid:
+   - public lectures => always allowed
+   - protected lectures => allowed ONLY if this token's lectureId matches
+-------------------------------------------------- */
 router.get("/available", async (req, res) => {
   try {
     const { token } = req.query;
 
-    // No token → only public lectures
+    // If no token → just return released lectures, mark only public as allowed
     if (!token) {
-      const publicLectures = await Lecture.find({
-        accessType: "public",
-      }).lean();
+      const allLectures = await Lecture.find({
+        status: "released",
+      })
+        .sort({ releaseAt: 1 })
+        .lean();
 
-      const normalized = publicLectures.map((l) => ({
+      const normalized = allLectures.map((l) => ({
         ...l,
-        isAllowed: true,
+        isAllowed: l.accessType === "public",
+        tempUnlocked: false,
       }));
 
-      console.log("DEBUG /available => public-only", {
+      console.log("DEBUG /available => no token", {
         token: null,
         lecturesCount: normalized.length,
+        unlockedLectureId: null,
+        requireGroupKey: null,
+        isFree: null,
+        expiresAt: null,
       });
 
-      return res.json({ success: true, lectures: normalized });
+      return res.json({
+        success: true,
+        lectures: normalized,
+        unlockedLectureId: null,
+        expiresAt: null,
+      });
     }
 
     const link = await AccessLink.findOne({ token });
-    if (!link) {
-      console.log("DEBUG /available => invalid_token", { token });
-      return res.json({ success: false, reason: "invalid_token" });
-    }
+    if (!link)
+      return res.json({
+        success: false,
+        reason: "invalid_token",
+      });
 
-    // Expiry (5s grace period)
-    const nowMs = Date.now();
-    const expiresAtMs = link.expiresAt
+    // Expiry (5s tolerance)
+    const now = Date.now();
+    const expiresAt = link.expiresAt
       ? new Date(link.expiresAt).getTime()
       : null;
-
-    if (expiresAtMs && nowMs > expiresAtMs + 5000) {
+    if (expiresAt && expiresAt < now - 5000) {
       await AccessLink.updateOne(
         { token },
         { $set: { expired: true } }
       );
-      console.log("DEBUG /available => expired", {
-        token,
-        expiresAt: link.expiresAt,
-        now: new Date(nowMs),
-      });
       return res.json({ success: false, reason: "expired" });
     }
 
-    // Enforce group key for paid links when configured
+    // If paid and requires group key, enforce it here too
     if (
       !link.isFree &&
       link.requireGroupKey &&
@@ -252,72 +264,75 @@ router.get("/available", async (req, res) => {
       const candidate = hashGroupKey(providedKey);
       const ok = link.groupKeys.some((g) => g.hash === candidate);
       if (!ok) {
-        console.log("DEBUG /available => bad_group_key", {
-          token,
-          providedKey: !!providedKey,
+        return res.json({
+          success: false,
+          reason: "bad_group_key",
         });
-        return res.json({ success: false, reason: "bad_group_key" });
       }
     }
 
-    // Public lectures (always allowed)
-    const publicLectures = await Lecture.find({
-      accessType: "public",
-    }).lean();
-    const normalizedPublic = publicLectures.map((l) => ({
-      ...l,
-      isAllowed: true,
-    }));
+    // Fetch ALL released lectures (public + protected)
+    const allLectures = await Lecture.find({
+      status: "released",
+    })
+      .sort({ releaseAt: 1 })
+      .lean();
 
-    // The lecture unlocked by this link
-    let unlocked = null;
-    if (link.lectureId) {
-      const raw = await Lecture.findById(link.lectureId).lean();
-      if (raw) {
-        unlocked = {
-          ...raw,
-          isAllowed: true,
-          tempUnlocked: true,
-        };
+    let unlockedLectureId = null;
+
+    // Map to add isAllowed + tempUnlocked flags
+    const normalized = allLectures.map((l) => {
+      const isPublic = l.accessType === "public";
+      const isUnlockedByToken =
+        String(l._id) === String(link.lectureId);
+
+      // protected = paid: default locked, unless unlocked by this token
+      let isAllowed = false;
+      if (isPublic) isAllowed = true;
+      if (isUnlockedByToken) {
+        isAllowed = true;
+        unlockedLectureId = l._id;
       }
-    }
 
-    // Merge (avoid duplicates)
-    const map = new Map(
-      normalizedPublic.map((l) => [String(l._id), l])
-    );
-    if (unlocked) {
-      map.set(String(unlocked._id), unlocked);
-    }
-
-    const combined = Array.from(map.values());
+      return {
+        ...l,
+        isAllowed,
+        tempUnlocked: isUnlockedByToken,
+      };
+    });
 
     console.log("DEBUG /available =>", {
       token,
-      lecturesCount: combined.length,
-      unlockedLectureId: unlocked?._id || null,
-      unlockedLectureTitle: unlocked?.title || null,
+      lecturesCount: normalized.length,
+      unlockedLectureId,
+      unlockedLectureTitle:
+        normalized.find(
+          (l) =>
+            unlockedLectureId &&
+            String(l._id) === String(unlockedLectureId)
+        )?.title || null,
       requireGroupKey: link.requireGroupKey,
       isFree: link.isFree,
       expiresAt: link.expiresAt,
-      now: new Date(nowMs),
     });
 
-    res.json({
+    return res.json({
       success: true,
-      lectures: combined,
-      unlockedLectureId: unlocked?._id || null,
+      lectures: normalized,
+      unlockedLectureId,
       expiresAt: link.expiresAt,
     });
   } catch (err) {
     console.error("Available lectures fetch failed:", err);
-    res.status(500).json({ success: false, error: err.message });
+    res
+      .status(500)
+      .json({ success: false, error: err.message });
   }
 });
 
-/* -------------------------------------------------- */
-/* ♻️ Regenerate link (admin)                         */
-/* -------------------------------------------------- */
+/* --------------------------------------------------
+   ♻️ Regenerate link (admin)
+-------------------------------------------------- */
 router.post("/regenerate-link", async (req, res) => {
   try {
     const {
@@ -331,6 +346,7 @@ router.post("/regenerate-link", async (req, res) => {
     const totalMs =
       (Number(hours) * 60 + Number(minutes)) * 60 * 1000;
     const newExpiresAt = new Date(Date.now() + totalMs);
+    const expiresUtc = new Date(newExpiresAt.toISOString());
     const newToken = crypto.randomBytes(16).toString("hex");
 
     let groupKeyHashes;
@@ -348,7 +364,7 @@ router.post("/regenerate-link", async (req, res) => {
 
     const update = {
       token: newToken,
-      expiresAt: newExpiresAt,
+      expiresAt: expiresUtc,
       expired: false,
       $set: { updatedAt: new Date() },
     };
@@ -359,7 +375,8 @@ router.post("/regenerate-link", async (req, res) => {
 
     if (Array.isArray(groupKeyHashes)) {
       update.groupKeys = hasKeys ? groupKeyHashes : [];
-      update.requireGroupKey = (type || "paid") === "paid" && hasKeys;
+      update.requireGroupKey =
+        (type || "paid") === "paid" && hasKeys;
     }
 
     const updated = await AccessLink.findOneAndUpdate(
@@ -379,9 +396,9 @@ router.post("/regenerate-link", async (req, res) => {
   }
 });
 
-/* -------------------------------------------------- */
-/* ❌ Revoke user (for future use)                    */
-/* -------------------------------------------------- */
+/* --------------------------------------------------
+   ❌ Revoke user (future use)
+-------------------------------------------------- */
 router.post("/revoke-user", async (req, res) => {
   try {
     const { token, userId } = req.body;
