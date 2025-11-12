@@ -5,47 +5,45 @@ import jwt from "jsonwebtoken";
 
 const router = express.Router();
 
-/* --------------------------------------------------
-   ⚙️ Secret used to generate groupKey (per group basis)
-   👉 Change this string per platform if needed
--------------------------------------------------- */
-const GROUP_SECRET = process.env.GROUP_SECRET || "whatsapp-group-law-network";
+function hashGroupKey(key) {
+  const secret = process.env.GROUP_KEY_SECRET || "fallback-group-secret";
+  return crypto.createHash("sha256").update(secret + "::" + String(key)).digest("hex");
+}
 
 /* --------------------------------------------------
-   🧩 Create new classroom share link (called by admin)
+   🧩 Create link (admin)
+   Supports minutes or hours + multiple group keys
 -------------------------------------------------- */
 router.post("/create-link", async (req, res) => {
   try {
     const {
       lectureId,
-      type = "free",
+      type = "free",           // "free" | "paid"
       expiresInHours = 0,
       expiresInMinutes = 0,
       permanent = false,
-      group = "whatsapp", // optional field (future use)
+      groupKeys = [],          // [{label: "whatsapp", key: "abcd"}, {label:"telegram", key:"efgh"}]
     } = req.body;
 
-    // 🧹 Clean any previous link for same lecture
+    // clean previous link(s) for this lecture
     await AccessLink.deleteMany({ lectureId });
 
-    // 🕒 Expiry logic (supports minutes or hours)
+    // expiry
     let expiresAt = null;
     if (!permanent) {
-      const totalMs =
-        (Number(expiresInHours) * 60 + Number(expiresInMinutes)) * 60 * 1000;
+      const totalMs = (Number(expiresInHours) * 60 + Number(expiresInMinutes)) * 60 * 1000;
       expiresAt = new Date(Date.now() + totalMs);
     }
-
     const expiresUtc = expiresAt ? new Date(expiresAt.toISOString()) : null;
 
-    const token = crypto.randomBytes(16).toString("hex");
+    // group key hashes
+    const groupKeyHashes = Array.isArray(groupKeys)
+      ? groupKeys
+          .filter(g => g && g.key)
+          .map(g => ({ label: g.label || "group", hash: hashGroupKey(g.key) }))
+      : [];
 
-    // 🔑 Generate short group key (tied to platform)
-    const groupKey = crypto
-      .createHash("sha256")
-      .update(GROUP_SECRET + group)
-      .digest("hex")
-      .substring(0, 8);
+    const token = crypto.randomBytes(16).toString("hex");
 
     const link = await AccessLink.create({
       token,
@@ -56,11 +54,13 @@ router.post("/create-link", async (req, res) => {
       allowedUsers: [],
       visits: 0,
       visitors: [],
+      requireGroupKey: type === "paid" && groupKeyHashes.length > 0, // ✅ require key for paid links
+      groupKeys: groupKeyHashes, // [{label, hash}]
     });
 
     res.json({
       success: true,
-      url: `https://law-network-client.onrender.com/classroom/share?token=${link.token}&key=${groupKey}`,
+      url: `https://law-network-client.onrender.com/classroom/share?token=${link.token}`, // clean URL (no key)
       expiresAt: expiresUtc,
     });
   } catch (err) {
@@ -70,7 +70,7 @@ router.post("/create-link", async (req, res) => {
 });
 
 /* --------------------------------------------------
-   🔓 Middleware: optional token check (for guests)
+   🔓 Optional auth (kept as-is)
 -------------------------------------------------- */
 function verifyTokenOptional(req, _res, next) {
   const authHeader = req.headers.authorization;
@@ -89,69 +89,57 @@ function verifyTokenOptional(req, _res, next) {
 }
 
 /* --------------------------------------------------
-   ✅ Check link validity when user opens classroom
+   ✅ Check link validity
+   Accepts hidden group key via header/cookie/query
 -------------------------------------------------- */
 router.get("/check", verifyTokenOptional, async (req, res) => {
   try {
-    const { token, key } = req.query;
-
-    if (!token)
-      return res.status(400).json({ allowed: false, reason: "missing_token" });
+    const { token } = req.query;
+    if (!token) return res.status(400).json({ allowed: false, reason: "missing_token" });
 
     const link = await AccessLink.findOne({ token });
-    if (!link)
-      return res.status(404).json({ allowed: false, reason: "no_link" });
+    if (!link) return res.status(404).json({ allowed: false, reason: "no_link" });
 
-    // 🕒 Expiry check with 5s tolerance
+    // expiry (5s tolerance)
     const now = Date.now();
     const expiresAt = link.expiresAt ? new Date(link.expiresAt).getTime() : null;
-
     if (expiresAt && expiresAt < now - 5000) {
       await AccessLink.updateOne({ token }, { $set: { expired: true } });
       return res.status(403).json({ allowed: false, reason: "expired" });
     }
 
-    // 🔐 Group key verification
-    const validKey = crypto
-      .createHash("sha256")
-      .update(GROUP_SECRET + "whatsapp") // if you later add telegram, adjust here
-      .digest("hex")
-      .substring(0, 8);
-
-    if (key !== validKey) {
-      console.warn("❌ Invalid or missing group key attempt", { token, key });
-      return res.status(403).json({
-        allowed: false,
-        reason: "invalid_group_key",
-        message: "🚫 Unauthorized — this link is for group members only.",
-      });
-    }
-
-    // 🧮 Track analytics
+    // analytics
     const visitorId = req.user ? req.user.id : req.ip;
     await AccessLink.updateOne(
       { token },
-      {
-        $inc: { visits: 1 },
-        $addToSet: { visitors: visitorId },
-      }
+      { $inc: { visits: 1 }, $addToSet: { visitors: visitorId } }
     );
 
-    // ✅ Free links: open to everyone
+    // free links: open
     if (link.isFree) {
-      return res.json({
-        allowed: true,
-        mode: "free",
-        expiresAt: link.expiresAt,
-      });
+      return res.json({ allowed: true, mode: "free", expiresAt: link.expiresAt });
     }
 
-    // 🔐 Paid link: group key validated → allow access
-    return res.json({
-      allowed: true,
-      mode: "paid-group",
-      expiresAt: link.expiresAt,
-    });
+    // 🔐 Paid link:
+    // 1) If link has group keys, require a matching key (hidden)
+    if (link.requireGroupKey && Array.isArray(link.groupKeys) && link.groupKeys.length > 0) {
+      // preferred: custom header
+      const providedKey =
+        req.headers["x-group-key"] ||
+        req.cookies?.gk ||           // optional cookie
+        req.query.key || "";         // fallback query (won't be used in the clean flow)
+
+      const candidate = hashGroupKey(providedKey);
+      const ok = link.groupKeys.some(g => g.hash === candidate);
+      if (!ok) {
+        return res.status(403).json({ allowed: false, reason: "bad_group_key" });
+      }
+    }
+
+    // 2) (Optional future) If you later add user-based allowlists, you can check here.
+    // For now, group key is the gate.
+
+    return res.json({ allowed: true, mode: "paid", expiresAt: link.expiresAt });
   } catch (err) {
     console.error("Check link failed:", err);
     res.status(500).json({ allowed: false, error: err.message });
@@ -159,43 +147,56 @@ router.get("/check", verifyTokenOptional, async (req, res) => {
 });
 
 /* --------------------------------------------------
-   ♻️ Admin: Regenerate a new share link for same lecture
+   ♻️ Regenerate link (admin)
+   Keeps existing group keys unless replaced
 -------------------------------------------------- */
 router.post("/regenerate-link", async (req, res) => {
   try {
-    const { lectureId, hours = 1, minutes = 0, type = "paid" } = req.body;
+    const {
+      lectureId,
+      hours = 0,
+      minutes = 5,
+      type,             // optional: "free"|"paid" to flip behavior
+      groupKeys,        // optional: replace keys [{label, key}]
+    } = req.body;
 
-    // 🧹 Expire old links
-    await AccessLink.updateMany({ lectureId }, { $set: { expired: true } });
-
-    const totalMs = (hours * 60 + minutes) * 60 * 1000;
+    const totalMs = (Number(hours) * 60 + Number(minutes)) * 60 * 1000;
     const newExpiresAt = new Date(Date.now() + totalMs);
     const expiresUtc = new Date(newExpiresAt.toISOString());
-
     const newToken = crypto.randomBytes(16).toString("hex");
+
+    let groupKeyHashes;
+    if (Array.isArray(groupKeys)) {
+      groupKeyHashes = groupKeys
+        .filter(g => g && g.key)
+        .map(g => ({ label: g.label || "group", hash: hashGroupKey(g.key) }));
+    }
+
+    const update = {
+      token: newToken,
+      expiresAt: expiresUtc,
+      expired: false,
+      $set: { updatedAt: new Date() },
+    };
+
+    if (typeof type === "string") {
+      update.isFree = type === "free";
+    }
+
+    if (groupKeyHashes) {
+      update.groupKeys = groupKeyHashes;
+      update.requireGroupKey = (type || "paid") === "paid" && groupKeyHashes.length > 0;
+    }
 
     const updated = await AccessLink.findOneAndUpdate(
       { lectureId },
-      {
-        token: newToken,
-        expiresAt: expiresUtc,
-        expired: false,
-        isFree: type === "free",
-        $set: { updatedAt: new Date() },
-      },
+      update,
       { new: true, upsert: true }
     );
 
-    // Recreate valid groupKey
-    const groupKey = crypto
-      .createHash("sha256")
-      .update(GROUP_SECRET + "whatsapp")
-      .digest("hex")
-      .substring(0, 8);
-
     res.json({
       success: true,
-      url: `https://law-network-client.onrender.com/classroom/share?token=${updated.token}&key=${groupKey}`,
+      url: `https://law-network-client.onrender.com/classroom/share?token=${updated.token}`,
       expiresAt: updated.expiresAt,
     });
   } catch (err) {
@@ -205,7 +206,7 @@ router.post("/regenerate-link", async (req, res) => {
 });
 
 /* --------------------------------------------------
-   ❌ Revoke user from paid classroom link
+   ❌ Revoke user (kept for future)
 -------------------------------------------------- */
 router.post("/revoke-user", async (req, res) => {
   try {
