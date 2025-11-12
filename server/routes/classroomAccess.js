@@ -107,7 +107,7 @@ router.get("/check", verifyTokenOptional, async (req, res) => {
     // Expiry (5s tolerance)
     const now = Date.now();
     const expiresAt = link.expiresAt ? new Date(link.expiresAt).getTime() : null;
-    if (expiresAt && expiresAt < now - 5000) {
+     if (expiresAt && now > expiresAt) {
       await AccessLink.updateOne({ token }, { $set: { expired: true } });
       return res.status(403).json({ allowed: false, reason: "expired" });
     }
