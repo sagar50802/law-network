@@ -1,4 +1,4 @@
-// routes/classroomAccess.js  (or whatever your file is named)
+// routes/classroomAccess.js
 import express from "express";
 import crypto from "crypto";
 import AccessLink from "../models/AccessLink.js";
@@ -156,8 +156,18 @@ router.get("/available", async (req, res) => {
     // No token → only public lectures
     if (!token) {
       const publicLectures = await Lecture.find({ accessType: "public" }).lean();
-      // mark public as allowed for consistency
       const normalized = publicLectures.map(l => ({ ...l, isAllowed: true }));
+
+      // 🔎 DEBUG (no token)
+      console.log("DEBUG /available (no token) =>", {
+        token: null,
+        lecturesCount: normalized.length,
+        unlockedLectureId: null,
+        unlockedLectureTitle: null,
+        requireGroupKey: null,
+        isFree: null,
+      });
+
       return res.json({ success: true, lectures: normalized });
     }
 
@@ -205,7 +215,17 @@ router.get("/available", async (req, res) => {
 
     const combined = Array.from(map.values());
 
-    res.json({
+    // 🔎 DEBUG (with token)
+    console.log("DEBUG /available =>", {
+      token,
+      lecturesCount: combined.length,
+      unlockedLectureId: unlocked?._id,
+      unlockedLectureTitle: unlocked?.title,
+      requireGroupKey: link.requireGroupKey,
+      isFree: link.isFree,
+    });
+
+    return res.json({
       success: true,
       lectures: combined,
       unlockedLectureId: unlocked?._id || null,
