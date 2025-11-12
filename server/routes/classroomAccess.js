@@ -1,6 +1,7 @@
 import express from "express";
 import crypto from "crypto";
 import AccessLink from "../models/AccessLink.js";
+import Lecture from "../models/Lecture.js"; // ✅ NEW
 import jwt from "jsonwebtoken";
 
 const router = express.Router();
@@ -143,6 +144,69 @@ router.get("/check", verifyTokenOptional, async (req, res) => {
   } catch (err) {
     console.error("Check link failed:", err);
     res.status(500).json({ allowed: false, error: err.message });
+  }
+});
+
+/* --------------------------------------------------
+   🎓 NEW: return lectures visible for a token
+   (public + the protected one unlocked by this token)
+-------------------------------------------------- */
+router.get("/available", async (req, res) => {
+  try {
+    const { token } = req.query;
+
+    // If no token → only public lectures
+    if (!token) {
+      const publicLectures = await Lecture.find({ accessType: "public" });
+      return res.json({ success: true, lectures: publicLectures });
+    }
+
+    const link = await AccessLink.findOne({ token });
+    if (!link) return res.json({ success: false, reason: "invalid_token" });
+
+    // Expiry (5s tolerance)
+    const now = Date.now();
+    const expiresAt = link.expiresAt ? new Date(link.expiresAt).getTime() : null;
+    if (expiresAt && expiresAt < now - 5000) {
+      await AccessLink.updateOne({ token }, { $set: { expired: true } });
+      return res.json({ success: false, reason: "expired" });
+    }
+
+    // If paid and requires group key, enforce it here too
+    if (!link.isFree && link.requireGroupKey && Array.isArray(link.groupKeys) && link.groupKeys.length > 0) {
+      const providedKey =
+        req.headers["x-group-key"] ||
+        req.cookies?.gk ||
+        req.query.key || "";
+
+      const candidate = hashGroupKey(providedKey);
+      const ok = link.groupKeys.some(g => g.hash === candidate);
+      if (!ok) {
+        return res.json({ success: false, reason: "bad_group_key" });
+      }
+    }
+
+    // Public lectures
+    const publicLectures = await Lecture.find({ accessType: "public" });
+
+    // The lecture unlocked by this link
+    const unlocked = await Lecture.findById(link.lectureId);
+
+    // Merge (avoid duplicates)
+    const map = new Map(publicLectures.map(l => [String(l._id), l]));
+    if (unlocked) map.set(String(unlocked._id), unlocked);
+
+    const combined = Array.from(map.values());
+
+    res.json({
+      success: true,
+      lectures: combined,
+      unlockedLectureId: unlocked?._id,
+      expiresAt: link.expiresAt,
+    });
+  } catch (err) {
+    console.error("Available lectures fetch failed:", err);
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
