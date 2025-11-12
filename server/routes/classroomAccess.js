@@ -13,23 +13,31 @@ router.post("/create-link", async (req, res) => {
     const {
       lectureId,
       type = "free",
-      expiresInHours = 24,
+      expiresInHours = 0,
+      expiresInMinutes = 0, // ✅ New support
       permanent = false,
     } = req.body;
 
-    // 🧹 Clean up any existing links for same lecture
+    // 🧹 Clean any previous link for same lecture
     await AccessLink.deleteMany({ lectureId });
 
-    const token = crypto.randomBytes(16).toString("hex");
-    const expiresAt = permanent
-      ? null
-      : new Date(Date.now() + expiresInHours * 60 * 60 * 1000);
+    // 🕒 Expiry logic (supports minutes or hours)
+    let expiresAt = null;
+    if (!permanent) {
+      const totalMs =
+        (Number(expiresInHours) * 60 + Number(expiresInMinutes)) * 60 * 1000;
+      expiresAt = new Date(Date.now() + totalMs);
+    }
 
+    // ✅ Normalize to UTC
+    const expiresUtc = expiresAt ? new Date(expiresAt.toISOString()) : null;
+
+    const token = crypto.randomBytes(16).toString("hex");
     const link = await AccessLink.create({
       token,
       lectureId,
       isFree: type === "free",
-      expiresAt,
+      expiresAt: expiresUtc,
       expired: false,
       allowedUsers: [],
       visits: 0,
@@ -39,7 +47,7 @@ router.post("/create-link", async (req, res) => {
     res.json({
       success: true,
       url: `https://law-network-client.onrender.com/classroom/share?token=${link.token}`,
-      expiresAt,
+      expiresAt: expiresUtc,
     });
   } catch (err) {
     console.error("Create link failed:", err);
@@ -79,8 +87,17 @@ router.get("/check", verifyTokenOptional, async (req, res) => {
     if (!link)
       return res.status(404).json({ allowed: false, reason: "no_link" });
 
-    // 🕒 Expiry check
-    if (link.expiresAt && new Date(link.expiresAt) < new Date()) {
+    // 🕒 Expiry check with 5s tolerance
+    const now = Date.now();
+    const expiresAt = link.expiresAt ? new Date(link.expiresAt).getTime() : null;
+
+    console.log("🔍 Expiry debug:", {
+      now: new Date(now).toISOString(),
+      expiresAt: link.expiresAt,
+      diffMs: expiresAt ? expiresAt - now : "∞",
+    });
+
+    if (expiresAt && expiresAt < now - 5000) {
       await AccessLink.updateOne({ token }, { $set: { expired: true } });
       return res.status(403).json({ allowed: false, reason: "expired" });
     }
@@ -95,7 +112,7 @@ router.get("/check", verifyTokenOptional, async (req, res) => {
       }
     );
 
-    // ✅ Free links are open to everyone (guests too)
+    // ✅ Free links: open to everyone
     if (link.isFree) {
       return res.json({
         allowed: true,
@@ -118,7 +135,7 @@ router.get("/check", verifyTokenOptional, async (req, res) => {
     if (!isAllowed)
       return res.status(403).json({ allowed: false, reason: "not_in_list" });
 
-    // ✅ Allow access for paid + allowed users
+    // ✅ Allow access
     return res.json({
       allowed: true,
       mode: "paid",
@@ -135,27 +152,27 @@ router.get("/check", verifyTokenOptional, async (req, res) => {
 -------------------------------------------------- */
 router.post("/regenerate-link", async (req, res) => {
   try {
-    const { lectureId, hours = 1, type = "paid" } = req.body;
+    const { lectureId, hours = 1, minutes = 0, type = "paid" } = req.body;
 
-    // 🧹 Mark all old tokens as expired
-    await AccessLink.updateMany(
-      { lectureId },
-      { $set: { expired: true } }
-    );
+    // 🧹 Expire old links
+    await AccessLink.updateMany({ lectureId }, { $set: { expired: true } });
+
+    const totalMs = (hours * 60 + minutes) * 60 * 1000;
+    const newExpiresAt = new Date(Date.now() + totalMs);
+    const expiresUtc = new Date(newExpiresAt.toISOString());
 
     const newToken = crypto.randomBytes(16).toString("hex");
-    const newExpiresAt = new Date(Date.now() + hours * 60 * 60 * 1000);
 
     const updated = await AccessLink.findOneAndUpdate(
       { lectureId },
       {
         token: newToken,
-        expiresAt: newExpiresAt,
+        expiresAt: expiresUtc,
         expired: false,
         isFree: type === "free",
         $set: { updatedAt: new Date() },
       },
-      { new: true, upsert: true } // ✅ ensures new link if none exists
+      { new: true, upsert: true }
     );
 
     res.json({
