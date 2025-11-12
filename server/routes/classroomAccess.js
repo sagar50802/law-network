@@ -6,6 +6,12 @@ import jwt from "jsonwebtoken";
 const router = express.Router();
 
 /* --------------------------------------------------
+   ⚙️ Secret used to generate groupKey (per group basis)
+   👉 Change this string per platform if needed
+-------------------------------------------------- */
+const GROUP_SECRET = process.env.GROUP_SECRET || "whatsapp-group-law-network";
+
+/* --------------------------------------------------
    🧩 Create new classroom share link (called by admin)
 -------------------------------------------------- */
 router.post("/create-link", async (req, res) => {
@@ -14,8 +20,9 @@ router.post("/create-link", async (req, res) => {
       lectureId,
       type = "free",
       expiresInHours = 0,
-      expiresInMinutes = 0, // ✅ New support
+      expiresInMinutes = 0,
       permanent = false,
+      group = "whatsapp", // optional field (future use)
     } = req.body;
 
     // 🧹 Clean any previous link for same lecture
@@ -29,10 +36,17 @@ router.post("/create-link", async (req, res) => {
       expiresAt = new Date(Date.now() + totalMs);
     }
 
-    // ✅ Normalize to UTC
     const expiresUtc = expiresAt ? new Date(expiresAt.toISOString()) : null;
 
     const token = crypto.randomBytes(16).toString("hex");
+
+    // 🔑 Generate short group key (tied to platform)
+    const groupKey = crypto
+      .createHash("sha256")
+      .update(GROUP_SECRET + group)
+      .digest("hex")
+      .substring(0, 8);
+
     const link = await AccessLink.create({
       token,
       lectureId,
@@ -46,7 +60,7 @@ router.post("/create-link", async (req, res) => {
 
     res.json({
       success: true,
-      url: `https://law-network-client.onrender.com/classroom/share?token=${link.token}`,
+      url: `https://law-network-client.onrender.com/classroom/share?token=${link.token}&key=${groupKey}`,
       expiresAt: expiresUtc,
     });
   } catch (err) {
@@ -79,7 +93,8 @@ function verifyTokenOptional(req, _res, next) {
 -------------------------------------------------- */
 router.get("/check", verifyTokenOptional, async (req, res) => {
   try {
-    const { token } = req.query;
+    const { token, key } = req.query;
+
     if (!token)
       return res.status(400).json({ allowed: false, reason: "missing_token" });
 
@@ -91,15 +106,25 @@ router.get("/check", verifyTokenOptional, async (req, res) => {
     const now = Date.now();
     const expiresAt = link.expiresAt ? new Date(link.expiresAt).getTime() : null;
 
-    console.log("🔍 Expiry debug:", {
-      now: new Date(now).toISOString(),
-      expiresAt: link.expiresAt,
-      diffMs: expiresAt ? expiresAt - now : "∞",
-    });
-
     if (expiresAt && expiresAt < now - 5000) {
       await AccessLink.updateOne({ token }, { $set: { expired: true } });
       return res.status(403).json({ allowed: false, reason: "expired" });
+    }
+
+    // 🔐 Group key verification
+    const validKey = crypto
+      .createHash("sha256")
+      .update(GROUP_SECRET + "whatsapp") // if you later add telegram, adjust here
+      .digest("hex")
+      .substring(0, 8);
+
+    if (key !== validKey) {
+      console.warn("❌ Invalid or missing group key attempt", { token, key });
+      return res.status(403).json({
+        allowed: false,
+        reason: "invalid_group_key",
+        message: "🚫 Unauthorized — this link is for group members only.",
+      });
     }
 
     // 🧮 Track analytics
@@ -121,24 +146,10 @@ router.get("/check", verifyTokenOptional, async (req, res) => {
       });
     }
 
-    // 🔐 Paid link: must be logged in
-    if (!req.user)
-      return res
-        .status(401)
-        .json({ allowed: false, reason: "no_user", message: "Please log in." });
-
-    const userId = req.user.id;
-    const isAllowed =
-      Array.isArray(link.allowedUsers) &&
-      link.allowedUsers.some((id) => id.toString() === userId.toString());
-
-    if (!isAllowed)
-      return res.status(403).json({ allowed: false, reason: "not_in_list" });
-
-    // ✅ Allow access
+    // 🔐 Paid link: group key validated → allow access
     return res.json({
       allowed: true,
-      mode: "paid",
+      mode: "paid-group",
       expiresAt: link.expiresAt,
     });
   } catch (err) {
@@ -175,9 +186,16 @@ router.post("/regenerate-link", async (req, res) => {
       { new: true, upsert: true }
     );
 
+    // Recreate valid groupKey
+    const groupKey = crypto
+      .createHash("sha256")
+      .update(GROUP_SECRET + "whatsapp")
+      .digest("hex")
+      .substring(0, 8);
+
     res.json({
       success: true,
-      url: `https://law-network-client.onrender.com/classroom/share?token=${updated.token}`,
+      url: `https://law-network-client.onrender.com/classroom/share?token=${updated.token}&key=${groupKey}`,
       expiresAt: updated.expiresAt,
     });
   } catch (err) {
