@@ -33,6 +33,26 @@ const accessLinkSchema = new mongoose.Schema(
       },
     ],
 
+    // 👥 Optional group keys for shared or batched access
+    groupKeys: [
+      {
+        label: {
+          type: String,
+          required: true,
+        },
+        hash: {
+          type: String,
+          required: true,
+        },
+      },
+    ],
+
+    // ✅ Whether groupKey is required for access
+    requireGroupKey: {
+      type: Boolean,
+      default: false,
+    },
+
     // 👀 Tracking visits
     visits: {
       type: Number,
