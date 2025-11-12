@@ -17,7 +17,7 @@ router.post("/create-link", async (req, res) => {
       permanent = false,
     } = req.body;
 
-    // 🧹 If a previous link exists, clean it up to prevent duplicates
+    // 🧹 Clean up any existing links for same lecture
     await AccessLink.deleteMany({ lectureId });
 
     const token = crypto.randomBytes(16).toString("hex");
@@ -81,7 +81,6 @@ router.get("/check", verifyTokenOptional, async (req, res) => {
 
     // 🕒 Expiry check
     if (link.expiresAt && new Date(link.expiresAt) < new Date()) {
-      // ⏳ Mark link as expired (for analytics)
       await AccessLink.updateOne({ token }, { $set: { expired: true } });
       return res.status(403).json({ allowed: false, reason: "expired" });
     }
@@ -96,7 +95,7 @@ router.get("/check", verifyTokenOptional, async (req, res) => {
       }
     );
 
-    // ✅ Free link: open to everyone
+    // ✅ Free links are open to everyone (guests too)
     if (link.isFree) {
       return res.json({
         allowed: true,
@@ -107,7 +106,9 @@ router.get("/check", verifyTokenOptional, async (req, res) => {
 
     // 🔐 Paid link: must be logged in
     if (!req.user)
-      return res.status(401).json({ allowed: false, reason: "no_user" });
+      return res
+        .status(401)
+        .json({ allowed: false, reason: "no_user", message: "Please log in." });
 
     const userId = req.user.id;
     const isAllowed =
@@ -117,7 +118,7 @@ router.get("/check", verifyTokenOptional, async (req, res) => {
     if (!isAllowed)
       return res.status(403).json({ allowed: false, reason: "not_in_list" });
 
-    // ✅ Allow access
+    // ✅ Allow access for paid + allowed users
     return res.json({
       allowed: true,
       mode: "paid",
@@ -136,6 +137,12 @@ router.post("/regenerate-link", async (req, res) => {
   try {
     const { lectureId, hours = 1, type = "paid" } = req.body;
 
+    // 🧹 Mark all old tokens as expired
+    await AccessLink.updateMany(
+      { lectureId },
+      { $set: { expired: true } }
+    );
+
     const newToken = crypto.randomBytes(16).toString("hex");
     const newExpiresAt = new Date(Date.now() + hours * 60 * 60 * 1000);
 
@@ -145,7 +152,7 @@ router.post("/regenerate-link", async (req, res) => {
         token: newToken,
         expiresAt: newExpiresAt,
         expired: false,
-        isFree: type === "free" ? true : false,
+        isFree: type === "free",
         $set: { updatedAt: new Date() },
       },
       { new: true, upsert: true } // ✅ ensures new link if none exists
