@@ -4,7 +4,7 @@ import Magazine from "../models/Magazine.js";
 const router = express.Router();
 
 /* ---------------------------------------------
-   1️⃣ GET ALL MAGAZINES
+   GET ALL MAGAZINES  (must be FIRST)
 --------------------------------------------- */
 router.get("/", async (req, res) => {
   try {
@@ -20,7 +20,7 @@ router.get("/", async (req, res) => {
 });
 
 /* ---------------------------------------------
-   2️⃣ CREATE MAGAZINE
+   CREATE (post)
 --------------------------------------------- */
 router.post("/", async (req, res) => {
   try {
@@ -50,7 +50,7 @@ router.post("/", async (req, res) => {
 });
 
 /* ---------------------------------------------
-   3️⃣ UPDATE MAGAZINE
+   UPDATE (put)  — MUST be ABOVE slug reader
 --------------------------------------------- */
 router.put("/:id", async (req, res) => {
   try {
@@ -75,7 +75,7 @@ router.put("/:id", async (req, res) => {
 });
 
 /* ---------------------------------------------
-   4️⃣ DELETE MAGAZINE
+   DELETE (delete) — MUST be ABOVE slug reader
 --------------------------------------------- */
 router.delete("/:id", async (req, res) => {
   try {
@@ -93,7 +93,7 @@ router.delete("/:id", async (req, res) => {
 });
 
 /* ---------------------------------------------
-   5️⃣ GET MAGAZINE BY SLUG – must be LAST
+   GET BY SLUG — MUST BE LAST
 --------------------------------------------- */
 router.get("/:slug", async (req, res) => {
   try {
