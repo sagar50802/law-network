@@ -30,19 +30,20 @@ router.post("/", async (req, res) => {
     return res.json({ ok: true, issue: mag });
   } catch (err) {
     console.error("Magazine Create Error:", err);
-    res.status(500).json({ ok: false, error: "Server error" });
+    return res.status(500).json({ ok: false, error: "Server error" });
   }
 });
 
 /* -------------------------------------------------------------------------- */
-/* 2️⃣ UPDATE MAGAZINE                                                            */
+/* 2️⃣ UPDATE MAGAZINE — use /id/:id to avoid slug conflict                     */
 /* -------------------------------------------------------------------------- */
-router.put("/:id", async (req, res) => {
+router.put("/id/:id", async (req, res) => {
   try {
     const { title, subtitle, slug, slides } = req.body;
 
     const mag = await Magazine.findById(req.params.id);
-    if (!mag) return res.status(404).json({ ok: false, error: "Not found" });
+    if (!mag)
+      return res.status(404).json({ ok: false, error: "Magazine not found" });
 
     mag.title = title;
     mag.subtitle = subtitle;
@@ -54,31 +55,31 @@ router.put("/:id", async (req, res) => {
     return res.json({ ok: true, issue: mag });
   } catch (err) {
     console.error("Magazine Update Error:", err);
-    res.status(500).json({ ok: false, error: "Server error" });
+    return res.status(500).json({ ok: false, error: "Server error" });
   }
 });
 
 /* -------------------------------------------------------------------------- */
-/* 3️⃣ DELETE MAGAZINE (Admin Only)                                              */
+/* 3️⃣ DELETE MAGAZINE — also moved to /id/:id                                   */
 /* -------------------------------------------------------------------------- */
-router.delete("/:id", async (req, res) => {
+router.delete("/id/:id", async (req, res) => {
   try {
     const mag = await Magazine.findById(req.params.id);
-    if (!mag) {
+
+    if (!mag)
       return res.status(404).json({ ok: false, error: "Magazine not found" });
-    }
 
     await mag.deleteOne();
 
     return res.json({ ok: true, message: "Magazine deleted successfully" });
   } catch (err) {
     console.error("Magazine Delete Error:", err);
-    res.status(500).json({ ok: false, error: "Server error" });
+    return res.status(500).json({ ok: false, error: "Server error" });
   }
 });
 
 /* -------------------------------------------------------------------------- */
-/* 4️⃣ GET ALL MAGAZINES (List View)                                             */
+/* 4️⃣ GET ALL MAGAZINES                                                        */
 /* -------------------------------------------------------------------------- */
 router.get("/", async (req, res) => {
   try {
@@ -86,28 +87,27 @@ router.get("/", async (req, res) => {
       .sort({ createdAt: -1 })
       .select("title subtitle slug createdAt");
 
-    res.json({ ok: true, issues: list });
+    return res.json({ ok: true, issues: list });
   } catch (err) {
     console.error("Magazine List Error:", err);
-    res.status(500).json({ ok: false, error: "Server error" });
+    return res.status(500).json({ ok: false, error: "Server error" });
   }
 });
 
 /* -------------------------------------------------------------------------- */
-/* 5️⃣ GET A SINGLE MAGAZINE BY SLUG (Reader)                                    */
+/* 5️⃣ GET SINGLE MAGAZINE BY SLUG — moved to /slug/:slug                       */
 /* -------------------------------------------------------------------------- */
-router.get("/:slug", async (req, res) => {
+router.get("/slug/:slug", async (req, res) => {
   try {
     const issue = await Magazine.findOne({ slug: req.params.slug });
 
-    if (!issue) {
+    if (!issue)
       return res.status(404).json({ ok: false, error: "Issue not found" });
-    }
 
-    res.json({ ok: true, issue });
+    return res.json({ ok: true, issue });
   } catch (err) {
     console.error("Magazine Get Error:", err);
-    res.status(500).json({ ok: false, error: "Server error" });
+    return res.status(500).json({ ok: false, error: "Server error" });
   }
 });
 
