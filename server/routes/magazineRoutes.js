@@ -4,7 +4,23 @@ import Magazine from "../models/Magazine.js";
 const router = express.Router();
 
 /* ---------------------------------------------
-   1️⃣ CREATE NEW MAGAZINE
+   1️⃣ GET ALL MAGAZINES
+--------------------------------------------- */
+router.get("/", async (req, res) => {
+  try {
+    const list = await Magazine.find()
+      .sort({ createdAt: -1 })
+      .select("title subtitle slug createdAt");
+
+    return res.json({ ok: true, issues: list });
+  } catch (err) {
+    console.error("Magazine List Error:", err);
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+/* ---------------------------------------------
+   2️⃣ CREATE MAGAZINE
 --------------------------------------------- */
 router.post("/", async (req, res) => {
   try {
@@ -14,7 +30,6 @@ router.post("/", async (req, res) => {
       return res.status(400).json({ ok: false, error: "Missing fields" });
     }
 
-    // Slug check
     const exists = await Magazine.findOne({ slug });
     if (exists) {
       return res.status(400).json({ ok: false, error: "Slug already exists" });
@@ -35,7 +50,7 @@ router.post("/", async (req, res) => {
 });
 
 /* ---------------------------------------------
-   2️⃣ UPDATE MAGAZINE
+   3️⃣ UPDATE MAGAZINE
 --------------------------------------------- */
 router.put("/:id", async (req, res) => {
   try {
@@ -60,7 +75,7 @@ router.put("/:id", async (req, res) => {
 });
 
 /* ---------------------------------------------
-   3️⃣ DELETE MAGAZINE
+   4️⃣ DELETE MAGAZINE
 --------------------------------------------- */
 router.delete("/:id", async (req, res) => {
   try {
@@ -78,23 +93,7 @@ router.delete("/:id", async (req, res) => {
 });
 
 /* ---------------------------------------------
-   4️⃣ GET ALL MAGAZINES
---------------------------------------------- */
-router.get("/", async (req, res) => {
-  try {
-    const list = await Magazine.find()
-      .sort({ createdAt: -1 })
-      .select("title subtitle slug createdAt");
-
-    return res.json({ ok: true, issues: list });
-  } catch (err) {
-    console.error("Magazine List Error:", err);
-    return res.status(500).json({ ok: false, error: err.message });
-  }
-});
-
-/* ---------------------------------------------
-   5️⃣ GET SINGLE MAGAZINE BY SLUG
+   5️⃣ GET MAGAZINE BY SLUG – must be LAST
 --------------------------------------------- */
 router.get("/:slug", async (req, res) => {
   try {
