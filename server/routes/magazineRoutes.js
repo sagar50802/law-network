@@ -1,112 +1,124 @@
 import express from "express";
 import Magazine from "../models/Magazine.js";
+import catchAsync from "../utils/catchAsync.js";
 
 const router = express.Router();
 
-/* ---------------------------------------------
-   GET ALL MAGAZINES  (must be FIRST)
---------------------------------------------- */
-router.get("/", async (req, res) => {
-  try {
+/* =====================================================
+   GET ALL — MUST BE FIRST
+===================================================== */
+router.get(
+  "/",
+  catchAsync(async (req, res) => {
     const list = await Magazine.find()
       .sort({ createdAt: -1 })
       .select("title subtitle slug createdAt");
 
-    return res.json({ ok: true, issues: list });
-  } catch (err) {
-    console.error("Magazine List Error:", err);
-    return res.status(500).json({ ok: false, error: err.message });
-  }
-});
+    res.json({ ok: true, issues: list });
+  })
+);
 
-/* ---------------------------------------------
-   CREATE (post)
---------------------------------------------- */
-router.post("/", async (req, res) => {
-  try {
+/* =====================================================
+   CREATE MAGAZINE
+===================================================== */
+router.post(
+  "/",
+  catchAsync(async (req, res) => {
     const { title, subtitle, slug, slides } = req.body;
 
-    if (!title || !slug || !slides?.length) {
+    if (!title || !slug) {
       return res.status(400).json({ ok: false, error: "Missing fields" });
     }
 
     const exists = await Magazine.findOne({ slug });
     if (exists) {
-      return res.status(400).json({ ok: false, error: "Slug already exists" });
+      return res
+        .status(400)
+        .json({ ok: false, error: "Slug already exists" });
     }
+
+    // ⭐ sanitize slides to avoid crash
+    const safeSlides = (slides || []).map((s, i) => ({
+      id: s.id || `s${i + 1}`,
+      backgroundUrl: s.backgroundUrl || "",
+      rawText: s.rawText || "",
+      highlight: s.highlight || "",
+    }));
 
     const created = await Magazine.create({
       title,
       subtitle,
       slug,
-      slides,
+      slides: safeSlides,
     });
 
-    return res.json({ ok: true, issue: created });
-  } catch (err) {
-    console.error("Magazine Create Error:", err);
-    return res.status(500).json({ ok: false, error: err.message });
-  }
-});
+    res.json({ ok: true, issue: created });
+  })
+);
 
-/* ---------------------------------------------
-   UPDATE (put)  — MUST be ABOVE slug reader
---------------------------------------------- */
-router.put("/:id", async (req, res) => {
-  try {
+/* =====================================================
+   UPDATE MAGAZINE
+===================================================== */
+router.put(
+  "/:id",
+  catchAsync(async (req, res) => {
     const { title, subtitle, slug, slides } = req.body;
 
     const mag = await Magazine.findById(req.params.id);
-    if (!mag)
+    if (!mag) {
       return res.status(404).json({ ok: false, error: "Magazine not found" });
+    }
 
-    mag.title = title;
-    mag.subtitle = subtitle;
-    mag.slug = slug;
-    mag.slides = slides;
+    // ⭐ sanitize slides
+    const safeSlides = (slides || []).map((s, i) => ({
+      id: s.id || `s${i + 1}`,
+      backgroundUrl: s.backgroundUrl || "",
+      rawText: s.rawText || "",
+      highlight: s.highlight || "",
+    }));
+
+    mag.title = title || "";
+    mag.subtitle = subtitle || "";
+    mag.slug = slug || mag.slug;
+    mag.slides = safeSlides;
 
     await mag.save();
 
-    return res.json({ ok: true, issue: mag });
-  } catch (err) {
-    console.error("Magazine Update Error:", err);
-    return res.status(500).json({ ok: false, error: err.message });
-  }
-});
+    res.json({ ok: true, issue: mag });
+  })
+);
 
-/* ---------------------------------------------
-   DELETE (delete) — MUST be ABOVE slug reader
---------------------------------------------- */
-router.delete("/:id", async (req, res) => {
-  try {
+/* =====================================================
+   DELETE
+===================================================== */
+router.delete(
+  "/:id",
+  catchAsync(async (req, res) => {
     const mag = await Magazine.findById(req.params.id);
-    if (!mag)
+    if (!mag) {
       return res.status(404).json({ ok: false, error: "Magazine not found" });
+    }
 
     await mag.deleteOne();
+    res.json({ ok: true, message: "Magazine deleted successfully" });
+  })
+);
 
-    return res.json({ ok: true, message: "Magazine deleted successfully" });
-  } catch (err) {
-    console.error("Magazine Delete Error:", err);
-    return res.status(500).json({ ok: false, error: err.message });
-  }
-});
-
-/* ---------------------------------------------
+/* =====================================================
    GET BY SLUG — MUST BE LAST
---------------------------------------------- */
-router.get("/:slug", async (req, res) => {
-  try {
+   FIX: Use /slug/:slug to avoid route collision
+===================================================== */
+router.get(
+  "/slug/:slug",
+  catchAsync(async (req, res) => {
     const issue = await Magazine.findOne({ slug: req.params.slug });
 
-    if (!issue)
+    if (!issue) {
       return res.status(404).json({ ok: false, error: "Issue not found" });
+    }
 
-    return res.json({ ok: true, issue });
-  } catch (err) {
-    console.error("Magazine Get Error:", err);
-    return res.status(500).json({ ok: false, error: err.message });
-  }
-});
+    res.json({ ok: true, issue });
+  })
+);
 
 export default router;
