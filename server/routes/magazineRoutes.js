@@ -4,7 +4,7 @@ import Magazine from "../models/Magazine.js";
 const router = express.Router();
 
 /* -----------------------------------------------------------
-   1) GET ALL MAGAZINES  (must always be FIRST)
+   1) GET ALL MAGAZINES
 ----------------------------------------------------------- */
 router.get("/", async (req, res) => {
   try {
@@ -20,7 +20,25 @@ router.get("/", async (req, res) => {
 });
 
 /* -----------------------------------------------------------
-   2) CREATE MAGAZINE
+   2) GET MAGAZINE BY SLUG  ⭐ MUST COME BEFORE /:id ROUTES
+----------------------------------------------------------- */
+router.get("/slug/:slug", async (req, res) => {
+  try {
+    const issue = await Magazine.findOne({ slug: req.params.slug });
+
+    if (!issue) {
+      return res.status(404).json({ ok: false, error: "Issue not found" });
+    }
+
+    return res.json({ ok: true, issue });
+  } catch (err) {
+    console.error("Magazine Get Error:", err);
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+/* -----------------------------------------------------------
+   3) CREATE MAGAZINE
 ----------------------------------------------------------- */
 router.post("/", async (req, res) => {
   try {
@@ -50,15 +68,16 @@ router.post("/", async (req, res) => {
 });
 
 /* -----------------------------------------------------------
-   3) UPDATE MAGAZINE (IMPORTANT: ABOVE SLUG ROUTE)
+   4) UPDATE MAGAZINE (PUT /:id)
 ----------------------------------------------------------- */
 router.put("/:id", async (req, res) => {
   try {
     const { title, subtitle, slug, slides } = req.body;
 
     const mag = await Magazine.findById(req.params.id);
-    if (!mag)
+    if (!mag) {
       return res.status(404).json({ ok: false, error: "Magazine not found" });
+    }
 
     mag.title = title;
     mag.subtitle = subtitle;
@@ -75,36 +94,20 @@ router.put("/:id", async (req, res) => {
 });
 
 /* -----------------------------------------------------------
-   4) DELETE MAGAZINE  (IMPORTANT: ABOVE SLUG ROUTE)
+   5) DELETE MAGAZINE (DELETE /:id)
 ----------------------------------------------------------- */
 router.delete("/:id", async (req, res) => {
   try {
     const mag = await Magazine.findById(req.params.id);
-    if (!mag)
+    if (!mag) {
       return res.status(404).json({ ok: false, error: "Magazine not found" });
+    }
 
     await mag.deleteOne();
 
     return res.json({ ok: true, message: "Magazine deleted successfully" });
   } catch (err) {
     console.error("Magazine Delete Error:", err);
-    return res.status(500).json({ ok: false, error: err.message });
-  }
-});
-
-/* -----------------------------------------------------------
-   5) GET MAGAZINE BY SLUG (IMPORTANT: LAST + PREFIXED!)
------------------------------------------------------------ */
-router.get("/slug/:slug", async (req, res) => {
-  try {
-    const issue = await Magazine.findOne({ slug: req.params.slug });
-
-    if (!issue)
-      return res.status(404).json({ ok: false, error: "Issue not found" });
-
-    return res.json({ ok: true, issue });
-  } catch (err) {
-    console.error("Magazine Get Error:", err);
     return res.status(500).json({ ok: false, error: err.message });
   }
 });
