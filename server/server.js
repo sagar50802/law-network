@@ -194,6 +194,7 @@ import liveAdmin from "./routes/liveAdmin.js";
 import classroomRoutes from "./routes/classroom.js";
 import classroomAccessRoutes from "./routes/classroomAccess.js";
 import classroomUploadRoutes from "./routes/classroomMediaUpload.js";
+import adminAuthRoutes from "./routes/adminAuth.js";
 
 // ⭐ NEW: footer + terms routes
 import footerRoutes from "./routes/footer.js";
@@ -221,6 +222,7 @@ app.use("/api/admin/live", liveAdmin);
 app.use("/api/classroom", classroomRoutes);
 app.use("/api/classroom-access", classroomAccessRoutes);
 app.use("/api/classroom/media", classroomUploadRoutes);
+app.use("/api/admin", adminAuthRoutes);
 
 // ⭐ NEW: mount footer + terms (no /api so your frontend getJSON("/footer") works)
 app.use("/api/footer", footerRoutes);
