@@ -272,3 +272,4 @@ const server = app.listen(PORT, HOST, () =>
 
 process.on("SIGTERM", () => server.close());
 process.on("SIGINT", () => server.close());
+
