@@ -197,6 +197,9 @@ import footerRoutes from "./routes/footer.js";
 import termsRoutes from "./routes/terms.js";
 import libraryRouter from "./routes/library.js";
 import librarySettingsAdmin from "./routes/librarySettingsAdmin.js";
+import libraryUserRouter from "./routes/libraryUser.js";
+import libraryAdminRouter from "./routes/libraryAdmin.js";
+import librarySettingsAdmin from "./routes/librarySettingsAdmin.js";
 
 /* -------------------------------------------------------------------------- */
 /* 📌 Mount Routes                                                            */
@@ -226,6 +229,11 @@ app.use("/api/admin", adminAuthRoutes);
 app.use("/api/footer", footerRoutes);
 app.use("/api/terms", termsRoutes);
 app.use("/api/library", libraryRouter);
+app.use("/api/admin/library", librarySettingsAdmin);
+// USER routes
+app.use("/api/library", libraryUserRouter);
+// ADMIN routes
+app.use("/api/admin/library", libraryAdminRouter);
 app.use("/api/admin/library", librarySettingsAdmin);
 
 
