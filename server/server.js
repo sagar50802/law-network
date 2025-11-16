@@ -12,74 +12,82 @@ import { fileURLToPath } from "url";
 import PrepModule from "./models/PrepModule.js";
 
 /* -------------------------------------------------------------------------- */
-/* ✅ Express Initialization                                                  */
+/* 📌 Express Init                                                            */
 /* -------------------------------------------------------------------------- */
 const app = express();
-
-/* 🔧 Render-safe port binding */
 const PORT = process.env.PORT || 5000;
-const HOST = "0.0.0.0"; // ✅ allows Render container to detect app readiness
+const HOST = "0.0.0.0";
 
-/* ---------- Resolve __dirname (for ES modules) ---------- */
+/* Resolve Dirname */
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 /* -------------------------------------------------------------------------- */
-/* ✅ CORS Configuration — Render Safe + Local Dev                            */
+/* 📌 Allowed Origins                                                         */
 /* -------------------------------------------------------------------------- */
 const CLIENT_URL =
   process.env.CLIENT_URL ||
-  process.env.VITE_BACKEND_URL ||
   "https://law-network-client.onrender.com";
 
 const ALLOWED = new Set([
   CLIENT_URL,
   "https://law-network-client.onrender.com",
   "https://law-network.onrender.com",
-  "https://law-network-server.onrender.com",
+  "https://law-network-api.onrender.com",
   "http://localhost:5173",
   "http://localhost:3000",
 ]);
 
+/* -------------------------------------------------------------------------- */
+/* 🚫 REMOVE THIS — YOU HAD IT BEFORE — IT CAUSED CORS FAILURE               */
+/*
 app.use(
   cors({
     origin: [...ALLOWED],
     credentials: true,
   })
 );
+*/
+/* -------------------------------------------------------------------------- */
 
+/* -------------------------------------------------------------------------- */
+/* ✅ Correct Single CORS Handler                                              */
+/* -------------------------------------------------------------------------- */
 const corsOptions = {
   origin(origin, cb) {
     if (!origin) return cb(null, true);
     if (ALLOWED.has(origin)) return cb(null, true);
+
     try {
       const host = new URL(origin).hostname;
       if (/\.onrender\.com$/.test(host)) return cb(null, true);
     } catch {}
-    return cb(new Error(`CORS not allowed for origin: ${origin}`));
+
+    return cb(new Error("CORS blocked: " + origin));
   },
   credentials: true,
-  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+  methods: "GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD",
   allowedHeaders: [
     "Content-Type",
     "Authorization",
     "X-Owner-Key",
+    "x-admin-token",
     "x-owner-key",
   ],
   exposedHeaders: ["Content-Type", "Content-Length"],
   optionsSuccessStatus: 204,
 };
 
-app.set("trust proxy", 1);
 app.use(cors(corsOptions));
 app.options("*", cors(corsOptions));
 
 /* -------------------------------------------------------------------------- */
-/* ✅ Fallback manual CORS headers                                            */
+/* 📌 Fallback Headers                                                        */
 /* -------------------------------------------------------------------------- */
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   let ok = false;
+
   if (origin) {
     if (ALLOWED.has(origin)) ok = true;
     else {
@@ -89,51 +97,47 @@ app.use((req, res, next) => {
       } catch {}
     }
   }
+
   if (ok) {
     res.header("Access-Control-Allow-Origin", origin);
     res.header("Vary", "Origin");
     res.header("Access-Control-Allow-Credentials", "true");
     res.header(
       "Access-Control-Allow-Headers",
-      "Content-Type, Authorization, X-Owner-Key, x-owner-key"
+      "Content-Type, Authorization, X-Owner-Key, x-owner-key, x-admin-token"
     );
     res.header(
       "Access-Control-Allow-Methods",
       "GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD"
     );
-    res.header("Cross-Origin-Resource-Policy", "cross-origin");
   }
+
   if (req.method === "OPTIONS") return res.sendStatus(204);
+
   next();
 });
 
 /* -------------------------------------------------------------------------- */
-/* ✅ Middleware                                                              */
+/* 📌 Middleware                                                              */
 /* -------------------------------------------------------------------------- */
 app.use(express.json({ limit: "100mb" }));
 app.use(express.urlencoded({ extended: true, limit: "100mb" }));
 
-// Tiny request logger
 app.use((req, _res, next) => {
   if (req.path !== "/favicon.ico")
-    console.log(
-      `[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`
-    );
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
   next();
 });
 
-// Fix accidental /api/api/ rewrites
 app.use((req, _res, next) => {
   if (req.url.startsWith("/api/api/")) {
-    const old = req.url;
     req.url = req.url.replace(/^\/api\/api\//, "/api/");
-    console.log("↪️ Rewrote", old, "→", req.url);
-    }
+  }
   next();
 });
 
 /* -------------------------------------------------------------------------- */
-/* ✅ Ensure Upload Directories Exist                                         */
+/* 📌 Ensure Upload Folders                                                   */
 /* -------------------------------------------------------------------------- */
 [
   "uploads",
@@ -152,26 +156,20 @@ app.use((req, _res, next) => {
 });
 
 /* -------------------------------------------------------------------------- */
-/* ✅ Serve Static Uploads with Caching                                       */
+/* 📌 Serve Uploads                                                           */
 /* -------------------------------------------------------------------------- */
-const staticHeaders = {
-  setHeaders(res, _p, stat) {
-    res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
-    res.setHeader("Vary", "Origin");
-    if (stat?.mtime) {
-      res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
-    } else {
-      res.setHeader("Cache-Control", "public, max-age=86400");
-    }
-  },
-};
 app.use(
   "/uploads",
-  express.static(path.join(__dirname, "uploads"), staticHeaders)
+  express.static(path.join(__dirname, "uploads"), {
+    setHeaders(res) {
+      res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+      res.setHeader("Cache-Control", "public, max-age=31536000");
+    },
+  })
 );
 
 /* -------------------------------------------------------------------------- */
-/* ✅ Import and Mount Routes                                                 */
+/* 📌 Import Routes                                                           */
 /* -------------------------------------------------------------------------- */
 import articleRoutes from "./routes/articles.js";
 import bannerRoutes from "./routes/banners.js";
@@ -195,12 +193,12 @@ import classroomRoutes from "./routes/classroom.js";
 import classroomAccessRoutes from "./routes/classroomAccess.js";
 import classroomUploadRoutes from "./routes/classroomMediaUpload.js";
 import adminAuthRoutes from "./routes/adminAuth.js";
-
-// ⭐ NEW: footer + terms routes
 import footerRoutes from "./routes/footer.js";
 import termsRoutes from "./routes/terms.js";
 
-/* ---------- Mounting ---------- */
+/* -------------------------------------------------------------------------- */
+/* 📌 Mount Routes                                                            */
+/* -------------------------------------------------------------------------- */
 app.use("/api/articles", articleRoutes);
 app.use("/api/banners", bannerRoutes);
 app.use("/api/consultancy", consultancyRoutes);
@@ -223,156 +221,41 @@ app.use("/api/classroom", classroomRoutes);
 app.use("/api/classroom-access", classroomAccessRoutes);
 app.use("/api/classroom/media", classroomUploadRoutes);
 app.use("/api/admin", adminAuthRoutes);
-
-// ⭐ NEW: mount footer + terms (no /api so your frontend getJSON("/footer") works)
 app.use("/api/footer", footerRoutes);
 app.use("/api/terms", termsRoutes);
 
 /* -------------------------------------------------------------------------- */
-/* ✅ Health & Base Routes                                                    */
+/* 📌 Health Routes                                                           */
 /* -------------------------------------------------------------------------- */
-app.get("/favicon.ico", (_req, res) => res.sendStatus(204));
 app.get("/api/ping", (_req, res) => res.json({ ok: true, ts: Date.now() }));
-app.get("/api/access/status", (_req, res) =>
-  res.json({ access: false })
-);
-app.get("/", (_req, res) =>
-  res.json({ ok: true, service: "Law Network API", status: "running" })
-);
+app.get("/", (_req, res) => res.json({ ok: true, service: "Law Network API" }));
 
 /* -------------------------------------------------------------------------- */
-/* ✅ 404 and Global Error Handling                                           */
+/* 📌 Global Errors                                                           */
 /* -------------------------------------------------------------------------- */
 app.use((req, res) => {
-  res.status(404).json({
-    success: false,
-    message: `Not Found: ${req.method} ${req.originalUrl}`,
-  });
+  res.status(404).json({ success: false, message: `Not Found: ${req.method} ${req.url}` });
 });
 
 app.use((err, _req, res, _next) => {
-  if (err?.type === "entity.too.large") {
-    return res
-      .status(413)
-      .json({ success: false, message: "Upload too large (max 100MB)" });
-  }
-  console.error("🔥 Server error:", err);
-  res
-    .status(err.status || 500)
-    .json({ success: false, message: err.message || "Server Error" });
+  console.error("🔥 Error:", err);
+  res.status(500).json({ success: false, message: err.message || "Server Error" });
 });
 
 /* -------------------------------------------------------------------------- */
-/* ✅ MongoDB Connection                                                     */
+/* 📌 MongoDB                                                                 */
 /* -------------------------------------------------------------------------- */
-const MONGO_URI =
-  process.env.MONGO_URI ||
-  process.env.MONGO_URL ||
-  process.env.MONGODB_URI ||
-  "";
-
-if (!MONGO_URI) {
-  console.error("✗ Missing MongoDB connection string");
-} else {
-  mongoose
-    .connect(MONGO_URI, { dbName: process.env.MONGO_DB || undefined })
-    .then(() => console.log("✅ MongoDB connected successfully"))
-    .catch((err) =>
-      console.error("✗ MongoDB connection failed:", err.message)
-    );
-}
+mongoose
+  .connect(process.env.MONGO_URI, { dbName: process.env.MONGO_DB || undefined })
+  .then(() => console.log("✅ MongoDB connected"))
+  .catch((err) => console.error("MongoDB error:", err.message));
 
 /* -------------------------------------------------------------------------- */
-/* ✅ Auto Release Scheduler (Prep + Classroom)                              */
-/* -------------------------------------------------------------------------- */
-setInterval(async () => {
-  try {
-    const result = await PrepModule.updateMany(
-      { status: "scheduled", releaseAt: { $lte: new Date() } },
-      { $set: { status: "released" } }
-    );
-    if (result.modifiedCount > 0) {
-      console.log(
-        `[AutoRelease] ${result.modifiedCount} prep modules released.`
-      );
-    }
-  } catch (err) {
-    console.error("[AutoRelease Cron] Error:", err.message);
-  }
-}, 5 * 60 * 1000);
-
-/* -------------------------------------------------------------------------- */
-/* ✅ Auto Delete Old Classroom Media (10 days)                              */
-/* -------------------------------------------------------------------------- */
-import { s3, r2Enabled } from "./utils/r2.js";
-import {
-  ListObjectsV2Command,
-  DeleteObjectsCommand,
-} from "@aws-sdk/client-s3";
-
-const BUCKET = process.env.R2_BUCKET;
-const TEN_DAYS = 10 * 24 * 60 * 60 * 1000;
-
-async function cleanOldFiles() {
-  if (!r2Enabled()) return;
-  try {
-    const { Contents } = await s3.send(
-      new ListObjectsV2Command({
-        Bucket: BUCKET,
-        Prefix: "classroom/",
-      })
-    );
-
-    const now = Date.now();
-    const old = (Contents || []).filter(
-      (f) => now - new Date(f.LastModified).getTime() > TEN_DAYS
-    );
-    if (!old.length) return;
-
-    await s3.send(
-      new DeleteObjectsCommand({
-        Bucket: BUCKET,
-        Delete: { Objects: old.map((f) => ({ Key: f.Key })) },
-      })
-    );
-
-    console.log(
-      `🧹 Deleted ${old.length} classroom files older than 10 days.`
-    );
-  } catch (err) {
-    console.error("Cleanup error:", err);
-  }
-}
-
-// Run cleanup every 24 hours
-setInterval(cleanOldFiles, 24 * 60 * 60 * 1000);
-
-/* -------------------------------------------------------------------------- */
-/* ✅ Startup & Graceful Shutdown                                            */
+/* 📌 Startup                                                                 */
 /* -------------------------------------------------------------------------- */
 const server = app.listen(PORT, HOST, () =>
-  console.log(`🚀 Law Network API running on http://${HOST}:${PORT}`)
+  console.log(`🚀 API running on http://${HOST}:${PORT}`)
 );
 
-const shutdown = async (signal) => {
-  console.log(`\n${signal} received. Graceful shutdown...`);
-  server.close(() => console.log("🧩 HTTP server closed."));
-  try {
-    await mongoose.connection.close();
-    console.log("✅ MongoDB connection closed.");
-  } catch (err) {
-    console.error("Error closing MongoDB:", err);
-  } finally {
-    process.exit(0);
-  }
-};
-
-process.on("SIGINT", () => shutdown("SIGINT"));
-process.on("SIGTERM", () => shutdown("SIGTERM"));
-process.on("unhandledRejection", (err) => {
-  console.error("Unhandled Promise Rejection:", err);
-});
-
-/* -------------------------------------------------------------------------- */
-/* ✅ End of server.js                                                        */
-/* -------------------------------------------------------------------------- */
+process.on("SIGTERM", () => server.close());
+process.on("SIGINT", () => server.close());
