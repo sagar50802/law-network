@@ -5,10 +5,13 @@ import BookPurchase from "../models/BookPurchase.js";
 import SeatReservation from "../models/SeatReservation.js";
 import PaymentRequest from "../models/PaymentRequest.js";
 import LibrarySettings from "../models/LibrarySettings.js";
+import multer from "multer";
 
 const router = express.Router();
 
-// TODO: replace with your real auth middleware
+/* -------------------------------------------------------------------------- */
+/* AUTH MIDDLEWARE (replace with real one)                                    */
+/* -------------------------------------------------------------------------- */
 const requireAuth = (req, res, next) => {
   if (!req.user) {
     return res
@@ -19,7 +22,19 @@ const requireAuth = (req, res, next) => {
 };
 
 /* -------------------------------------------------------------------------- */
-/* Helper: ensure settings document exists                                    */
+/* MULTER — Screenshot Upload                                                 */
+/* -------------------------------------------------------------------------- */
+const storage = multer.diskStorage({
+  destination: "uploads/payments/",
+  filename: (req, file, cb) => {
+    cb(null, Date.now() + "-" + file.originalname);
+  },
+});
+
+const uploadScreenshot = multer({ storage });
+
+/* -------------------------------------------------------------------------- */
+/* Ensure ONE settings document exists                                        */
 /* -------------------------------------------------------------------------- */
 async function ensureSettings() {
   let settings = await LibrarySettings.findOne();
@@ -65,6 +80,29 @@ router.get("/books/:id", async (req, res) => {
 });
 
 /* -------------------------------------------------------------------------- */
+/* 💰 GET /api/library/payment/:paymentId  (Needed for UPI QR page)           */
+/* -------------------------------------------------------------------------- */
+router.get("/payment/:paymentId", requireAuth, async (req, res) => {
+  try {
+    const payment = await PaymentRequest.findOne({
+      _id: req.params.paymentId,
+      userId: req.user._id,
+    });
+
+    if (!payment) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Payment not found" });
+    }
+
+    res.json({ success: true, data: payment });
+  } catch (err) {
+    console.error("[Library] GET /payment/:id error:", err);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+/* -------------------------------------------------------------------------- */
 /* 🪑 GET /api/library/seat/status - user seat status                         */
 /* -------------------------------------------------------------------------- */
 router.get("/seat/status", requireAuth, async (req, res) => {
@@ -101,11 +139,11 @@ router.get("/seat/status", requireAuth, async (req, res) => {
 
 /* -------------------------------------------------------------------------- */
 /* 🧾 POST /api/library/seat/payment-request                                  */
-/* User chooses duration, we calculate amount using settings                  */
 /* -------------------------------------------------------------------------- */
 router.post("/seat/payment-request", requireAuth, async (req, res) => {
   try {
     const { durationMinutes } = req.body;
+
     if (!durationMinutes) {
       return res
         .status(400)
@@ -113,9 +151,6 @@ router.post("/seat/payment-request", requireAuth, async (req, res) => {
     }
 
     const settings = await ensureSettings();
-
-    // simple pricing: base price per reservation
-    // you can change to basePrice * multiplier based on duration
     const amount = settings.seatBasePrice || 50;
 
     const payment = await PaymentRequest.create({
@@ -123,12 +158,12 @@ router.post("/seat/payment-request", requireAuth, async (req, res) => {
       type: "seat",
       seatDurationMinutes: durationMinutes,
       amount,
-      status: "submitted", // screenshot to be attached next
+      status: "submitted",
     });
 
     res.status(201).json({ success: true, data: payment });
   } catch (err) {
-    console.error("[Library] POST /seat/payment-request error:", err);
+    console.error("[Library] Seat payment error:", err);
     res
       .status(400)
       .json({ success: false, message: "Failed to create seat payment" });
@@ -137,11 +172,11 @@ router.post("/seat/payment-request", requireAuth, async (req, res) => {
 
 /* -------------------------------------------------------------------------- */
 /* 📖 POST /api/library/book/payment-request                                  */
-/* User starts a paid-book purchase                                            */
 /* -------------------------------------------------------------------------- */
 router.post("/book/payment-request", requireAuth, async (req, res) => {
   try {
     const { bookId } = req.body;
+
     if (!bookId) {
       return res
         .status(400)
@@ -167,7 +202,7 @@ router.post("/book/payment-request", requireAuth, async (req, res) => {
 
     res.status(201).json({ success: true, data: payment });
   } catch (err) {
-    console.error("[Library] POST /book/payment-request error:", err);
+    console.error("[Library] Book payment error:", err);
     res
       .status(400)
       .json({ success: false, message: "Failed to create book payment" });
@@ -176,83 +211,92 @@ router.post("/book/payment-request", requireAuth, async (req, res) => {
 
 /* -------------------------------------------------------------------------- */
 /* 🖼️ POST /api/library/payment/:paymentId/submit                             */
-/* Attach screenshot + name + phone                                           */
-/* Optionally auto-approve seat/book based on settings                        */
+/* Screenshot upload + Name + Phone                                           */
 /* -------------------------------------------------------------------------- */
-router.post("/payment/:paymentId/submit", requireAuth, async (req, res) => {
-  try {
-    const { name, phone, screenshotPath } = req.body;
-    // NOTE: integrate multer later for real file upload -> screenshotPath = req.file.path
+router.post(
+  "/payment/:paymentId/submit",
+  requireAuth,
+  uploadScreenshot.single("screenshot"),
+  async (req, res) => {
+    try {
+      const { name, phone } = req.body;
 
-    const payment = await PaymentRequest.findOne({
-      _id: req.params.paymentId,
-      userId: req.user._id,
-    });
+      const payment = await PaymentRequest.findOne({
+        _id: req.params.paymentId,
+        userId: req.user._id,
+      });
 
-    if (!payment) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Payment request not found" });
+      if (!payment) {
+        return res
+          .status(404)
+          .json({ success: false, message: "Payment request not found" });
+      }
+
+      // Screenshot path
+      const screenshotPath = req.file
+        ? `/uploads/payments/${req.file.filename}`
+        : null;
+
+      payment.name = name;
+      payment.phone = phone;
+      if (screenshotPath) payment.screenshotPath = screenshotPath;
+      payment.status = "submitted";
+
+      await payment.save();
+
+      const settings = await ensureSettings();
+
+      // Auto approve seat
+      if (payment.type === "seat" && settings.autoApproveSeat) {
+        await autoApproveSeatPayment(payment, settings);
+      }
+
+      // Auto approve book
+      if (payment.type === "book" && settings.autoApproveBook) {
+        await autoApproveBookPayment(payment, settings);
+      }
+
+      res.json({ success: true, data: payment });
+    } catch (err) {
+      console.error("[Library] Submit payment error:", err);
+      res
+        .status(400)
+        .json({ success: false, message: "Failed to submit payment" });
     }
-
-    payment.name = name;
-    payment.phone = phone;
-    if (screenshotPath) payment.screenshotPath = screenshotPath;
-    payment.status = "submitted";
-    await payment.save();
-
-    const settings = await ensureSettings();
-
-    // Auto-approve logic
-    if (payment.type === "seat" && settings.autoApproveSeat) {
-      await autoApproveSeatPayment(payment, settings);
-    } else if (payment.type === "book" && settings.autoApproveBook) {
-      await autoApproveBookPayment(payment, settings);
-    }
-
-    res.json({ success: true, data: payment });
-  } catch (err) {
-    console.error("[Library] POST /payment/:paymentId/submit error:", err);
-    res
-      .status(400)
-      .json({ success: false, message: "Failed to submit payment" });
   }
-});
+);
 
 /* -------------------------------------------------------------------------- */
-/* Helper: auto-approve seat payment                                          */
+/* Auto Approve Seat Payment                                                  */
 /* -------------------------------------------------------------------------- */
 async function autoApproveSeatPayment(payment, settings) {
   const now = new Date();
+  const totalSeats = 50;
 
-  // find active seats to choose seat number
-  const totalSeats = 50; // you can move this to settings later
   const activeSeats = await SeatReservation.find({
     status: "active",
     endsAt: { $gt: now },
   }).select("seatNumber");
-  const usedSeatNumbers = new Set(activeSeats.map((s) => s.seatNumber));
+
+  const used = new Set(activeSeats.map((s) => s.seatNumber));
 
   let seatNumber = null;
   for (let i = 1; i <= totalSeats; i++) {
-    if (!usedSeatNumbers.has(i)) {
+    if (!used.has(i)) {
       seatNumber = i;
       break;
     }
   }
 
-  if (!seatNumber) {
-    // no seat available -> do not approve
-    return;
-  }
+  if (!seatNumber) return;
 
-  const durationMinutes = payment.seatDurationMinutes || 60;
-  const endsAt = new Date(now.getTime() + durationMinutes * 60 * 1000);
+  const minutes = payment.seatDurationMinutes || 60;
+  const endsAt = new Date(now.getTime() + minutes * 60000);
 
   await SeatReservation.create({
     userId: payment.userId,
     seatNumber,
-    durationMinutes,
+    durationMinutes: minutes,
     startsAt: now,
     endsAt,
     status: "active",
@@ -264,21 +308,22 @@ async function autoApproveSeatPayment(payment, settings) {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Helper: auto-approve book payment                                          */
+/* Auto Approve Book Payment                                                  */
 /* -------------------------------------------------------------------------- */
 async function autoApproveBookPayment(payment, settings) {
   const book = await LibraryBook.findById(payment.bookId);
   if (!book) return;
 
   const now = new Date();
-  const readingHours =
+  const hours =
     book.defaultReadingHours || settings.defaultReadingHours || 24;
-  const expiresAt = new Date(now.getTime() + readingHours * 60 * 60 * 1000);
+
+  const expiresAt = new Date(now.getTime() + hours * 3600000);
 
   await BookPurchase.create({
     userId: payment.userId,
     bookId: book._id,
-    readingHours,
+    readingHours: hours,
     readingStartsAt: now,
     readingExpiresAt: expiresAt,
     status: "active",
@@ -290,11 +335,12 @@ async function autoApproveBookPayment(payment, settings) {
 }
 
 /* -------------------------------------------------------------------------- */
-/* 🧾 GET /api/library/my/purchases  - for "My Shelf" tab                     */
+/* 🧾 GET /api/library/my/purchases                                           */
 /* -------------------------------------------------------------------------- */
 router.get("/my/purchases", requireAuth, async (req, res) => {
   try {
     const now = new Date();
+
     const purchases = await BookPurchase.find({
       userId: req.user._id,
       readingExpiresAt: { $gt: now },
@@ -312,11 +358,11 @@ router.get("/my/purchases", requireAuth, async (req, res) => {
 
 /* -------------------------------------------------------------------------- */
 /* 🔐 GET /api/library/books/:bookId/access                                   */
-/* Check if user can read a book (free vs paid, seat requirement)             */
 /* -------------------------------------------------------------------------- */
 router.get("/books/:bookId/access", requireAuth, async (req, res) => {
   try {
     const book = await LibraryBook.findById(req.params.bookId);
+
     if (!book || !book.isPublished) {
       return res
         .status(404)
@@ -325,19 +371,15 @@ router.get("/books/:bookId/access", requireAuth, async (req, res) => {
 
     const now = new Date();
 
-    // Free books: no need seat, no purchase
+    // Free books do not require seat or purchase
     if (!book.isPaid) {
       return res.json({
         success: true,
-        data: {
-          canRead: true,
-          reason: "free",
-          seatRequired: false,
-        },
+        data: { canRead: true, reason: "free" },
       });
     }
 
-    // Paid book: requires active purchase
+    // Paid book requires active purchase
     const purchase = await BookPurchase.findOne({
       userId: req.user._id,
       bookId: book._id,
@@ -348,14 +390,11 @@ router.get("/books/:bookId/access", requireAuth, async (req, res) => {
     if (!purchase) {
       return res.json({
         success: true,
-        data: {
-          canRead: false,
-          reason: "no_active_purchase",
-        },
+        data: { canRead: false, reason: "no_active_purchase" },
       });
     }
 
-    // Also requires active seat
+    // Paid book ALSO requires seat
     const seat = await SeatReservation.findOne({
       userId: req.user._id,
       status: "active",
@@ -373,7 +412,7 @@ router.get("/books/:bookId/access", requireAuth, async (req, res) => {
       });
     }
 
-    // ✅ Both active
+    // OK
     res.json({
       success: true,
       data: {
@@ -384,7 +423,7 @@ router.get("/books/:bookId/access", requireAuth, async (req, res) => {
       },
     });
   } catch (err) {
-    console.error("[Library] GET /books/:bookId/access error:", err);
+    console.error("[Library] GET access error:", err);
     res
       .status(500)
       .json({ success: false, message: "Failed to check access" });
