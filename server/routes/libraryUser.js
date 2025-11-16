@@ -7,10 +7,12 @@ import PaymentRequest from "../models/PaymentRequest.js";
 import LibrarySettings from "../models/LibrarySettings.js";
 import multer from "multer";
 
+import uploadPayment from "../middleware/uploadPayment.js"; // ⭐ NEW (AS REQUESTED)
+
 const router = express.Router();
 
 /* -------------------------------------------------------------------------- */
-/* AUTH MIDDLEWARE (replace with real one)                                    */
+/* AUTH MIDDLEWARE                                                            */
 /* -------------------------------------------------------------------------- */
 const requireAuth = (req, res, next) => {
   if (!req.user) {
@@ -22,7 +24,7 @@ const requireAuth = (req, res, next) => {
 };
 
 /* -------------------------------------------------------------------------- */
-/* MULTER — Screenshot Upload                                                 */
+/* MULTER (legacy for old routes only)                                        */
 /* -------------------------------------------------------------------------- */
 const storage = multer.diskStorage({
   destination: "uploads/payments/",
@@ -30,7 +32,6 @@ const storage = multer.diskStorage({
     cb(null, Date.now() + "-" + file.originalname);
   },
 });
-
 const uploadScreenshot = multer({ storage });
 
 /* -------------------------------------------------------------------------- */
@@ -43,7 +44,7 @@ async function ensureSettings() {
 }
 
 /* -------------------------------------------------------------------------- */
-/* 📚 GET /api/library/books  - public list                                   */
+/* 📚 GET /api/library/books                                                  */
 /* -------------------------------------------------------------------------- */
 router.get("/books", async (req, res) => {
   try {
@@ -60,7 +61,7 @@ router.get("/books", async (req, res) => {
 });
 
 /* -------------------------------------------------------------------------- */
-/* 📚 GET /api/library/books/:id - single book detail                         */
+/* 📚 GET /api/library/books/:id                                              */
 /* -------------------------------------------------------------------------- */
 router.get("/books/:id", async (req, res) => {
   try {
@@ -80,7 +81,7 @@ router.get("/books/:id", async (req, res) => {
 });
 
 /* -------------------------------------------------------------------------- */
-/* 💰 GET /api/library/payment/:paymentId  (Needed for UPI QR page)           */
+/* 💰 GET /api/library/payment/:paymentId                                     */
 /* -------------------------------------------------------------------------- */
 router.get("/payment/:paymentId", requireAuth, async (req, res) => {
   try {
@@ -103,7 +104,7 @@ router.get("/payment/:paymentId", requireAuth, async (req, res) => {
 });
 
 /* -------------------------------------------------------------------------- */
-/* 🪑 GET /api/library/seat/status - user seat status                         */
+/* 🪑 GET /api/library/seat/status                                            */
 /* -------------------------------------------------------------------------- */
 router.get("/seat/status", requireAuth, async (req, res) => {
   try {
@@ -210,13 +211,13 @@ router.post("/book/payment-request", requireAuth, async (req, res) => {
 });
 
 /* -------------------------------------------------------------------------- */
-/* 🖼️ POST /api/library/payment/:paymentId/submit                             */
-/* Screenshot upload + Name + Phone                                           */
+/* ⭐ FINAL UPDATED PAYMENT SUBMIT ROUTE (as you requested)                    */
 /* -------------------------------------------------------------------------- */
+
 router.post(
   "/payment/:paymentId/submit",
   requireAuth,
-  uploadScreenshot.single("screenshot"),
+  uploadPayment.single("screenshot"),   // ⭐ NEW MIDDLEWARE
   async (req, res) => {
     try {
       const { name, phone } = req.body;
@@ -232,33 +233,28 @@ router.post(
           .json({ success: false, message: "Payment request not found" });
       }
 
-      // Screenshot path
-      const screenshotPath = req.file
-        ? `/uploads/payments/${req.file.filename}`
-        : null;
+      // screenshot path
+      if (req.file) {
+        payment.screenshotPath = "/uploads/payments/" + req.file.filename;
+      }
 
       payment.name = name;
       payment.phone = phone;
-      if (screenshotPath) payment.screenshotPath = screenshotPath;
       payment.status = "submitted";
-
       await payment.save();
 
       const settings = await ensureSettings();
 
-      // Auto approve seat
+      // Auto-approve logic
       if (payment.type === "seat" && settings.autoApproveSeat) {
         await autoApproveSeatPayment(payment, settings);
-      }
-
-      // Auto approve book
-      if (payment.type === "book" && settings.autoApproveBook) {
+      } else if (payment.type === "book" && settings.autoApproveBook) {
         await autoApproveBookPayment(payment, settings);
       }
 
       res.json({ success: true, data: payment });
     } catch (err) {
-      console.error("[Library] Submit payment error:", err);
+      console.error("[Payment Submit] error:", err);
       res
         .status(400)
         .json({ success: false, message: "Failed to submit payment" });
