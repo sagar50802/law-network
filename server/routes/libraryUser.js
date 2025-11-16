@@ -7,7 +7,7 @@ import PaymentRequest from "../models/PaymentRequest.js";
 import LibrarySettings from "../models/LibrarySettings.js";
 import multer from "multer";
 
-import uploadPayment from "../middleware/uploadPayment.js"; // ⭐ NEW (AS REQUESTED)
+import uploadPayment from "../middlewares/uploadPayment.js"; // ⭐ NEW (AS REQUESTED)
 
 const router = express.Router();
 
