@@ -195,6 +195,7 @@ import classroomUploadRoutes from "./routes/classroomMediaUpload.js";
 import adminAuthRoutes from "./routes/adminAuth.js";
 import footerRoutes from "./routes/footer.js";
 import termsRoutes from "./routes/terms.js";
+import libraryRouter from "./routes/library.js";
 
 /* -------------------------------------------------------------------------- */
 /* 📌 Mount Routes                                                            */
@@ -223,6 +224,7 @@ app.use("/api/classroom/media", classroomUploadRoutes);
 app.use("/api/admin", adminAuthRoutes);
 app.use("/api/footer", footerRoutes);
 app.use("/api/terms", termsRoutes);
+app.use("/api/library", libraryRouter);
 
 /* -------------------------------------------------------------------------- */
 /* 📌 Health Routes                                                           */
