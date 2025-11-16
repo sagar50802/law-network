@@ -6,7 +6,7 @@ import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Storage setup
+// Setup folder: /server/uploads/payments/
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
     cb(null, path.join(__dirname, "../uploads/payments"));
@@ -17,7 +17,7 @@ const storage = multer.diskStorage({
   },
 });
 
-// Filter images only
+// Accept only image files
 const fileFilter = (req, file, cb) => {
   if (file.mimetype.startsWith("image/")) cb(null, true);
   else cb(new Error("Only image uploads allowed"), false);
