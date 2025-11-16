@@ -3,32 +3,41 @@ import LiveProgramSlide from "../models/LiveProgramSlide.js";
 import LiveTickerItem from "../models/LiveTickerItem.js";
 
 const router = express.Router();
-const SIX_DAYS_MS = 6 * 24 * 60 * 60 * 1000;
 
-// GET /api/live/slides
+/* ============================================================
+   📺 GET /api/live/slides
+   - Returns ALL active slides
+   - No auto-expire
+============================================================ */
 router.get("/slides", async (req, res) => {
-  const now = Date.now();
-  const since = new Date(now - SIX_DAYS_MS);
+  try {
+    const slides = await LiveProgramSlide.find({
+      isActive: true
+    }).sort({ createdAt: 1 });
 
-  const slides = await LiveProgramSlide.find({
-    isActive: true,
-    createdAt: { $gte: since }
-  }).sort({ createdAt: 1 });
-
-  res.json(slides);
+    res.json(slides);
+  } catch (err) {
+    console.error("❌ Error fetching live slides:", err);
+    res.status(500).json({ error: "Server error loading slides" });
+  }
 });
 
-// GET /api/live/ticker
+/* ============================================================
+   📰 GET /api/live/ticker
+   - Returns ALL active ticker items
+   - No auto-expire
+============================================================ */
 router.get("/ticker", async (req, res) => {
-  const now = Date.now();
-  const since = new Date(now - SIX_DAYS_MS);
+  try {
+    const items = await LiveTickerItem.find({
+      isActive: true
+    }).sort({ createdAt: 1 });
 
-  const items = await LiveTickerItem.find({
-    isActive: true,
-    createdAt: { $gte: since }
-  }).sort({ createdAt: 1 });
-
-  res.json(items);
+    res.json(items);
+  } catch (err) {
+    console.error("❌ Error fetching ticker items:", err);
+    res.status(500).json({ error: "Server error loading ticker" });
+  }
 });
 
 export default router;
