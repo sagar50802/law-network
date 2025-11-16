@@ -199,7 +199,7 @@ import libraryRouter from "./routes/library.js";
 import librarySettingsAdmin from "./routes/librarySettingsAdmin.js";
 import libraryUserRouter from "./routes/libraryUser.js";
 import libraryAdminRouter from "./routes/libraryAdmin.js";
-import librarySettingsAdmin from "./routes/librarySettingsAdmin.js";
+ 
 
 /* -------------------------------------------------------------------------- */
 /* 📌 Mount Routes                                                            */
@@ -234,7 +234,7 @@ app.use("/api/admin/library", librarySettingsAdmin);
 app.use("/api/library", libraryUserRouter);
 // ADMIN routes
 app.use("/api/admin/library", libraryAdminRouter);
-app.use("/api/admin/library", librarySettingsAdmin);
+ 
 
 
 /* -------------------------------------------------------------------------- */
