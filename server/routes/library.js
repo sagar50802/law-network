@@ -6,6 +6,11 @@ import SeatReservation from "../models/SeatReservation.js";
 import PaymentRequest from "../models/PaymentRequest.js";
 import LibrarySettings from "../models/LibrarySettings.js";
 
+// ✅ NEW: imports for file upload
+import multer from "multer";
+import path from "path";
+import fs from "fs";
+
 const router = express.Router();
 
 // TODO: use your real auth middleware
@@ -21,6 +26,89 @@ const requireAdmin = (req, res, next) => {
 };
 
 /* =======================================================================
+   📂 NEW: Multer setup for book uploads (PDF + cover)
+   Endpoint: POST /api/library/upload
+======================================================================= */
+
+// Ensure upload folder exists (works both locally and on Render)
+const libraryUploadDir = path.join(process.cwd(), "uploads", "library");
+if (!fs.existsSync(libraryUploadDir)) {
+  fs.mkdirSync(libraryUploadDir, { recursive: true });
+}
+
+const storage = multer.diskStorage({
+  destination: (_req, _file, cb) => {
+    cb(null, libraryUploadDir);
+  },
+  filename: (_req, file, cb) => {
+    const ext = path.extname(file.originalname);
+    const base = path.basename(file.originalname, ext).replace(/\s+/g, "_");
+    cb(null, `${Date.now()}_${base}${ext}`);
+  },
+});
+
+const upload = multer({ storage });
+
+/**
+ * 📚 ADMIN (or general) upload book
+ * Expects fields:
+ *  - title (string, required)
+ *  - author (string)
+ *  - description (string)
+ *  - free (boolean string "true"/"false")
+ *  - price (number if paid)
+ *  - pdf (file, required)
+ *  - cover (file, required)
+ */
+router.post(
+  "/upload",
+  // you can add requireAdmin here later if your auth is wired:
+  // requireAdmin,
+  upload.fields([
+    { name: "pdf", maxCount: 1 },
+    { name: "cover", maxCount: 1 },
+  ]),
+  async (req, res) => {
+    try {
+      const { title, author, description, price, free } = req.body;
+
+      if (!title || !req.files?.pdf?.length || !req.files?.cover?.length) {
+        return res
+          .status(400)
+          .json({ success: false, message: "Title, PDF and cover are required" });
+      }
+
+      const pdfFile = req.files.pdf[0];
+      const coverFile = req.files.cover[0];
+
+      const isFree = String(free) === "true";
+      const isPaid = !isFree;
+
+      const book = await LibraryBook.create({
+        title,
+        author,
+        description,
+        isPaid,
+        price: isPaid ? Number(price) || 0 : 0,
+        pdfUrl: `/uploads/library/${pdfFile.filename}`,
+        coverUrl: `/uploads/library/${coverFile.filename}`,
+        isPublished: true, // default published so it shows in list
+      });
+
+      return res.json({
+        success: true,
+        data: book,
+      });
+    } catch (err) {
+      console.error("[Library] POST /upload error:", err);
+      return res
+        .status(500)
+        .json({ success: false, message: "Failed to upload book" });
+    }
+  }
+);
+
+/* =======================================================================
    📚 PUBLIC: List published books (free + paid)
    GET /api/library/books
 ======================================================================= */
@@ -31,6 +119,84 @@ router.get("/books", async (req, res) => {
   } catch (err) {
     console.error("[Library] GET /books error:", err);
     res.status(500).json({ success: false, message: "Failed to fetch books" });
+  }
+});
+
+/* =======================================================================
+   🔐 USER: Check if user can read a book (paid logic + seat logic)
+   ⚠ IMPORTANT: This must be BEFORE `/books/:id` to avoid route clash.
+   GET /api/library/books/:bookId/access
+======================================================================= */
+router.get("/books/:bookId/access", requireAuth, async (req, res) => {
+  try {
+    const book = await LibraryBook.findById(req.params.bookId);
+    if (!book || !book.isPublished) {
+      return res.status(404).json({ success: false, message: "Book not found" });
+    }
+
+    const now = new Date();
+
+    if (!book.isPaid) {
+      // free book: no seat, no purchase needed
+      return res.json({
+        success: true,
+        data: {
+          canRead: true,
+          reason: "free",
+          seatRequired: false,
+        },
+      });
+    }
+
+    // Paid book → must have active purchase
+    const purchase = await BookPurchase.findOne({
+      userId: req.user._id,
+      bookId: book._id,
+      status: "active",
+      readingExpiresAt: { $gt: now },
+    });
+
+    if (!purchase) {
+      return res.json({
+        success: true,
+        data: {
+          canRead: false,
+          reason: "no_active_purchase",
+        },
+      });
+    }
+
+    // must also have active seat
+    const seat = await SeatReservation.findOne({
+      userId: req.user._id,
+      status: "active",
+      endsAt: { $gt: now },
+    });
+
+    if (!seat) {
+      return res.json({
+        success: true,
+        data: {
+          canRead: false,
+          reason: "no_active_seat",
+          purchaseExpiresAt: purchase.readingExpiresAt,
+        },
+      });
+    }
+
+    // ✅ both purchase and seat are valid
+    res.json({
+      success: true,
+      data: {
+        canRead: true,
+        reason: "ok",
+        seatEndsAt: seat.endsAt,
+        purchaseExpiresAt: purchase.readingExpiresAt,
+      },
+    });
+  } catch (err) {
+    console.error("[Library] GET /books/:bookId/access error:", err);
+    res.status(500).json({ success: false, message: "Failed to check access" });
   }
 });
 
@@ -235,83 +401,6 @@ router.post("/admin/book/approve/:paymentId", requireAdmin, async (req, res) => 
   } catch (err) {
     console.error("[Library] POST /admin/book/approve error:", err);
     res.status(400).json({ success: false, message: "Failed to approve book purchase" });
-  }
-});
-
-/* =======================================================================
-   🔐 USER: Check if user can read a book (paid logic + seat logic)
-   GET /api/library/books/:bookId/access
-======================================================================= */
-router.get("/books/:bookId/access", requireAuth, async (req, res) => {
-  try {
-    const book = await LibraryBook.findById(req.params.bookId);
-    if (!book || !book.isPublished) {
-      return res.status(404).json({ success: false, message: "Book not found" });
-    }
-
-    const now = new Date();
-
-    if (!book.isPaid) {
-      // free book: no seat, no purchase needed
-      return res.json({
-        success: true,
-        data: {
-          canRead: true,
-          reason: "free",
-          seatRequired: false,
-        },
-      });
-    }
-
-    // Paid book → must have active purchase
-    const purchase = await BookPurchase.findOne({
-      userId: req.user._id,
-      bookId: book._id,
-      status: "active",
-      readingExpiresAt: { $gt: now },
-    });
-
-    if (!purchase) {
-      return res.json({
-        success: true,
-        data: {
-          canRead: false,
-          reason: "no_active_purchase",
-        },
-      });
-    }
-
-    // must also have active seat
-    const seat = await SeatReservation.findOne({
-      userId: req.user._id,
-      status: "active",
-      endsAt: { $gt: now },
-    });
-
-    if (!seat) {
-      return res.json({
-        success: true,
-        data: {
-          canRead: false,
-          reason: "no_active_seat",
-          purchaseExpiresAt: purchase.readingExpiresAt,
-        },
-      });
-    }
-
-    // ✅ both purchase and seat are valid
-    res.json({
-      success: true,
-      data: {
-        canRead: true,
-        reason: "ok",
-        seatEndsAt: seat.endsAt,
-        purchaseExpiresAt: purchase.readingExpiresAt,
-      },
-    });
-  } catch (err) {
-    console.error("[Library] GET /books/:bookId/access error:", err);
-    res.status(500).json({ success: false, message: "Failed to check access" });
   }
 });
 
