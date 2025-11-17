@@ -404,4 +404,24 @@ router.post("/admin/book/approve/:paymentId", requireAdmin, async (req, res) => 
   }
 });
 
+/* =======================================================================
+   🗑️ DELETE BOOK (used by BooksPage.jsx → getJSON("/api/library/delete/:id"))
+   GET /api/library/delete/:id
+======================================================================= */
+router.get("/delete/:id", async (req, res) => {
+  try {
+    const book = await LibraryBook.findById(req.params.id);
+    if (!book) {
+      return res.json({ success: false, message: "Book not found" });
+    }
+
+    await LibraryBook.findByIdAndDelete(req.params.id);
+
+    return res.json({ success: true, message: "Book deleted" });
+  } catch (err) {
+    console.error("[Library] GET /delete/:id error:", err);
+    return res.json({ success: false, message: "Failed to delete book" });
+  }
+});
+
 export default router;
