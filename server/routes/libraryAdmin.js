@@ -8,7 +8,9 @@ import LibrarySettings from "../models/LibrarySettings.js";
 
 const router = express.Router();
 
-// TODO: replace with your real admin auth
+/* ============================================================
+   🔐 Admin Middleware (your original — untouched)
+============================================================ */
 const requireAdmin = (req, res, next) => {
   if (!req.user || !req.user.isAdmin) {
     return res
@@ -18,19 +20,89 @@ const requireAdmin = (req, res, next) => {
   next();
 };
 
-/* -------------------------------------------------------------------------- */
-/* Helper: ensure settings                                                    */
-/* -------------------------------------------------------------------------- */
+/* ============================================================
+   ⚙ Settings Helper (unchanged)
+============================================================ */
 async function ensureSettings() {
   let settings = await LibrarySettings.findOne();
   if (!settings) settings = await LibrarySettings.create({});
   return settings;
 }
 
-/* -------------------------------------------------------------------------- */
-/* 💰 GET /api/admin/library/payments                                         */
-/* List pending payment requests (seat + book)                                */
-/* -------------------------------------------------------------------------- */
+/* ============================================================
+   ✅ NEW: Multer Upload Setup
+============================================================ */
+import multer from "multer";
+import path from "path";
+import fs from "fs";
+
+// Ensure uploads/library exists
+const uploadDir = path.join(process.cwd(), "uploads/library");
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, uploadDir),
+  filename: (req, file, cb) =>
+    cb(null, Date.now() + "_" + file.originalname.replace(/\s+/g, "_")),
+});
+
+const upload = multer({ storage });
+
+/* ============================================================
+   📚 ✅ NEW ADMIN PDF + COVER UPLOAD
+   POST /api/admin/library/upload
+============================================================ */
+router.post(
+  "/upload",
+  requireAdmin,
+  upload.fields([
+    { name: "pdf", maxCount: 1 },
+    { name: "cover", maxCount: 1 },
+  ]),
+  async (req, res) => {
+    try {
+      const { title, author, description, free, price } = req.body;
+
+      if (!title || !req.files?.pdf?.length || !req.files?.cover?.length) {
+        return res.status(400).json({
+          success: false,
+          message: "Title, PDF, and Cover image are required",
+        });
+      }
+
+      const pdf = req.files.pdf[0].filename;
+      const cover = req.files.cover[0].filename;
+
+      const isFree = String(free) === "true";
+      const isPaid = !isFree;
+
+      const book = await LibraryBook.create({
+        title,
+        author,
+        description,
+        isPaid,
+        price: isPaid ? Number(price || 0) : 0,
+        pdfUrl: "/uploads/library/" + pdf,
+        coverUrl: "/uploads/library/" + cover,
+        isPublished: true,
+      });
+
+      return res.json({ success: true, data: book });
+    } catch (err) {
+      console.error("📚 [Admin Upload Error]:", err);
+      res.status(500).json({
+        success: false,
+        message: "Failed to upload book",
+      });
+    }
+  }
+);
+
+/* ============================================================
+   💰 GET /api/admin/library/payments (unchanged)
+============================================================ */
 router.get("/payments", requireAdmin, async (req, res) => {
   try {
     const payments = await PaymentRequest.find({
@@ -48,9 +120,9 @@ router.get("/payments", requireAdmin, async (req, res) => {
   }
 });
 
-/* -------------------------------------------------------------------------- */
-/* 💰 POST /api/admin/library/payments/reject/:paymentId                      */
-/* -------------------------------------------------------------------------- */
+/* ============================================================
+   💰 Reject payment (unchanged)
+============================================================ */
 router.post(
   "/payments/reject/:paymentId",
   requireAdmin,
@@ -68,7 +140,7 @@ router.post(
 
       res.json({ success: true, message: "Payment rejected" });
     } catch (err) {
-      console.error("[Admin] POST /payments/reject error:", err);
+      console.error("[Admin] reject error:", err);
       res
         .status(500)
         .json({ success: false, message: "Failed to reject payment" });
@@ -76,10 +148,9 @@ router.post(
   }
 );
 
-/* -------------------------------------------------------------------------- */
-/* 💺 POST /api/admin/library/seat/approve/:paymentId                         */
-/* Manual seat approval (admin button)                                       */
-/* -------------------------------------------------------------------------- */
+/* ============================================================
+   💺 Seat approval (unchanged)
+============================================================ */
 router.post(
   "/seat/approve/:paymentId",
   requireAdmin,
@@ -93,16 +164,17 @@ router.post(
       }
 
       const now = new Date();
-      const totalSeats = 50; // or load from settings in future
+      const totalSeats = 50;
       const active = await SeatReservation.find({
         status: "active",
         endsAt: { $gt: now },
       }).select("seatNumber");
 
-      const usedSeatNumbers = new Set(active.map((s) => s.seatNumber));
+      const used = new Set(active.map((s) => s.seatNumber));
       let seatNumber = null;
+
       for (let i = 1; i <= totalSeats; i++) {
-        if (!usedSeatNumbers.has(i)) {
+        if (!used.has(i)) {
           seatNumber = i;
           break;
         }
@@ -111,12 +183,12 @@ router.post(
       if (!seatNumber) {
         return res.status(400).json({
           success: false,
-          message: "No seats available to approve",
+          message: "No seats available",
         });
       }
 
       const durationMinutes = payment.seatDurationMinutes || 60;
-      const endsAt = new Date(now.getTime() + durationMinutes * 60 * 1000);
+      const endsAt = new Date(now.getTime() + durationMinutes * 60000);
 
       const reservation = await SeatReservation.create({
         userId: payment.userId,
@@ -133,18 +205,18 @@ router.post(
 
       res.json({ success: true, data: reservation });
     } catch (err) {
-      console.error("[Admin] POST /seat/approve error:", err);
-      res
-        .status(500)
-        .json({ success: false, message: "Failed to approve seat" });
+      console.error("[Admin] approve seat error:", err);
+      res.status(500).json({
+        success: false,
+        message: "Failed to approve seat",
+      });
     }
   }
 );
 
-/* -------------------------------------------------------------------------- */
-/* 📖 POST /api/admin/library/book/approve/:paymentId                         */
-/* Manual paid-book approval                                                 */
-/* -------------------------------------------------------------------------- */
+/* ============================================================
+   📖 Approve Paid Book (unchanged)
+============================================================ */
 router.post(
   "/book/approve/:paymentId",
   requireAdmin,
@@ -169,6 +241,7 @@ router.post(
       const now = new Date();
       const readingHours =
         book.defaultReadingHours || settings.defaultReadingHours || 24;
+
       const expiresAt = new Date(
         now.getTime() + readingHours * 60 * 60 * 1000
       );
@@ -188,7 +261,7 @@ router.post(
 
       res.json({ success: true, data: purchase });
     } catch (err) {
-      console.error("[Admin] POST /book/approve error:", err);
+      console.error("[Admin] approve book error:", err);
       res
         .status(500)
         .json({ success: false, message: "Failed to approve book" });
@@ -196,10 +269,9 @@ router.post(
   }
 );
 
-/* -------------------------------------------------------------------------- */
-/* 💺 GET /api/admin/library/seats                                            */
-/* Active seat reservations                                                  */
-/* -------------------------------------------------------------------------- */
+/* ============================================================
+   💺 List Active Seats (unchanged)
+============================================================ */
 router.get("/seats", requireAdmin, async (req, res) => {
   try {
     const now = new Date();
@@ -219,10 +291,9 @@ router.get("/seats", requireAdmin, async (req, res) => {
   }
 });
 
-/* -------------------------------------------------------------------------- */
-/* 📖 GET /api/admin/library/book-purchases                                   */
-/* All active book purchases                                                 */
-/* -------------------------------------------------------------------------- */
+/* ============================================================
+   📚 List Book Purchases (unchanged)
+============================================================ */
 router.get("/book-purchases", requireAdmin, async (req, res) => {
   try {
     const purchases = await BookPurchase.find({})
@@ -240,10 +311,9 @@ router.get("/book-purchases", requireAdmin, async (req, res) => {
   }
 });
 
-/* -------------------------------------------------------------------------- */
-/* 📖 POST /api/admin/library/book-purchases/revoke/:purchaseId               */
-/* Manually revoke reading access                                            */
-/* -------------------------------------------------------------------------- */
+/* ============================================================
+   📚 Revoke Access (unchanged)
+============================================================ */
 router.post(
   "/book-purchases/revoke/:purchaseId",
   requireAdmin,
@@ -262,7 +332,7 @@ router.post(
 
       res.json({ success: true, message: "Access revoked" });
     } catch (err) {
-      console.error("[Admin] POST /book-purchases/revoke error:", err);
+      console.error("[Admin] revoke access error:", err);
       res.status(500).json({
         success: false,
         message: "Failed to revoke access",
