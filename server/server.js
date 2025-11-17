@@ -39,18 +39,6 @@ const ALLOWED = new Set([
 ]);
 
 /* -------------------------------------------------------------------------- */
-/* 🚫 REMOVE THIS — YOU HAD IT BEFORE — IT CAUSED CORS FAILURE               */
-/*
-app.use(
-  cors({
-    origin: [...ALLOWED],
-    credentials: true,
-  })
-);
-*/
-/* -------------------------------------------------------------------------- */
-
-/* -------------------------------------------------------------------------- */
 /* ✅ Correct Single CORS Handler                                              */
 /* -------------------------------------------------------------------------- */
 const corsOptions = {
@@ -150,6 +138,8 @@ app.use((req, _res, next) => {
   "uploads/qr",
   "uploads/testseries",
   "uploads/classroom",
+  // ✅ NEW: library uploads (PDF + covers)
+  "uploads/library",
 ].forEach((rel) => {
   const full = path.join(__dirname, rel);
   if (!fs.existsSync(full)) fs.mkdirSync(full, { recursive: true });
@@ -199,7 +189,6 @@ import libraryRouter from "./routes/library.js";
 import librarySettingsAdmin from "./routes/librarySettingsAdmin.js";
 import libraryUserRouter from "./routes/libraryUser.js";
 import libraryAdminRouter from "./routes/libraryAdmin.js";
- 
 
 /* -------------------------------------------------------------------------- */
 /* 📌 Mount Routes                                                            */
@@ -234,8 +223,6 @@ app.use("/api/admin/library", librarySettingsAdmin);
 app.use("/api/library", libraryUserRouter);
 // ADMIN routes
 app.use("/api/admin/library", libraryAdminRouter);
- 
-
 
 /* -------------------------------------------------------------------------- */
 /* 📌 Health Routes                                                           */
@@ -272,4 +259,3 @@ const server = app.listen(PORT, HOST, () =>
 
 process.on("SIGTERM", () => server.close());
 process.on("SIGINT", () => server.close());
-
