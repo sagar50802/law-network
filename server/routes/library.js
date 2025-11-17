@@ -60,7 +60,14 @@ const storage = multer.diskStorage({
   },
 });
 
-const upload = multer({ storage });
+const upload = multer({
+  storage,
+  // optional: you can bump this if you need huge PDFs, but Render itself
+  // also has a hard limit.
+  limits: {
+    fileSize: 200 * 1024 * 1024, // 200MB
+  },
+});
 
 /**
  * 📚 ADMIN (or general) upload book
@@ -77,10 +84,22 @@ router.post(
   "/upload",
   // you can add requireAdmin here later if your auth is wired:
   // requireAdmin,
-  upload.fields([
-    { name: "pdf", maxCount: 1 },
-    { name: "cover", maxCount: 1 },
-  ]),
+  (req, res, next) => {
+    // wrap multer so we can catch its errors and NOT crash the whole app
+    upload.fields([
+      { name: "pdf", maxCount: 1 },
+      { name: "cover", maxCount: 1 },
+    ])(req, res, (err) => {
+      if (err) {
+        console.error("[Library] Multer error on /upload:", err);
+        return res.json({
+          success: false,
+          message: err?.message || "Failed to upload book",
+        });
+      }
+      next();
+    });
+  },
   async (req, res) => {
     try {
       console.log("[Library] /upload body:", req.body);
@@ -118,8 +137,7 @@ router.post(
       });
     } catch (err) {
       console.error("[Library] POST /upload error:", err);
-      // ❌ previously: res.status(500) → frontend saw "network/server error"
-      // ✅ now: always HTTP 200 with success:false so api.upload() doesn't throw
+      // ✅ always HTTP 200 for this route so frontend doesn't see 500
       return res.json({
         success: false,
         message: err?.message || "Failed to upload book",
@@ -282,7 +300,6 @@ router.post("/seat/payment-request", requireAuth, async (req, res) => {
 
 /* =======================================================================
    🖼️ USER: Attach screenshot + name/phone for payment
-   (You will plug multer or similar here)
    POST /api/library/payment/:paymentId/submit
 ======================================================================= */
 router.post(
