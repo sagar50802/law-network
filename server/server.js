@@ -39,7 +39,7 @@ const ALLOWED = new Set([
 ]);
 
 /* -------------------------------------------------------------------------- */
-/* ✅ Correct Single CORS Handler                                              */
+/* ✅ Correct Single CORS Handler                                             */
 /* -------------------------------------------------------------------------- */
 const corsOptions = {
   origin(origin, cb) {
@@ -113,7 +113,9 @@ app.use(express.urlencoded({ extended: true, limit: "100mb" }));
 
 app.use((req, _res, next) => {
   if (req.path !== "/favicon.ico")
-    console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
+    console.log(
+      `[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`
+    );
   next();
 });
 
@@ -217,12 +219,17 @@ app.use("/api/classroom/media", classroomUploadRoutes);
 app.use("/api/admin", adminAuthRoutes);
 app.use("/api/footer", footerRoutes);
 app.use("/api/terms", termsRoutes);
-app.use("/api/library", libraryRouter);
-app.use("/api/admin/library", librarySettingsAdmin);
-// USER routes
-app.use("/api/library", libraryUserRouter);
-// ADMIN routes
+
+/* 📚 LIBRARY (admin + user) ----------------------------------------------- */
+// Admin: payments, seats, purchases, etc.
 app.use("/api/admin/library", libraryAdminRouter);
+// Admin: settings (endpoints inside this router usually start with /settings)
+app.use("/api/admin/library", librarySettingsAdmin);
+
+// User-facing library routes (books list, upload, access checks, etc.)
+app.use("/api/library", libraryRouter);
+// Extra user routes (if any) on same /api/library base
+app.use("/api/library", libraryUserRouter);
 
 /* -------------------------------------------------------------------------- */
 /* 📌 Health Routes                                                           */
@@ -234,19 +241,25 @@ app.get("/", (_req, res) => res.json({ ok: true, service: "Law Network API" }));
 /* 📌 Global Errors                                                           */
 /* -------------------------------------------------------------------------- */
 app.use((req, res) => {
-  res.status(404).json({ success: false, message: `Not Found: ${req.method} ${req.url}` });
+  res
+    .status(404)
+    .json({ success: false, message: `Not Found: ${req.method} ${req.url}` });
 });
 
 app.use((err, _req, res, _next) => {
   console.error("🔥 Error:", err);
-  res.status(500).json({ success: false, message: err.message || "Server Error" });
+  res
+    .status(500)
+    .json({ success: false, message: err.message || "Server Error" });
 });
 
 /* -------------------------------------------------------------------------- */
 /* 📌 MongoDB                                                                 */
 /* -------------------------------------------------------------------------- */
 mongoose
-  .connect(process.env.MONGO_URI, { dbName: process.env.MONGO_DB || undefined })
+  .connect(process.env.MONGO_URI, {
+    dbName: process.env.MONGO_DB || undefined,
+  })
   .then(() => console.log("✅ MongoDB connected"))
   .catch((err) => console.error("MongoDB error:", err.message));
 
@@ -259,4 +272,3 @@ const server = app.listen(PORT, HOST, () =>
 
 process.on("SIGTERM", () => server.close());
 process.on("SIGINT", () => server.close());
-
