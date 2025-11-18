@@ -9,7 +9,7 @@ import LibrarySettings from "../models/LibrarySettings.js";
 const router = express.Router();
 
 /* ============================================================
-   🔐 Admin Middleware (your original — untouched)
+   🔐 Admin Middleware (unchanged)
 ============================================================ */
 const requireAdmin = (req, res, next) => {
   if (!req.user || !req.user.isAdmin) {
@@ -30,75 +30,10 @@ async function ensureSettings() {
 }
 
 /* ============================================================
-   ✅ NEW: Multer Upload Setup
+   ❌ REMOVED: Multer + local disk upload
+   (Admin should now upload via R2 using /api/library/upload-url
+   and then create the book via /api/library/create)
 ============================================================ */
-import multer from "multer";
-import path from "path";
-import fs from "fs";
-
-// Ensure uploads/library exists
-const uploadDir = path.join(process.cwd(), "uploads/library");
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
-}
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadDir),
-  filename: (req, file, cb) =>
-    cb(null, Date.now() + "_" + file.originalname.replace(/\s+/g, "_")),
-});
-
-const upload = multer({ storage });
-
-/* ============================================================
-   📚 ✅ NEW ADMIN PDF + COVER UPLOAD
-   POST /api/admin/library/upload
-============================================================ */
-router.post(
-  "/upload",
-  requireAdmin,
-  upload.fields([
-    { name: "pdf", maxCount: 1 },
-    { name: "cover", maxCount: 1 },
-  ]),
-  async (req, res) => {
-    try {
-      const { title, author, description, free, price } = req.body;
-
-      if (!title || !req.files?.pdf?.length || !req.files?.cover?.length) {
-        return res.status(400).json({
-          success: false,
-          message: "Title, PDF, and Cover image are required",
-        });
-      }
-
-      const pdf = req.files.pdf[0].filename;
-      const cover = req.files.cover[0].filename;
-
-      const isFree = String(free) === "true";
-      const isPaid = !isFree;
-
-      const book = await LibraryBook.create({
-        title,
-        author,
-        description,
-        isPaid,
-        price: isPaid ? Number(price || 0) : 0,
-        pdfUrl: "/uploads/library/" + pdf,
-        coverUrl: "/uploads/library/" + cover,
-        isPublished: true,
-      });
-
-      return res.json({ success: true, data: book });
-    } catch (err) {
-      console.error("📚 [Admin Upload Error]:", err);
-      res.status(500).json({
-        success: false,
-        message: "Failed to upload book",
-      });
-    }
-  }
-);
 
 /* ============================================================
    💰 GET /api/admin/library/payments (unchanged)
