@@ -6,11 +6,14 @@ import SeatReservation from "../models/SeatReservation.js";
 import PaymentRequest from "../models/PaymentRequest.js";
 import LibrarySettings from "../models/LibrarySettings.js";
 
-// ✅ NEW: imports for file upload
+// ✅ File upload + path helpers
 import multer from "multer";
 import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
+
+// ✅ Cloudflare R2 (via AWS SDK S3 client)
+import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 
 const router = express.Router();
 
@@ -20,53 +23,123 @@ const router = express.Router();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// TODO: use your real auth middleware
-// e.g. import { requireAuth, requireAdmin } from "../middleware/auth.js";
+/* -----------------------------------------------------------------------
+   Auth stubs (replace with real auth later)
+------------------------------------------------------------------------ */
 const requireAuth = (req, res, next) => {
-  if (!req.user)
+  if (!req.user) {
     return res
       .status(401)
       .json({ success: false, message: "Unauthorized" });
+  }
   next();
 };
+
 const requireAdmin = (req, res, next) => {
-  if (!req.user?.isAdmin)
+  if (!req.user?.isAdmin) {
     return res
       .status(403)
       .json({ success: false, message: "Admin only" });
+  }
   next();
 };
 
 /* =======================================================================
-   📂 NEW: Multer setup for book uploads (PDF + cover)
+   🔐 Cloudflare R2 Setup
+   Uses your env vars from Render dashboard:
+   - R2_ENABLED
+   - R2_BUCKET
+   - R2_ENDPOINT
+   - R2_ACCESS_KEY_ID
+   - R2_SECRET_ACCESS_KEY
+   - R2_PUBLIC_BASE   (e.g. https://pub-xxxxx.r2.dev)
+======================================================================= */
+
+const R2_ENABLED =
+  String(process.env.R2_ENABLED || "").toLowerCase() === "true";
+const R2_BUCKET = process.env.R2_BUCKET || "";
+const R2_ENDPOINT = process.env.R2_ENDPOINT || "";
+const R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID || "";
+const R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY || "";
+const R2_PUBLIC_BASE = (process.env.R2_PUBLIC_BASE || "").replace(
+  /\/+$/,
+  ""
+);
+
+const R2_ACTIVE =
+  R2_ENABLED &&
+  R2_BUCKET &&
+  R2_ENDPOINT &&
+  R2_ACCESS_KEY_ID &&
+  R2_SECRET_ACCESS_KEY &&
+  R2_PUBLIC_BASE;
+
+let r2Client = null;
+
+if (R2_ACTIVE) {
+  r2Client = new S3Client({
+    region: "auto",
+    endpoint: R2_ENDPOINT,
+    credentials: {
+      accessKeyId: R2_ACCESS_KEY_ID,
+      secretAccessKey: R2_SECRET_ACCESS_KEY,
+    },
+  });
+  console.log("[Library] R2 uploads ENABLED");
+} else {
+  console.log("[Library] R2 uploads DISABLED or misconfigured");
+}
+
+/**
+ * Upload a file buffer to R2 under a given key and
+ * return the public URL.
+ */
+async function uploadBufferToR2(buffer, key, contentType) {
+  if (!r2Client) {
+    throw new Error("R2 not configured");
+  }
+
+  const command = new PutObjectCommand({
+    Bucket: R2_BUCKET,
+    Key: key,
+    Body: buffer,
+    ContentType: contentType || "application/octet-stream",
+  });
+
+  await r2Client.send(command);
+  return `${R2_PUBLIC_BASE}/${key}`;
+}
+
+/* =======================================================================
+   📂 Multer setup for book uploads (PDF + cover)
    Endpoint: POST /api/library/upload
 ======================================================================= */
 
 // ✅ Ensure upload folder exists in the SAME place as server.js:
 // root/uploads/library
-const libraryUploadDir = path.join(__dirname, "..", "uploads", "library");
-if (!fs.existsSync(libraryUploadDir)) {
-  fs.mkdirSync(libraryUploadDir, { recursive: true });
+const localLibraryDir = path.join(__dirname, "..", "uploads", "library");
+if (!fs.existsSync(localLibraryDir)) {
+  fs.mkdirSync(localLibraryDir, { recursive: true });
 }
 
+// We still use diskStorage so files exist even if R2 is disabled
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => {
-    cb(null, libraryUploadDir);
+    cb(null, localLibraryDir);
   },
   filename: (_req, file, cb) => {
     const ext = path.extname(file.originalname);
-    const base = path.basename(file.originalname, ext).replace(/\s+/g, "_");
+    const base = path
+      .basename(file.originalname, ext)
+      .replace(/\s+/g, "_");
     cb(null, `${Date.now()}_${base}${ext}`);
   },
 });
 
 const upload = multer({
   storage,
-  // optional: you can bump this if you need huge PDFs, but Render itself
-  // also has a hard limit.
-  limits: {
-    fileSize: 200 * 1024 * 1024, // 200MB
-  },
+  // You can adjust this if you want a hard per-file limit:
+  // limits: { fileSize: 1024 * 1024 * 200 }, // 200 MB
 });
 
 /**
@@ -84,22 +157,10 @@ router.post(
   "/upload",
   // you can add requireAdmin here later if your auth is wired:
   // requireAdmin,
-  (req, res, next) => {
-    // wrap multer so we can catch its errors and NOT crash the whole app
-    upload.fields([
-      { name: "pdf", maxCount: 1 },
-      { name: "cover", maxCount: 1 },
-    ])(req, res, (err) => {
-      if (err) {
-        console.error("[Library] Multer error on /upload:", err);
-        return res.json({
-          success: false,
-          message: err?.message || "Failed to upload book",
-        });
-      }
-      next();
-    });
-  },
+  upload.fields([
+    { name: "pdf", maxCount: 1 },
+    { name: "cover", maxCount: 1 },
+  ]),
   async (req, res) => {
     try {
       console.log("[Library] /upload body:", req.body);
@@ -120,14 +181,68 @@ router.post(
       const isFree = String(free) === "true";
       const isPaid = !isFree;
 
+      let pdfUrl;
+      let coverUrl;
+
+      // ----------------- Upload to R2 if active -----------------
+      if (R2_ACTIVE) {
+        try {
+          const pdfKey = `library/pdf/${pdfFile.filename}`;
+          const coverKey = `library/covers/${coverFile.filename}`;
+
+          const [pdfBuffer, coverBuffer] = await Promise.all([
+            fs.promises.readFile(pdfFile.path),
+            fs.promises.readFile(coverFile.path),
+          ]);
+
+          const [pdfRemoteUrl, coverRemoteUrl] = await Promise.all([
+            uploadBufferToR2(
+              pdfBuffer,
+              pdfKey,
+              pdfFile.mimetype || "application/pdf"
+            ),
+            uploadBufferToR2(
+              coverBuffer,
+              coverKey,
+              coverFile.mimetype || "image/jpeg"
+            ),
+          ]);
+
+          pdfUrl = pdfRemoteUrl;
+          coverUrl = coverRemoteUrl;
+
+          // Clean up local temp files (optional)
+          try {
+            await fs.promises.unlink(pdfFile.path);
+            await fs.promises.unlink(coverFile.path);
+          } catch (cleanupErr) {
+            console.warn(
+              "[Library] Failed to delete temp files:",
+              cleanupErr.message
+            );
+          }
+
+          console.log("[Library] Uploaded to R2:", { pdfUrl, coverUrl });
+        } catch (r2Err) {
+          console.error("[Library] R2 upload failed, falling back:", r2Err);
+          // Fall back to local /uploads if something is wrong with R2
+          pdfUrl = `/uploads/library/${pdfFile.filename}`;
+          coverUrl = `/uploads/library/${coverFile.filename}`;
+        }
+      } else {
+        // ----------------- No R2, use local /uploads -----------------
+        pdfUrl = `/uploads/library/${pdfFile.filename}`;
+        coverUrl = `/uploads/library/${coverFile.filename}`;
+      }
+
       const book = await LibraryBook.create({
         title,
         author,
         description,
         isPaid,
         price: isPaid ? Number(price) || 0 : 0,
-        pdfUrl: `/uploads/library/${pdfFile.filename}`,
-        coverUrl: `/uploads/library/${coverFile.filename}`,
+        pdfUrl,
+        coverUrl,
         isPublished: true, // default published so it shows in list
       });
 
@@ -137,7 +252,7 @@ router.post(
       });
     } catch (err) {
       console.error("[Library] POST /upload error:", err);
-      // ✅ always HTTP 200 for this route so frontend doesn't see 500
+      // Keep HTTP 200 so frontend sees a JSON error, not fetch-throw
       return res.json({
         success: false,
         message: err?.message || "Failed to upload book",
@@ -275,9 +390,10 @@ router.post("/seat/payment-request", requireAuth, async (req, res) => {
   try {
     const { durationMinutes, amount } = req.body;
     if (!durationMinutes || !amount) {
-      return res
-        .status(400)
-        .json({ success: false, message: "Missing duration/amount" });
+      return res.status(400).json({
+        success: false,
+        message: "Missing duration/amount",
+      });
     }
 
     const payment = await PaymentRequest.create({
@@ -300,6 +416,7 @@ router.post("/seat/payment-request", requireAuth, async (req, res) => {
 
 /* =======================================================================
    🖼️ USER: Attach screenshot + name/phone for payment
+   (You will plug multer or similar here)
    POST /api/library/payment/:paymentId/submit
 ======================================================================= */
 router.post(
