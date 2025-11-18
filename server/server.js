@@ -127,7 +127,7 @@ app.use((req, _res, next) => {
 });
 
 /* -------------------------------------------------------------------------- */
-/* 📌 Ensure Upload Folders                                                   */
+/* 📌 Ensure Upload folders                                                   */
 /* -------------------------------------------------------------------------- */
 [
   "uploads",
@@ -140,7 +140,6 @@ app.use((req, _res, next) => {
   "uploads/qr",
   "uploads/testseries",
   "uploads/classroom",
-  // ✅ NEW: library uploads (PDF + covers)
   "uploads/library",
 ].forEach((rel) => {
   const full = path.join(__dirname, rel);
@@ -187,14 +186,40 @@ import classroomUploadRoutes from "./routes/classroomMediaUpload.js";
 import adminAuthRoutes from "./routes/adminAuth.js";
 import footerRoutes from "./routes/footer.js";
 import termsRoutes from "./routes/terms.js";
+
 import libraryRouter from "./routes/library.js";
 import librarySettingsAdmin from "./routes/librarySettingsAdmin.js";
 import libraryUserRouter from "./routes/libraryUser.js";
 import libraryAdminRouter from "./routes/libraryAdmin.js";
 
 /* -------------------------------------------------------------------------- */
-/* 📌 Mount Routes                                                            */
+/* 📌 Mount Routes (NEW FIXED ORDER!)                                         */
 /* -------------------------------------------------------------------------- */
+
+/* ---------------------------------------------------------
+   ⭐ 1) MAIN LIBRARY ROUTES FIRST  
+      (upload-url, create, books, delete)
+--------------------------------------------------------- */
+app.use("/api/library", libraryRouter);
+
+/* ---------------------------------------------------------
+   ⭐ 2) USER LIBRARY ROUTES
+--------------------------------------------------------- */
+app.use("/api/library", libraryUserRouter);
+
+/* ---------------------------------------------------------
+   ⭐ 3) ADMIN LIBRARY ROUTES
+--------------------------------------------------------- */
+app.use("/api/admin/library", libraryAdminRouter);
+
+/* ---------------------------------------------------------
+   ⭐ 4) ADMIN SETTINGS ROUTES
+--------------------------------------------------------- */
+app.use("/api/admin/library", librarySettingsAdmin);
+
+/* ---------------------------------------------------------
+   OTHER ROUTES (unchanged)
+--------------------------------------------------------- */
 app.use("/api/articles", articleRoutes);
 app.use("/api/banners", bannerRoutes);
 app.use("/api/consultancy", consultancyRoutes);
@@ -219,21 +244,6 @@ app.use("/api/classroom/media", classroomUploadRoutes);
 app.use("/api/admin", adminAuthRoutes);
 app.use("/api/footer", footerRoutes);
 app.use("/api/terms", termsRoutes);
-
-/* 📚 LIBRARY ROUTES — FIXED ORDER ---------------------------------------- */
-
-// 1️⃣ Main user-facing library (books, upload-url, create, access)
-app.use("/api/library", libraryRouter);
-
-// 2️⃣ Extra user library routes (if any)
-app.use("/api/library", libraryUserRouter);
-
-// 3️⃣ Admin: payments, seats, purchases
-app.use("/api/admin/library", libraryAdminRouter);
-
-// 4️⃣ Admin: library settings
-app.use("/api/admin/library", librarySettingsAdmin);
-
 
 /* -------------------------------------------------------------------------- */
 /* 📌 Health Routes                                                           */
