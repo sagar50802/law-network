@@ -220,16 +220,20 @@ app.use("/api/admin", adminAuthRoutes);
 app.use("/api/footer", footerRoutes);
 app.use("/api/terms", termsRoutes);
 
-/* 📚 LIBRARY (admin + user) ----------------------------------------------- */
-// Admin: payments, seats, purchases, etc.
+/* 📚 LIBRARY ROUTES — FIXED ORDER ---------------------------------------- */
+
+// 1️⃣ Main user-facing library (books, upload-url, create, access)
+app.use("/api/library", libraryRouter);
+
+// 2️⃣ Extra user library routes (if any)
+app.use("/api/library", libraryUserRouter);
+
+// 3️⃣ Admin: payments, seats, purchases
 app.use("/api/admin/library", libraryAdminRouter);
-// Admin: settings (endpoints inside this router usually start with /settings)
+
+// 4️⃣ Admin: library settings
 app.use("/api/admin/library", librarySettingsAdmin);
 
-// User-facing library routes (books list, upload, access checks, etc.)
-app.use("/api/library", libraryRouter);
-// Extra user routes (if any) on same /api/library base
-app.use("/api/library", libraryUserRouter);
 
 /* -------------------------------------------------------------------------- */
 /* 📌 Health Routes                                                           */
