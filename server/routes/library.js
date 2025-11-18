@@ -1,16 +1,22 @@
 // routes/library.js
 import express from "express";
+import crypto from "crypto";
+import { HttpRequest } from "@aws-sdk/protocol-http";
+import { S3RequestPresigner } from "@aws-sdk/s3-request-presigner";
+import { formatUrl } from "@aws-sdk/util-format-url";
+
+import { S3Client } from "@aws-sdk/client-s3";
+
 import LibraryBook from "../models/LibraryBook.js";
 import BookPurchase from "../models/BookPurchase.js";
 import SeatReservation from "../models/SeatReservation.js";
 import PaymentRequest from "../models/PaymentRequest.js";
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 
 const router = express.Router();
 
-/* ------------------------------------------------------------------
-   🔐 AUTH (keep your stubs)
------------------------------------------------------------------- */
+/* ----------------------------------------------------------------------
+   AUTH STUBS (KEEP SAME)
+---------------------------------------------------------------------- */
 const requireAuth = (req, res, next) => {
   if (!req.user)
     return res.status(401).json({ success: false, message: "Unauthorized" });
@@ -23,59 +29,80 @@ const requireAdmin = (req, res, next) => {
   next();
 };
 
-/* ------------------------------------------------------------------
-   📦 CLOUDLFARE R2 CLIENT (DIRECT UPLOAD SUPPORT)
------------------------------------------------------------------- */
-const R2 = new S3Client({
+/* ----------------------------------------------------------------------
+   CLOUDFLARE R2 CLIENT (FULL DIRECT UPLOAD MODE)
+---------------------------------------------------------------------- */
+
+const R2_BUCKET = process.env.R2_BUCKET;
+const R2_ENDPOINT = process.env.R2_ENDPOINT;
+const R2_PUBLIC_BASE = process.env.R2_PUBLIC_BASE?.replace(/\/$/, "");
+
+const r2 = new S3Client({
   region: "auto",
-  endpoint: process.env.R2_ENDPOINT,
+  endpoint: R2_ENDPOINT,
   credentials: {
     accessKeyId: process.env.R2_ACCESS_KEY_ID,
     secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
   },
 });
 
-/* ------------------------------------------------------------------
-   ✨ GET SIGNED UPLOAD URL  
-   Browser uploads directly → R2  
-   No file ever touches Render server  
------------------------------------------------------------------- */
+/* ----------------------------------------------------------------------
+   Generate Signed Upload URL  (Direct PUT to R2)
+   GET /api/library/upload-url?filename=xxx&type=xxx
+---------------------------------------------------------------------- */
 router.get("/upload-url", async (req, res) => {
   try {
     const { filename, type } = req.query;
-    if (!filename) return res.json({ success: false, message: "filename required" });
 
-    const key = `library/${Date.now()}-${filename}`;
+    if (!filename)
+      return res.json({ success: false, message: "Missing filename" });
 
-    const command = new PutObjectCommand({
-      Bucket: process.env.R2_BUCKET,
-      Key: key,
-      ContentType: type || "application/octet-stream",
+    const ext = filename.includes(".") ? filename.split(".").pop() : "bin";
+    const safeName = `${Date.now()}-${crypto.randomUUID()}.${ext}`;
+
+    const key = `library/${safeName}`;
+    const contentType = type || "application/octet-stream";
+
+    // SIGN REQUEST
+    const presigner = new S3RequestPresigner({
+      ...r2.config,
+      sha256: crypto.createHash,
     });
 
-    const url = await R2.getSignedUrl(command, { expiresIn: 3600 });
+    const request = new HttpRequest({
+      protocol: "https:",
+      method: "PUT",
+      path: `/${R2_BUCKET}/${key}`,
+      headers: { "content-type": contentType },
+      hostname: R2_ENDPOINT.replace("https://", ""),
+    });
+
+    const signed = await presigner.presign(request, { expiresIn: 3600 });
 
     return res.json({
       success: true,
-      uploadUrl: url,
-      fileUrl: `${process.env.R2_PUBLIC_BASE}/${key}`,
+      uploadUrl: formatUrl(signed),
+      fileUrl: `${R2_PUBLIC_BASE}/${key}`,
     });
   } catch (err) {
-    console.error("R2 upload-url error:", err);
+    console.error("[R2] /upload-url error:", err);
     return res.json({ success: false, message: "Failed to generate upload URL" });
   }
 });
 
-/* ------------------------------------------------------------------
-   📚 CREATE BOOK (metadata only)
-   PDF + cover already uploaded to R2
------------------------------------------------------------------- */
+/* ----------------------------------------------------------------------
+   CREATE BOOK (metadata only, files already uploaded)
+---------------------------------------------------------------------- */
 router.post("/create", async (req, res) => {
   try {
     const { title, author, description, free, price, pdfUrl, coverUrl } = req.body;
 
-    if (!title || !pdfUrl || !coverUrl)
-      return res.json({ success: false, message: "Missing fields" });
+    if (!title || !pdfUrl || !coverUrl) {
+      return res.json({
+        success: false,
+        message: "Missing required fields",
+      });
+    }
 
     const isFree = String(free) === "true";
 
@@ -92,40 +119,55 @@ router.post("/create", async (req, res) => {
 
     return res.json({ success: true, data: book });
   } catch (err) {
-    console.error("Create book error:", err);
+    console.error("[Library] POST /create error:", err);
     return res.json({ success: false, message: "Failed to create book" });
   }
 });
 
-/* ------------------------------------------------------------------
-   📘 LIST BOOKS
------------------------------------------------------------------- */
+/* ----------------------------------------------------------------------
+   PUBLIC BOOK LIST
+---------------------------------------------------------------------- */
 router.get("/books", async (_req, res) => {
-  const books = await LibraryBook.find({ isPublished: true }).sort({ createdAt: -1 });
-  res.json({ success: true, data: books });
+  try {
+    const books = await LibraryBook.find({ isPublished: true }).sort({
+      createdAt: -1,
+    });
+    res.json({ success: true, data: books });
+  } catch (err) {
+    res.json({ success: false, message: "Failed to fetch books" });
+  }
 });
 
-/* ------------------------------------------------------------------
-   📘 GET SINGLE BOOK
------------------------------------------------------------------- */
+/* ----------------------------------------------------------------------
+   GET SINGLE BOOK
+---------------------------------------------------------------------- */
 router.get("/books/:id", async (req, res) => {
-  const book = await LibraryBook.findById(req.params.id);
-  if (!book) return res.json({ success: false, message: "Not found" });
-  res.json({ success: true, data: book });
+  try {
+    const book = await LibraryBook.findById(req.params.id);
+    if (!book) return res.json({ success: false, message: "Book not found" });
+    res.json({ success: true, data: book });
+  } catch (err) {
+    res.json({ success: false, message: "Failed to fetch book" });
+  }
 });
 
-/* ------------------------------------------------------------------
-   (KEEP your payment + seat routes untouched)
------------------------------------------------------------------- */
-
-// DELETE BOOK
+/* ----------------------------------------------------------------------
+   DELETE BOOK
+---------------------------------------------------------------------- */
 router.get("/delete/:id", async (req, res) => {
   try {
     await LibraryBook.findByIdAndDelete(req.params.id);
-    res.json({ success: true, message: "Deleted" });
+    return res.json({ success: true, message: "Deleted" });
   } catch (err) {
-    res.json({ success: false, message: "Delete failed" });
+    return res.json({ success: false, message: "Delete failed" });
   }
 });
+
+/* ----------------------------------------------------------------------
+   🔽 KEEP ALL YOUR EXISTING PAYMENT + SEAT LOGIC BELOW AS-IS
+---------------------------------------------------------------------- */
+
+// you copy/paste your payment + seat + approve routes from previous version here
+// (No modification needed)
 
 export default router;
