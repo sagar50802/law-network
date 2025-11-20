@@ -193,28 +193,24 @@ import libraryUserRouter from "./routes/libraryUser.js";
 import libraryAdminRouter from "./routes/libraryAdmin.js";
 
 /* -------------------------------------------------------------------------- */
-/* 📌 Mount Routes (NEW FIXED ORDER!)                                         */
+/* 📌 Mount Routes                                                            */
 /* -------------------------------------------------------------------------- */
 
 /* ---------------------------------------------------------
-   ⭐ 1) MAIN LIBRARY ROUTES FIRST  
-      (upload-url, create, books, delete)
+   1) MAIN LIBRARY ROUTES (public + user)
 --------------------------------------------------------- */
 app.use("/api/library", libraryRouter);
-
-/* ---------------------------------------------------------
-   ⭐ 2) USER LIBRARY ROUTES
---------------------------------------------------------- */
 app.use("/api/library", libraryUserRouter);
 
 /* ---------------------------------------------------------
-   ⭐ 3) ADMIN LIBRARY ROUTES
+   ⭐ 2) ADMIN AUTH FIRST  (so req.user is set)
 --------------------------------------------------------- */
-app.use("/api/admin/library", libraryAdminRouter);
+app.use("/api/admin", adminAuthRoutes);
 
 /* ---------------------------------------------------------
-   ⭐ 4) ADMIN SETTINGS ROUTES
+   ⭐ 3) ADMIN LIBRARY ROUTES (requireAdmin uses req.user)
 --------------------------------------------------------- */
+app.use("/api/admin/library", libraryAdminRouter);
 app.use("/api/admin/library", librarySettingsAdmin);
 
 /* ---------------------------------------------------------
@@ -241,7 +237,6 @@ app.use("/api/admin/live", liveAdmin);
 app.use("/api/classroom", classroomRoutes);
 app.use("/api/classroom-access", classroomAccessRoutes);
 app.use("/api/classroom/media", classroomUploadRoutes);
-app.use("/api/admin", adminAuthRoutes);
 app.use("/api/footer", footerRoutes);
 app.use("/api/terms", termsRoutes);
 
