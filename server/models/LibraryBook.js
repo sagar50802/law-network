@@ -1,4 +1,3 @@
-// models/LibraryBook.js
 import mongoose from "mongoose";
 
 const LibraryBookSchema = new mongoose.Schema(
@@ -10,17 +9,18 @@ const LibraryBookSchema = new mongoose.Schema(
     subject: String,
 
     isPaid: { type: Boolean, default: false },
-    basePrice: { type: Number, default: 0 }, // for reference only
+    basePrice: { type: Number, default: 0 },
 
-    // media
-    coverImage: String,     // URL/path to cover image
-    previewImage: String,   // one-page preview image
-    pdfFile: String,        // secure path to full PDF (no direct public link)
+    /* --------------------------------------------------------
+       MUST MATCH what admin upload & client reader expects
+       -------------------------------------------------------- */
+    coverUrl: String,     // 👈 matches BooksPage.jsx & BookCard.jsx
+    previewImage: String, // optional preview
+    pdfUrl: String,       // 👈 CRITICAL! PDF URL MUST BE STORED HERE
 
-    // reading duration for paid access in hours (e.g. 24, 72, etc.)
     defaultReadingHours: { type: Number, default: 24 },
 
-    isPublished: { type: Boolean, default: true },
+    isPublished: { type: Boolean, default: true }
   },
   { timestamps: true }
 );
