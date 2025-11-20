@@ -28,7 +28,7 @@ async function ensureSettings() {
 }
 
 /* ============================================================
-   ⭐ ADD THIS ROUTE — CREATE BOOK (R2 URLs saved here)
+   ⭐ CREATE BOOK (Admin uploads PDF & Cover via R2)
 ============================================================ */
 router.post("/create", requireAdmin, async (req, res) => {
   try {
@@ -75,9 +75,7 @@ router.post("/create", requireAdmin, async (req, res) => {
 ============================================================ */
 router.get("/payments", requireAdmin, async (req, res) => {
   try {
-    const payments = await PaymentRequest.find({
-      status: "submitted",
-    })
+    const payments = await PaymentRequest.find({ status: "submitted" })
       .sort({ createdAt: -1 })
       .lean();
 
@@ -124,6 +122,7 @@ router.post("/seat/approve/:paymentId", requireAdmin, async (req, res) => {
 
     const now = new Date();
     const totalSeats = 50;
+
     const active = await SeatReservation.find({
       status: "active",
       endsAt: { $gt: now },
