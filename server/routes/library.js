@@ -1,3 +1,4 @@
+// routes/library.js
 import express from "express";
 import LibraryBook from "../models/LibraryBook.js";
 import BookPurchase from "../models/BookPurchase.js";
@@ -37,7 +38,7 @@ const r2 = new S3Client({
 });
 
 /* -------------------------------------------------------------
-   SIGNED URL FOR UPLOAD
+   SIGNED URL FOR UPLOAD  (PUBLIC)
 ------------------------------------------------------------- */
 router.get("/upload-url", async (req, res) => {
   try {
@@ -46,7 +47,9 @@ router.get("/upload-url", async (req, res) => {
       return res.json({ success: false, message: "filename is required" });
 
     const ext = filename.split(".").pop();
-    const safe = `${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+    const safe = `${Date.now()}-${Math.random()
+      .toString(36)
+      .slice(2)}.${ext}`;
     const key = `library/${safe}`;
 
     const command = new PutObjectCommand({
@@ -69,7 +72,7 @@ router.get("/upload-url", async (req, res) => {
 });
 
 /* -------------------------------------------------------------
-   CREATE BOOK METADATA
+   CREATE BOOK  ❌ WRONG PLACE — THIS IS PUBLIC ROUTE
 ------------------------------------------------------------- */
 router.post("/create", requireAdmin, async (req, res) => {
   try {
@@ -106,11 +109,12 @@ router.get("/books", async (_req, res) => {
   const books = await LibraryBook.find({ isPublished: true }).sort({
     createdAt: -1,
   });
+
   res.json({ success: true, data: books });
 });
 
 /* -------------------------------------------------------------
-   GET SINGLE BOOK — FIXED TO RETURN pdfUrl
+   GET SINGLE BOOK with pdfUrl
 ------------------------------------------------------------- */
 router.get("/books/:id", async (req, res) => {
   try {
@@ -128,8 +132,6 @@ router.get("/books/:id", async (req, res) => {
         description: book.description,
         isPaid: book.isPaid,
         price: book.price,
-
-        // REQUIRED BY READER
         pdfUrl: book.pdfUrl,
         coverUrl: book.coverUrl,
       },
@@ -140,7 +142,7 @@ router.get("/books/:id", async (req, res) => {
 });
 
 /* -------------------------------------------------------------
-   DELETE BOOK
+   DELETE BOOK (ADMIN ONLY)
 ------------------------------------------------------------- */
 router.get("/delete/:id", requireAdmin, async (req, res) => {
   try {
