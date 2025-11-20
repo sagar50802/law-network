@@ -28,9 +28,10 @@ async function ensureSettings() {
 }
 
 /* ============================================================
-   ⭐ CREATE BOOK (Admin uploads PDF & Cover via R2)
+   ⭐ ADMIN: CREATE BOOK
+   FINAL URL: POST /api/admin/library/books/create
 ============================================================ */
-router.post("/create", requireAdmin, async (req, res) => {
+router.post("/books/create", requireAdmin, async (req, res) => {
   try {
     const {
       title,
@@ -49,12 +50,14 @@ router.post("/create", requireAdmin, async (req, res) => {
       });
     }
 
+    const isFree = !!free;
+
     const book = await LibraryBook.create({
       title,
       author,
       description,
-      isPaid: !free,
-      basePrice: free ? 0 : price,
+      isPaid: !isFree,
+      basePrice: isFree ? 0 : Number(price) || 0,
       pdfUrl,
       coverUrl,
       isPublished: true,
@@ -71,6 +74,23 @@ router.post("/create", requireAdmin, async (req, res) => {
 });
 
 /* ============================================================
+   ⭐ ADMIN: DELETE BOOK
+   FINAL URL: DELETE /api/admin/library/books/:id
+============================================================ */
+router.delete("/books/:id", requireAdmin, async (req, res) => {
+  try {
+    await LibraryBook.findByIdAndDelete(req.params.id);
+    res.json({ success: true, message: "Deleted" });
+  } catch (err) {
+    console.error("[Admin] DELETE BOOK error:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to delete book",
+    });
+  }
+});
+
+/* ============================================================
    💰 GET /api/admin/library/payments
 ============================================================ */
 router.get("/payments", requireAdmin, async (req, res) => {
@@ -82,7 +102,9 @@ router.get("/payments", requireAdmin, async (req, res) => {
     res.json({ success: true, data: payments });
   } catch (err) {
     console.error("[Admin] GET /payments error:", err);
-    res.status(500).json({ success: false, message: "Failed to load payments" });
+    res
+      .status(500)
+      .json({ success: false, message: "Failed to load payments" });
   }
 });
 
@@ -104,7 +126,9 @@ router.post("/payments/reject/:paymentId", requireAdmin, async (req, res) => {
     res.json({ success: true, message: "Payment rejected" });
   } catch (err) {
     console.error("[Admin] reject error:", err);
-    res.status(500).json({ success: false, message: "Failed to reject payment" });
+    res
+      .status(500)
+      .json({ success: false, message: "Failed to reject payment" });
   }
 });
 
@@ -236,7 +260,9 @@ router.get("/seats", requireAdmin, async (req, res) => {
     res.json({ success: true, data: seats });
   } catch (err) {
     console.error("[Admin] GET /seats error:", err);
-    res.status(500).json({ success: false, message: "Failed to load seats" });
+    res
+      .status(500)
+      .json({ success: false, message: "Failed to load seats" });
   }
 });
 
