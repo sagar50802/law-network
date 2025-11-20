@@ -9,19 +9,17 @@ import LibrarySettings from "../models/LibrarySettings.js";
 const router = express.Router();
 
 /* ============================================================
-   🔐 Admin Middleware (unchanged)
+   🔐 Admin Middleware
 ============================================================ */
 const requireAdmin = (req, res, next) => {
   if (!req.user || !req.user.isAdmin) {
-    return res
-      .status(403)
-      .json({ success: false, message: "Admin only" });
+    return res.status(403).json({ success: false, message: "Admin only" });
   }
   next();
 };
 
 /* ============================================================
-   ⚙ Settings Helper (unchanged)
+   ⚙ Settings Helper
 ============================================================ */
 async function ensureSettings() {
   let settings = await LibrarySettings.findOne();
@@ -30,13 +28,50 @@ async function ensureSettings() {
 }
 
 /* ============================================================
-   ❌ REMOVED: Multer + local disk upload
-   (Admin should now upload via R2 using /api/library/upload-url
-   and then create the book via /api/library/create)
+   ⭐ ADD THIS ROUTE — CREATE BOOK (R2 URLs saved here)
 ============================================================ */
+router.post("/create", requireAdmin, async (req, res) => {
+  try {
+    const {
+      title,
+      author,
+      description,
+      free,
+      price,
+      pdfUrl,
+      coverUrl,
+    } = req.body;
+
+    if (!title || !pdfUrl || !coverUrl) {
+      return res.status(400).json({
+        success: false,
+        message: "title, pdfUrl and coverUrl are required",
+      });
+    }
+
+    const book = await LibraryBook.create({
+      title,
+      author,
+      description,
+      isPaid: !free,
+      basePrice: free ? 0 : price,
+      pdfUrl,
+      coverUrl,
+      isPublished: true,
+    });
+
+    res.json({ success: true, data: book });
+  } catch (err) {
+    console.error("[Admin] CREATE BOOK error:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to create book",
+    });
+  }
+});
 
 /* ============================================================
-   💰 GET /api/admin/library/payments (unchanged)
+   💰 GET /api/admin/library/payments
 ============================================================ */
 router.get("/payments", requireAdmin, async (req, res) => {
   try {
@@ -49,163 +84,145 @@ router.get("/payments", requireAdmin, async (req, res) => {
     res.json({ success: true, data: payments });
   } catch (err) {
     console.error("[Admin] GET /payments error:", err);
-    res
-      .status(500)
-      .json({ success: false, message: "Failed to load payments" });
+    res.status(500).json({ success: false, message: "Failed to load payments" });
   }
 });
 
 /* ============================================================
-   💰 Reject payment (unchanged)
+   💰 Reject payment
 ============================================================ */
-router.post(
-  "/payments/reject/:paymentId",
-  requireAdmin,
-  async (req, res) => {
-    try {
-      const payment = await PaymentRequest.findById(req.params.paymentId);
-      if (!payment) {
-        return res
-          .status(404)
-          .json({ success: false, message: "Payment not found" });
-      }
-
-      payment.status = "rejected";
-      await payment.save();
-
-      res.json({ success: true, message: "Payment rejected" });
-    } catch (err) {
-      console.error("[Admin] reject error:", err);
-      res
-        .status(500)
-        .json({ success: false, message: "Failed to reject payment" });
+router.post("/payments/reject/:paymentId", requireAdmin, async (req, res) => {
+  try {
+    const payment = await PaymentRequest.findById(req.params.paymentId);
+    if (!payment) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Payment not found" });
     }
+
+    payment.status = "rejected";
+    await payment.save();
+
+    res.json({ success: true, message: "Payment rejected" });
+  } catch (err) {
+    console.error("[Admin] reject error:", err);
+    res.status(500).json({ success: false, message: "Failed to reject payment" });
   }
-);
+});
 
 /* ============================================================
-   💺 Seat approval (unchanged)
+   💺 Seat approval
 ============================================================ */
-router.post(
-  "/seat/approve/:paymentId",
-  requireAdmin,
-  async (req, res) => {
-    try {
-      const payment = await PaymentRequest.findById(req.params.paymentId);
-      if (!payment || payment.type !== "seat") {
-        return res
-          .status(404)
-          .json({ success: false, message: "Seat payment not found" });
+router.post("/seat/approve/:paymentId", requireAdmin, async (req, res) => {
+  try {
+    const payment = await PaymentRequest.findById(req.params.paymentId);
+    if (!payment || payment.type !== "seat") {
+      return res
+        .status(404)
+        .json({ success: false, message: "Seat payment not found" });
+    }
+
+    const now = new Date();
+    const totalSeats = 50;
+    const active = await SeatReservation.find({
+      status: "active",
+      endsAt: { $gt: now },
+    }).select("seatNumber");
+
+    const used = new Set(active.map((s) => s.seatNumber));
+    let seatNumber = null;
+
+    for (let i = 1; i <= totalSeats; i++) {
+      if (!used.has(i)) {
+        seatNumber = i;
+        break;
       }
+    }
 
-      const now = new Date();
-      const totalSeats = 50;
-      const active = await SeatReservation.find({
-        status: "active",
-        endsAt: { $gt: now },
-      }).select("seatNumber");
-
-      const used = new Set(active.map((s) => s.seatNumber));
-      let seatNumber = null;
-
-      for (let i = 1; i <= totalSeats; i++) {
-        if (!used.has(i)) {
-          seatNumber = i;
-          break;
-        }
-      }
-
-      if (!seatNumber) {
-        return res.status(400).json({
-          success: false,
-          message: "No seats available",
-        });
-      }
-
-      const durationMinutes = payment.seatDurationMinutes || 60;
-      const endsAt = new Date(now.getTime() + durationMinutes * 60000);
-
-      const reservation = await SeatReservation.create({
-        userId: payment.userId,
-        seatNumber,
-        durationMinutes,
-        startsAt: now,
-        endsAt,
-        status: "active",
-        paymentId: payment._id,
-      });
-
-      payment.status = "approved";
-      await payment.save();
-
-      res.json({ success: true, data: reservation });
-    } catch (err) {
-      console.error("[Admin] approve seat error:", err);
-      res.status(500).json({
+    if (!seatNumber) {
+      return res.status(400).json({
         success: false,
-        message: "Failed to approve seat",
+        message: "No seats available",
       });
     }
+
+    const durationMinutes = payment.seatDurationMinutes || 60;
+    const endsAt = new Date(now.getTime() + durationMinutes * 60000);
+
+    const reservation = await SeatReservation.create({
+      userId: payment.userId,
+      seatNumber,
+      durationMinutes,
+      startsAt: now,
+      endsAt,
+      status: "active",
+      paymentId: payment._id,
+    });
+
+    payment.status = "approved";
+    await payment.save();
+
+    res.json({ success: true, data: reservation });
+  } catch (err) {
+    console.error("[Admin] approve seat error:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to approve seat",
+    });
   }
-);
+});
 
 /* ============================================================
-   📖 Approve Paid Book (unchanged)
+   📖 Approve Paid Book
 ============================================================ */
-router.post(
-  "/book/approve/:paymentId",
-  requireAdmin,
-  async (req, res) => {
-    try {
-      const payment = await PaymentRequest.findById(req.params.paymentId);
-      if (!payment || payment.type !== "book") {
-        return res
-          .status(404)
-          .json({ success: false, message: "Book payment not found" });
-      }
-
-      const book = await LibraryBook.findById(payment.bookId);
-      if (!book) {
-        return res
-          .status(404)
-          .json({ success: false, message: "Book not found" });
-      }
-
-      const settings = await ensureSettings();
-
-      const now = new Date();
-      const readingHours =
-        book.defaultReadingHours || settings.defaultReadingHours || 24;
-
-      const expiresAt = new Date(
-        now.getTime() + readingHours * 60 * 60 * 1000
-      );
-
-      const purchase = await BookPurchase.create({
-        userId: payment.userId,
-        bookId: book._id,
-        readingHours,
-        readingStartsAt: now,
-        readingExpiresAt: expiresAt,
-        status: "active",
-        paymentId: payment._id,
-      });
-
-      payment.status = "approved";
-      await payment.save();
-
-      res.json({ success: true, data: purchase });
-    } catch (err) {
-      console.error("[Admin] approve book error:", err);
-      res
-        .status(500)
-        .json({ success: false, message: "Failed to approve book" });
+router.post("/book/approve/:paymentId", requireAdmin, async (req, res) => {
+  try {
+    const payment = await PaymentRequest.findById(req.params.paymentId);
+    if (!payment || payment.type !== "book") {
+      return res
+        .status(404)
+        .json({ success: false, message: "Book payment not found" });
     }
+
+    const book = await LibraryBook.findById(payment.bookId);
+    if (!book) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Book not found" });
+    }
+
+    const settings = await ensureSettings();
+
+    const now = new Date();
+    const readingHours =
+      book.defaultReadingHours || settings.defaultReadingHours || 24;
+
+    const expiresAt = new Date(now.getTime() + readingHours * 3600000);
+
+    const purchase = await BookPurchase.create({
+      userId: payment.userId,
+      bookId: book._id,
+      readingHours,
+      readingStartsAt: now,
+      readingExpiresAt: expiresAt,
+      status: "active",
+      paymentId: payment._id,
+    });
+
+    payment.status = "approved";
+    await payment.save();
+
+    res.json({ success: true, data: purchase });
+  } catch (err) {
+    console.error("[Admin] approve book error:", err);
+    res
+      .status(500)
+      .json({ success: false, message: "Failed to approve book" });
   }
-);
+});
 
 /* ============================================================
-   💺 List Active Seats (unchanged)
+   💺 List Active Seats
 ============================================================ */
 router.get("/seats", requireAdmin, async (req, res) => {
   try {
@@ -220,14 +237,12 @@ router.get("/seats", requireAdmin, async (req, res) => {
     res.json({ success: true, data: seats });
   } catch (err) {
     console.error("[Admin] GET /seats error:", err);
-    res
-      .status(500)
-      .json({ success: false, message: "Failed to load seats" });
+    res.status(500).json({ success: false, message: "Failed to load seats" });
   }
 });
 
 /* ============================================================
-   📚 List Book Purchases (unchanged)
+   📚 List Book Purchases
 ============================================================ */
 router.get("/book-purchases", requireAdmin, async (req, res) => {
   try {
@@ -247,7 +262,7 @@ router.get("/book-purchases", requireAdmin, async (req, res) => {
 });
 
 /* ============================================================
-   📚 Revoke Access (unchanged)
+   📚 Revoke Access
 ============================================================ */
 router.post(
   "/book-purchases/revoke/:purchaseId",
