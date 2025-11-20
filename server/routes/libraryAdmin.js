@@ -19,7 +19,7 @@ const requireAdmin = (req, res, next) => {
 };
 
 /* ============================================================
-   ⚙ Settings Helper
+   ⚙ Ensure Settings Exists
 ============================================================ */
 async function ensureSettings() {
   let settings = await LibrarySettings.findOne();
@@ -29,9 +29,9 @@ async function ensureSettings() {
 
 /* ============================================================
    ⭐ ADMIN: CREATE BOOK
-   FINAL URL: POST /api/admin/library/books/create
+   POST /api/admin/library/create
 ============================================================ */
-router.post("/books/create", requireAdmin, async (req, res) => {
+router.post("/create", requireAdmin, async (req, res) => {
   try {
     const {
       title,
@@ -50,23 +50,21 @@ router.post("/books/create", requireAdmin, async (req, res) => {
       });
     }
 
-    const isFree = !!free;
-
     const book = await LibraryBook.create({
       title,
       author,
       description,
-      isPaid: !isFree,
-      basePrice: isFree ? 0 : Number(price) || 0,
+      isPaid: !free,
+      basePrice: free ? 0 : Number(price) || 0,
       pdfUrl,
       coverUrl,
       isPublished: true,
     });
 
-    res.json({ success: true, data: book });
+    return res.json({ success: true, data: book });
   } catch (err) {
     console.error("[Admin] CREATE BOOK error:", err);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: "Failed to create book",
     });
@@ -74,74 +72,65 @@ router.post("/books/create", requireAdmin, async (req, res) => {
 });
 
 /* ============================================================
-   ⭐ ADMIN: DELETE BOOK
-   FINAL URL: DELETE /api/admin/library/books/:id
+   💰 ADMIN: LIST PAYMENT REQUESTS
+   GET /api/admin/library/payments
 ============================================================ */
-router.delete("/books/:id", requireAdmin, async (req, res) => {
+router.get("/payments", requireAdmin, async (_req, res) => {
   try {
-    await LibraryBook.findByIdAndDelete(req.params.id);
-    res.json({ success: true, message: "Deleted" });
+    const payments = await PaymentRequest.find({
+      status: "submitted",
+    })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    return res.json({ success: true, data: payments });
   } catch (err) {
-    console.error("[Admin] DELETE BOOK error:", err);
-    res.status(500).json({
+    console.error("[Admin] GET payments error:", err);
+    return res.status(500).json({
       success: false,
-      message: "Failed to delete book",
+      message: "Failed to load payments",
     });
   }
 });
 
 /* ============================================================
-   💰 GET /api/admin/library/payments
-============================================================ */
-router.get("/payments", requireAdmin, async (req, res) => {
-  try {
-    const payments = await PaymentRequest.find({ status: "submitted" })
-      .sort({ createdAt: -1 })
-      .lean();
-
-    res.json({ success: true, data: payments });
-  } catch (err) {
-    console.error("[Admin] GET /payments error:", err);
-    res
-      .status(500)
-      .json({ success: false, message: "Failed to load payments" });
-  }
-});
-
-/* ============================================================
-   💰 Reject payment
+   💰 ADMIN: REJECT PAYMENT
+   POST /api/admin/library/payments/reject/:paymentId
 ============================================================ */
 router.post("/payments/reject/:paymentId", requireAdmin, async (req, res) => {
   try {
     const payment = await PaymentRequest.findById(req.params.paymentId);
-    if (!payment) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Payment not found" });
-    }
+    if (!payment)
+      return res.status(404).json({
+        success: false,
+        message: "Payment not found",
+      });
 
     payment.status = "rejected";
     await payment.save();
 
-    res.json({ success: true, message: "Payment rejected" });
+    return res.json({ success: true, message: "Payment rejected" });
   } catch (err) {
     console.error("[Admin] reject error:", err);
-    res
-      .status(500)
-      .json({ success: false, message: "Failed to reject payment" });
+    return res.status(500).json({
+      success: false,
+      message: "Failed to reject payment",
+    });
   }
 });
 
 /* ============================================================
-   💺 Seat approval
+   💺 ADMIN: APPROVE SEAT PAYMENT
+   POST /api/admin/library/seat/approve/:paymentId
 ============================================================ */
 router.post("/seat/approve/:paymentId", requireAdmin, async (req, res) => {
   try {
     const payment = await PaymentRequest.findById(req.params.paymentId);
     if (!payment || payment.type !== "seat") {
-      return res
-        .status(404)
-        .json({ success: false, message: "Seat payment not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Seat payment not found",
+      });
     }
 
     const now = new Date();
@@ -153,8 +142,8 @@ router.post("/seat/approve/:paymentId", requireAdmin, async (req, res) => {
     }).select("seatNumber");
 
     const used = new Set(active.map((s) => s.seatNumber));
-    let seatNumber = null;
 
+    let seatNumber = null;
     for (let i = 1; i <= totalSeats; i++) {
       if (!used.has(i)) {
         seatNumber = i;
@@ -185,10 +174,10 @@ router.post("/seat/approve/:paymentId", requireAdmin, async (req, res) => {
     payment.status = "approved";
     await payment.save();
 
-    res.json({ success: true, data: reservation });
+    return res.json({ success: true, data: reservation });
   } catch (err) {
     console.error("[Admin] approve seat error:", err);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: "Failed to approve seat",
     });
@@ -196,36 +185,38 @@ router.post("/seat/approve/:paymentId", requireAdmin, async (req, res) => {
 });
 
 /* ============================================================
-   📖 Approve Paid Book
+   📖 ADMIN: APPROVE BOOK PAYMENT
+   POST /api/admin/library/book/approve/:paymentId
 ============================================================ */
 router.post("/book/approve/:paymentId", requireAdmin, async (req, res) => {
   try {
     const payment = await PaymentRequest.findById(req.params.paymentId);
     if (!payment || payment.type !== "book") {
-      return res
-        .status(404)
-        .json({ success: false, message: "Book payment not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Book payment not found",
+      });
     }
 
     const book = await LibraryBook.findById(payment.bookId);
-    if (!book) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Book not found" });
-    }
+    if (!book)
+      return res.status(404).json({
+        success: false,
+        message: "Book not found",
+      });
 
     const settings = await ensureSettings();
 
     const now = new Date();
-    const readingHours =
+    const hours =
       book.defaultReadingHours || settings.defaultReadingHours || 24;
 
-    const expiresAt = new Date(now.getTime() + readingHours * 3600000);
+    const expiresAt = new Date(now.getTime() + hours * 3600000);
 
     const purchase = await BookPurchase.create({
       userId: payment.userId,
       bookId: book._id,
-      readingHours,
+      readingHours: hours,
       readingStartsAt: now,
       readingExpiresAt: expiresAt,
       status: "active",
@@ -235,21 +226,24 @@ router.post("/book/approve/:paymentId", requireAdmin, async (req, res) => {
     payment.status = "approved";
     await payment.save();
 
-    res.json({ success: true, data: purchase });
+    return res.json({ success: true, data: purchase });
   } catch (err) {
     console.error("[Admin] approve book error:", err);
-    res
-      .status(500)
-      .json({ success: false, message: "Failed to approve book" });
+    return res.status(500).json({
+      success: false,
+      message: "Failed to approve book",
+    });
   }
 });
 
 /* ============================================================
-   💺 List Active Seats
+   💺 ADMIN: LIST ACTIVE SEATS
+   GET /api/admin/library/seats
 ============================================================ */
-router.get("/seats", requireAdmin, async (req, res) => {
+router.get("/seats", requireAdmin, async (_req, res) => {
   try {
     const now = new Date();
+
     const seats = await SeatReservation.find({
       status: "active",
       endsAt: { $gt: now },
@@ -257,29 +251,31 @@ router.get("/seats", requireAdmin, async (req, res) => {
       .populate("userId", "name phone email")
       .sort({ seatNumber: 1 });
 
-    res.json({ success: true, data: seats });
+    return res.json({ success: true, data: seats });
   } catch (err) {
-    console.error("[Admin] GET /seats error:", err);
-    res
-      .status(500)
-      .json({ success: false, message: "Failed to load seats" });
+    console.error("[Admin] GET seats error:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to load seats",
+    });
   }
 });
 
 /* ============================================================
-   📚 List Book Purchases
+   📚 ADMIN: LIST BOOK PURCHASES
+   GET /api/admin/library/book-purchases
 ============================================================ */
-router.get("/book-purchases", requireAdmin, async (req, res) => {
+router.get("/book-purchases", requireAdmin, async (_req, res) => {
   try {
     const purchases = await BookPurchase.find({})
       .populate("bookId", "title subject")
       .populate("userId", "name phone email")
       .sort({ createdAt: -1 });
 
-    res.json({ success: true, data: purchases });
+    return res.json({ success: true, data: purchases });
   } catch (err) {
-    console.error("[Admin] GET /book-purchases error:", err);
-    res.status(500).json({
+    console.error("[Admin] GET book purchases error:", err);
+    return res.status(500).json({
       success: false,
       message: "Failed to load book purchases",
     });
@@ -287,7 +283,8 @@ router.get("/book-purchases", requireAdmin, async (req, res) => {
 });
 
 /* ============================================================
-   📚 Revoke Access
+   📚 ADMIN: REVOKE BOOK ACCESS
+   POST /api/admin/library/book-purchases/revoke/:purchaseId
 ============================================================ */
 router.post(
   "/book-purchases/revoke/:purchaseId",
@@ -296,19 +293,23 @@ router.post(
     try {
       const purchase = await BookPurchase.findById(req.params.purchaseId);
       if (!purchase) {
-        return res
-          .status(404)
-          .json({ success: false, message: "Purchase not found" });
+        return res.status(404).json({
+          success: false,
+          message: "Purchase not found",
+        });
       }
 
       purchase.status = "expired";
       purchase.readingExpiresAt = new Date();
       await purchase.save();
 
-      res.json({ success: true, message: "Access revoked" });
+      return res.json({
+        success: true,
+        message: "Access revoked",
+      });
     } catch (err) {
       console.error("[Admin] revoke access error:", err);
-      res.status(500).json({
+      return res.status(500).json({
         success: false,
         message: "Failed to revoke access",
       });
