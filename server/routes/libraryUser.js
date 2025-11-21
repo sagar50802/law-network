@@ -5,9 +5,9 @@ import BookPurchase from "../models/BookPurchase.js";
 import SeatReservation from "../models/SeatReservation.js";
 import PaymentRequest from "../models/PaymentRequest.js";
 import LibrarySettings from "../models/LibrarySettings.js";
-import multer from "multer";
 
-import uploadPayment from "../middlewares/uploadPayment.js"; // ⭐ NEW (AS REQUESTED)
+import multer from "multer";
+import uploadPayment from "../middlewares/uploadPayment.js";
 
 const router = express.Router();
 
@@ -16,26 +16,20 @@ const router = express.Router();
 /* -------------------------------------------------------------------------- */
 const requireAuth = (req, res, next) => {
   if (!req.user) {
-    return res
-      .status(401)
-      .json({ success: false, message: "Unauthorized" });
+    return res.status(401).json({ success: false, message: "Unauthorized" });
   }
   next();
 };
 
-/* -------------------------------------------------------------------------- */
-/* MULTER (legacy for old routes only)                                        */
-/* -------------------------------------------------------------------------- */
+/* legacy screenshot upload */
 const storage = multer.diskStorage({
   destination: "uploads/payments/",
-  filename: (req, file, cb) => {
-    cb(null, Date.now() + "-" + file.originalname);
-  },
+  filename: (req, file, cb) => cb(null, Date.now() + "-" + file.originalname)
 });
 const uploadScreenshot = multer({ storage });
 
 /* -------------------------------------------------------------------------- */
-/* Ensure ONE settings document exists                                        */
+/* Ensure settings exists                                                     */
 /* -------------------------------------------------------------------------- */
 async function ensureSettings() {
   let settings = await LibrarySettings.findOne();
@@ -44,57 +38,17 @@ async function ensureSettings() {
 }
 
 /* -------------------------------------------------------------------------- */
-/* 📚 GET /api/library/books                                                  */
-/* -------------------------------------------------------------------------- */
-router.get("/books", async (req, res) => {
-  try {
-    const books = await LibraryBook.find({ isPublished: true }).sort({
-      createdAt: 1,
-    });
-    res.json({ success: true, data: books });
-  } catch (err) {
-    console.error("[Library] GET /books error:", err);
-    res
-      .status(500)
-      .json({ success: false, message: "Failed to fetch books" });
-  }
-});
-
-/* -------------------------------------------------------------------------- */
-/* 📚 GET /api/library/books/:id                                              */
-/* -------------------------------------------------------------------------- */
-router.get("/books/:id", async (req, res) => {
-  try {
-    const book = await LibraryBook.findById(req.params.id);
-    if (!book || !book.isPublished) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Book not found" });
-    }
-    res.json({ success: true, data: book });
-  } catch (err) {
-    console.error("[Library] GET /books/:id error:", err);
-    res
-      .status(500)
-      .json({ success: false, message: "Failed to fetch book" });
-  }
-});
-
-/* -------------------------------------------------------------------------- */
-/* 💰 GET /api/library/payment/:paymentId                                     */
+/* 🧾 GET /api/library/payment/:paymentId                                     */
 /* -------------------------------------------------------------------------- */
 router.get("/payment/:paymentId", requireAuth, async (req, res) => {
   try {
     const payment = await PaymentRequest.findOne({
       _id: req.params.paymentId,
-      userId: req.user._id,
+      userId: req.user._id
     });
 
-    if (!payment) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Payment not found" });
-    }
+    if (!payment)
+      return res.status(404).json({ success: false, message: "Payment not found" });
 
     res.json({ success: true, data: payment });
   } catch (err) {
@@ -104,7 +58,7 @@ router.get("/payment/:paymentId", requireAuth, async (req, res) => {
 });
 
 /* -------------------------------------------------------------------------- */
-/* 🪑 GET /api/library/seat/status                                            */
+/* 🪑 GET seat status                                                         */
 /* -------------------------------------------------------------------------- */
 router.get("/seat/status", requireAuth, async (req, res) => {
   try {
@@ -112,13 +66,13 @@ router.get("/seat/status", requireAuth, async (req, res) => {
     const seat = await SeatReservation.findOne({
       userId: req.user._id,
       status: "active",
-      endsAt: { $gt: now },
+      endsAt: { $gt: now }
     });
 
     if (!seat) {
       return res.json({
         success: true,
-        data: { hasActiveSeat: false, seatEndsAt: null },
+        data: { hasActiveSeat: false, seatEndsAt: null }
       });
     }
 
@@ -127,28 +81,24 @@ router.get("/seat/status", requireAuth, async (req, res) => {
       data: {
         hasActiveSeat: true,
         seatEndsAt: seat.endsAt,
-        seatNumber: seat.seatNumber,
-      },
+        seatNumber: seat.seatNumber
+      }
     });
   } catch (err) {
     console.error("[Library] GET /seat/status error:", err);
-    res
-      .status(500)
-      .json({ success: false, message: "Failed to fetch seat status" });
+    res.status(500).json({ success: false, message: "Failed to fetch seat status" });
   }
 });
 
 /* -------------------------------------------------------------------------- */
-/* 🧾 POST /api/library/seat/payment-request                                  */
+/* 🪑 CREATE SEAT PAYMENT REQUEST                                             */
 /* -------------------------------------------------------------------------- */
 router.post("/seat/payment-request", requireAuth, async (req, res) => {
   try {
     const { durationMinutes } = req.body;
 
     if (!durationMinutes) {
-      return res
-        .status(400)
-        .json({ success: false, message: "durationMinutes required" });
+      return res.status(400).json({ success: false, message: "durationMinutes required" });
     }
 
     const settings = await ensureSettings();
@@ -159,37 +109,29 @@ router.post("/seat/payment-request", requireAuth, async (req, res) => {
       type: "seat",
       seatDurationMinutes: durationMinutes,
       amount,
-      status: "submitted",
+      status: "submitted"
     });
 
     res.status(201).json({ success: true, data: payment });
   } catch (err) {
     console.error("[Library] Seat payment error:", err);
-    res
-      .status(400)
-      .json({ success: false, message: "Failed to create seat payment" });
+    res.status(400).json({ success: false, message: "Failed to create seat payment" });
   }
 });
 
 /* -------------------------------------------------------------------------- */
-/* 📖 POST /api/library/book/payment-request                                  */
+/* 📖 CREATE BOOK PAYMENT REQUEST                                             */
 /* -------------------------------------------------------------------------- */
 router.post("/book/payment-request", requireAuth, async (req, res) => {
   try {
     const { bookId } = req.body;
 
-    if (!bookId) {
-      return res
-        .status(400)
-        .json({ success: false, message: "bookId required" });
-    }
+    if (!bookId)
+      return res.status(400).json({ success: false, message: "bookId required" });
 
     const book = await LibraryBook.findById(bookId);
-    if (!book || !book.isPublished || !book.isPaid) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Paid book not found" });
-    }
+    if (!book || !book.isPublished || !book.isPaid)
+      return res.status(404).json({ success: false, message: "Paid book not found" });
 
     const amount = book.basePrice || 0;
 
@@ -198,42 +140,35 @@ router.post("/book/payment-request", requireAuth, async (req, res) => {
       type: "book",
       bookId: book._id,
       amount,
-      status: "submitted",
+      status: "submitted"
     });
 
     res.status(201).json({ success: true, data: payment });
   } catch (err) {
     console.error("[Library] Book payment error:", err);
-    res
-      .status(400)
-      .json({ success: false, message: "Failed to create book payment" });
+    res.status(400).json({ success: false, message: "Failed to create book payment" });
   }
 });
 
 /* -------------------------------------------------------------------------- */
-/* ⭐ FINAL UPDATED PAYMENT SUBMIT ROUTE (as you requested)                    */
+/* 🧾 PAYMENT SUBMISSION WITH SCREENSHOT                                      */
 /* -------------------------------------------------------------------------- */
-
 router.post(
   "/payment/:paymentId/submit",
   requireAuth,
-  uploadPayment.single("screenshot"),   // ⭐ NEW MIDDLEWARE
+  uploadPayment.single("screenshot"),
   async (req, res) => {
     try {
       const { name, phone } = req.body;
 
       const payment = await PaymentRequest.findOne({
         _id: req.params.paymentId,
-        userId: req.user._id,
+        userId: req.user._id
       });
 
-      if (!payment) {
-        return res
-          .status(404)
-          .json({ success: false, message: "Payment request not found" });
-      }
+      if (!payment)
+        return res.status(404).json({ success: false, message: "Payment request not found" });
 
-      // screenshot path
       if (req.file) {
         payment.screenshotPath = "/uploads/payments/" + req.file.filename;
       }
@@ -245,36 +180,33 @@ router.post(
 
       const settings = await ensureSettings();
 
-      // Auto-approve logic
-      if (payment.type === "seat" && settings.autoApproveSeat) {
+      if (payment.type === "seat" && settings.autoApproveSeat)
         await autoApproveSeatPayment(payment, settings);
-      } else if (payment.type === "book" && settings.autoApproveBook) {
+
+      if (payment.type === "book" && settings.autoApproveBook)
         await autoApproveBookPayment(payment, settings);
-      }
 
       res.json({ success: true, data: payment });
     } catch (err) {
       console.error("[Payment Submit] error:", err);
-      res
-        .status(400)
-        .json({ success: false, message: "Failed to submit payment" });
+      res.status(400).json({ success: false, message: "Failed to submit payment" });
     }
   }
 );
 
 /* -------------------------------------------------------------------------- */
-/* Auto Approve Seat Payment                                                  */
+/* AUTO APPROVE SEAT                                                          */
 /* -------------------------------------------------------------------------- */
 async function autoApproveSeatPayment(payment, settings) {
   const now = new Date();
   const totalSeats = 50;
 
-  const activeSeats = await SeatReservation.find({
+  const active = await SeatReservation.find({
     status: "active",
-    endsAt: { $gt: now },
+    endsAt: { $gt: now }
   }).select("seatNumber");
 
-  const used = new Set(activeSeats.map((s) => s.seatNumber));
+  const used = new Set(active.map((s) => s.seatNumber));
 
   let seatNumber = null;
   for (let i = 1; i <= totalSeats; i++) {
@@ -296,7 +228,7 @@ async function autoApproveSeatPayment(payment, settings) {
     startsAt: now,
     endsAt,
     status: "active",
-    paymentId: payment._id,
+    paymentId: payment._id
   });
 
   payment.status = "approved";
@@ -304,15 +236,14 @@ async function autoApproveSeatPayment(payment, settings) {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Auto Approve Book Payment                                                  */
+/* AUTO APPROVE BOOK                                                          */
 /* -------------------------------------------------------------------------- */
 async function autoApproveBookPayment(payment, settings) {
   const book = await LibraryBook.findById(payment.bookId);
   if (!book) return;
 
   const now = new Date();
-  const hours =
-    book.defaultReadingHours || settings.defaultReadingHours || 24;
+  const hours = book.defaultReadingHours || settings.defaultReadingHours || 24;
 
   const expiresAt = new Date(now.getTime() + hours * 3600000);
 
@@ -323,7 +254,7 @@ async function autoApproveBookPayment(payment, settings) {
     readingStartsAt: now,
     readingExpiresAt: expiresAt,
     status: "active",
-    paymentId: payment._id,
+    paymentId: payment._id
   });
 
   payment.status = "approved";
@@ -331,7 +262,7 @@ async function autoApproveBookPayment(payment, settings) {
 }
 
 /* -------------------------------------------------------------------------- */
-/* 🧾 GET /api/library/my/purchases                                           */
+/* GET MY ACTIVE PURCHASES                                                    */
 /* -------------------------------------------------------------------------- */
 router.get("/my/purchases", requireAuth, async (req, res) => {
   try {
@@ -340,61 +271,50 @@ router.get("/my/purchases", requireAuth, async (req, res) => {
     const purchases = await BookPurchase.find({
       userId: req.user._id,
       readingExpiresAt: { $gt: now },
-      status: "active",
+      status: "active"
     }).populate("bookId");
 
     res.json({ success: true, data: purchases });
   } catch (err) {
     console.error("[Library] GET /my/purchases error:", err);
-    res
-      .status(500)
-      .json({ success: false, message: "Failed to fetch purchases" });
+    res.status(500).json({ success: false, message: "Failed to fetch purchases" });
   }
 });
 
 /* -------------------------------------------------------------------------- */
-/* 🔐 GET /api/library/books/:bookId/access                                   */
+/* ACCESS CHECK                                                               */
 /* -------------------------------------------------------------------------- */
 router.get("/books/:bookId/access", requireAuth, async (req, res) => {
   try {
     const book = await LibraryBook.findById(req.params.bookId);
 
-    if (!book || !book.isPublished) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Book not found" });
-    }
+    if (!book || !book.isPublished)
+      return res.status(404).json({ success: false, message: "Book not found" });
 
     const now = new Date();
 
-    // Free books do not require seat or purchase
     if (!book.isPaid) {
-      return res.json({
-        success: true,
-        data: { canRead: true, reason: "free" },
-      });
+      return res.json({ success: true, data: { canRead: true, reason: "free" } });
     }
 
-    // Paid book requires active purchase
     const purchase = await BookPurchase.findOne({
       userId: req.user._id,
       bookId: book._id,
       status: "active",
-      readingExpiresAt: { $gt: now },
+      readingExpiresAt: { $gt: now }
     });
 
     if (!purchase) {
       return res.json({
         success: true,
-        data: { canRead: false, reason: "no_active_purchase" },
+        data: { canRead: false, reason: "no_active_purchase" }
       });
     }
 
-    // Paid book ALSO requires seat
     const seat = await SeatReservation.findOne({
       userId: req.user._id,
       status: "active",
-      endsAt: { $gt: now },
+      endsAt: { $gt: now }
     });
 
     if (!seat) {
@@ -403,26 +323,23 @@ router.get("/books/:bookId/access", requireAuth, async (req, res) => {
         data: {
           canRead: false,
           reason: "no_active_seat",
-          purchaseExpiresAt: purchase.readingExpiresAt,
-        },
+          purchaseExpiresAt: purchase.readingExpiresAt
+        }
       });
     }
 
-    // OK
     res.json({
       success: true,
       data: {
         canRead: true,
         reason: "ok",
         seatEndsAt: seat.endsAt,
-        purchaseExpiresAt: purchase.readingExpiresAt,
-      },
+        purchaseExpiresAt: purchase.readingExpiresAt
+      }
     });
   } catch (err) {
     console.error("[Library] GET access error:", err);
-    res
-      .status(500)
-      .json({ success: false, message: "Failed to check access" });
+    res.status(500).json({ success: false, message: "Failed to check access" });
   }
 });
 
