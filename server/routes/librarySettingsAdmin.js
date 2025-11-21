@@ -4,21 +4,29 @@ import LibrarySettings from "../models/LibrarySettings.js";
 const router = express.Router();
 
 /* ============================================================
-   🔐 ADMIN MIDDLEWARE (HEADER-BASED)
-   Works with client header: x-owner-key
+   🔐 ADMIN MIDDLEWARE
+   Accepts:
+   - req.user.isAdmin
+   - OR x-admin-token / x-owner-key header
 ============================================================ */
 const requireAdmin = (req, res, next) => {
-  const headerKey =
-    req.headers["x-owner-key"] || req.headers["x-admin-token"];
+  // cookie/session admin
+  if (req.user && req.user.isAdmin) return next();
 
-  const serverKey =
-    process.env.VITE_OWNER_KEY ||
+  // header admin token
+  const token =
+    req.headers["x-admin-token"] || req.headers["x-owner-key"];
+
+  const expected =
     process.env.ADMIN_PANEL_KEY ||
-    process.env.ADMIN_SHARED_SECRET;
+    process.env.ADMIN_SHARED_SECRET ||
+    process.env.OWNER_KEY ||
+    "";
 
-  if (headerKey && serverKey && headerKey === serverKey) {
-    req.user = req.user || {};
+  if (expected && token && token === expected) {
+    if (!req.user) req.user = {};
     req.user.isAdmin = true;
+    req.user.adminVia = "header";
     return next();
   }
 
@@ -26,47 +34,54 @@ const requireAdmin = (req, res, next) => {
 };
 
 /* ============================================================
-   ⭐ Ensure ONLY ONE settings document exists
+   Ensure settings object exists
 ============================================================ */
 async function ensureSettings() {
-  let settings = await LibrarySettings.findOne();
-  if (!settings) settings = await LibrarySettings.create({});
-  return settings;
+  let s = await LibrarySettings.findOne();
+  if (!s) s = await LibrarySettings.create({});
+  return s;
 }
 
 /* ============================================================
-   📌 GET SETTINGS
+   GET SETTINGS
    GET /api/admin/library/settings
 ============================================================ */
 router.get("/settings", requireAdmin, async (_req, res) => {
   try {
     const settings = await ensureSettings();
-    return res.json({ success: true, data: settings });
+    res.json({ success: true, data: settings });
   } catch (err) {
-    console.error("[Settings] GET error:", err);
-    return res
-      .status(500)
-      .json({ success: false, message: "Failed to load settings" });
+    console.error("GET settings error:", err);
+    res.json({ success: false, message: "Failed to load settings" });
   }
 });
 
 /* ============================================================
-   🛠 UPDATE SETTINGS
+   UPDATE SETTINGS
    PATCH /api/admin/library/settings
 ============================================================ */
 router.patch("/settings", requireAdmin, async (req, res) => {
   try {
     const settings = await ensureSettings();
 
-    Object.assign(settings, req.body || {});
+    const fields = [
+      "seatBasePrice",
+      "seatDurationsMinutes",
+      "defaultReadingHours",
+      "autoApproveSeat",
+      "autoApproveBook",
+    ];
+
+    fields.forEach((f) => {
+      if (req.body[f] !== undefined) settings[f] = req.body[f];
+    });
+
     await settings.save();
 
-    return res.json({ success: true, data: settings });
+    res.json({ success: true, data: settings });
   } catch (err) {
-    console.error("[Settings] PATCH error:", err);
-    return res
-      .status(500)
-      .json({ success: false, message: "Failed to update settings" });
+    console.error("PATCH settings error:", err);
+    res.json({ success: false, message: "Failed to update settings" });
   }
 });
 
