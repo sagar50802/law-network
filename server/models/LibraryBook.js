@@ -11,16 +11,15 @@ const LibraryBookSchema = new mongoose.Schema(
     isPaid: { type: Boolean, default: false },
     basePrice: { type: Number, default: 0 },
 
-    /* --------------------------------------------------------
-       MUST MATCH what admin upload & client reader expects
-       -------------------------------------------------------- */
-    coverUrl: String,     // 👈 matches BooksPage.jsx & BookCard.jsx
+    // media
+    coverUrl: String,     // public cover URL (R2 or uploads)
     previewImage: String, // optional preview
-    pdfUrl: String,       // 👈 CRITICAL! PDF URL MUST BE STORED HERE
+    pdfUrl: String,       // full book PDF (R2/public URL)
 
+    // hours of reading window for paid access
     defaultReadingHours: { type: Number, default: 24 },
 
-    isPublished: { type: Boolean, default: true }
+    isPublished: { type: Boolean, default: true },
   },
   { timestamps: true }
 );
