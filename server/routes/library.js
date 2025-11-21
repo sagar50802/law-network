@@ -1,14 +1,14 @@
-// routes/library.js
 import express from "express";
 import LibraryBook from "../models/LibraryBook.js";
+
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 const router = express.Router();
 
-/* -------------------------------------------------------------
-   R2 CLIENT
-------------------------------------------------------------- */
+/* ============================================================
+   🌩️ R2 CLIENT
+============================================================ */
 const r2 = new S3Client({
   region: "auto",
   endpoint: process.env.R2_ENDPOINT,
@@ -18,10 +18,10 @@ const r2 = new S3Client({
   },
 });
 
-/* -------------------------------------------------------------
-   SIGNED URL FOR DIRECT BROWSER UPLOAD (PUBLIC)
-   GET /api/library/upload-url
-------------------------------------------------------------- */
+/* ============================================================
+   🎯 R2 SIGNED URL GENERATOR
+   GET /api/library/upload-url?filename=..&type=..
+============================================================ */
 router.get("/upload-url", async (req, res) => {
   try {
     const { filename, type } = req.query;
@@ -34,11 +34,11 @@ router.get("/upload-url", async (req, res) => {
     }
 
     const ext = filename.split(".").pop();
-    const safe = `${Date.now()}-${Math.random()
+    const unique = `${Date.now()}-${Math.random()
       .toString(36)
-      .slice(2)}.${ext}`;
+      .substring(2)}.${ext}`;
 
-    const key = `library/${safe}`;
+    const key = `library/${unique}`;
 
     const command = new PutObjectCommand({
       Bucket: process.env.R2_BUCKET,
@@ -46,57 +46,54 @@ router.get("/upload-url", async (req, res) => {
       ContentType: type || "application/octet-stream",
     });
 
-    const uploadUrl = await getSignedUrl(r2, command, { expiresIn: 3600 });
+    const uploadUrl = await getSignedUrl(r2, command, {
+      expiresIn: 3600,
+    });
 
-    res.json({
+    return res.json({
       success: true,
       uploadUrl,
       fileUrl: `${process.env.R2_PUBLIC_BASE}/${key}`,
     });
   } catch (err) {
-    console.error("R2 signed URL error:", err);
-    res.json({
+    console.error("Signed URL error:", err);
+    return res.json({
       success: false,
-      message: "Failed to get upload URL",
+      message: "Failed to generate upload URL",
     });
   }
 });
 
-/* -------------------------------------------------------------
-   PUBLIC: GET ALL PUBLISHED BOOKS
+/* ============================================================
+   📚 PUBLIC: GET ALL PUBLISHED BOOKS
    GET /api/library/books
-------------------------------------------------------------- */
+============================================================ */
 router.get("/books", async (_req, res) => {
   try {
-    const books = await LibraryBook.find({ isPublished: true })
-      .sort({ createdAt: -1 });
-
-    res.json({ success: true, data: books });
-  } catch (err) {
-    console.error("GET /library/books error:", err);
-    res.json({
-      success: false,
-      message: "Failed to fetch books",
+    const books = await LibraryBook.find({ isPublished: true }).sort({
+      createdAt: -1,
     });
+
+    return res.json({ success: true, data: books });
+  } catch (err) {
+    console.error("GET /books error:", err);
+    return res.json({ success: false, message: "Failed to load books" });
   }
 });
 
-/* -------------------------------------------------------------
-   PUBLIC: GET A SINGLE BOOK (with pdfUrl + coverUrl)
+/* ============================================================
+   📘 PUBLIC: GET SINGLE BOOK
    GET /api/library/books/:id
-------------------------------------------------------------- */
+============================================================ */
 router.get("/books/:id", async (req, res) => {
   try {
     const book = await LibraryBook.findById(req.params.id).lean();
 
-    if (!book) {
-      return res.json({
-        success: false,
-        message: "Not found",
-      });
+    if (!book || !book.isPublished) {
+      return res.json({ success: false, message: "Not found" });
     }
 
-    res.json({
+    return res.json({
       success: true,
       data: {
         _id: book._id,
@@ -106,17 +103,14 @@ router.get("/books/:id", async (req, res) => {
         subject: book.subject,
         isPaid: book.isPaid,
         basePrice: book.basePrice,
-        defaultReadingHours: book.defaultReadingHours,
         pdfUrl: book.pdfUrl,
         coverUrl: book.coverUrl,
+        defaultReadingHours: book.defaultReadingHours,
       },
     });
   } catch (err) {
-    console.error("GET /library/books/:id error:", err);
-    res.json({
-      success: false,
-      message: "Failed to get book",
-    });
+    console.error("GET /books/:id error:", err);
+    return res.json({ success: false, message: "Failed to load book" });
   }
 });
 
