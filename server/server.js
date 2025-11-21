@@ -9,7 +9,6 @@ import path from "path";
 import fs from "fs";
 import mongoose from "mongoose";
 import { fileURLToPath } from "url";
-import PrepModule from "./models/PrepModule.js";
 
 /* -------------------------------------------------------------------------- */
 /* 📌 Express Init                                                            */
@@ -17,6 +16,8 @@ import PrepModule from "./models/PrepModule.js";
 const app = express();
 const PORT = process.env.PORT || 5000;
 const HOST = "0.0.0.0";
+
+app.set("trust proxy", 1); // important on Render / behind proxy
 
 /* Resolve Dirname */
 const __filename = fileURLToPath(import.meta.url);
@@ -26,8 +27,7 @@ const __dirname = path.dirname(__filename);
 /* 📌 Allowed Origins                                                         */
 /* -------------------------------------------------------------------------- */
 const CLIENT_URL =
-  process.env.CLIENT_URL ||
-  "https://law-network-client.onrender.com";
+  process.env.CLIENT_URL || "https://law-network-client.onrender.com";
 
 const ALLOWED = new Set([
   CLIENT_URL,
@@ -39,7 +39,7 @@ const ALLOWED = new Set([
 ]);
 
 /* -------------------------------------------------------------------------- */
-/* ✅ Correct Single CORS Handler                                             */
+/* ✅ CORS                                                                    */
 /* -------------------------------------------------------------------------- */
 const corsOptions = {
   origin(origin, cb) {
@@ -59,8 +59,8 @@ const corsOptions = {
     "Content-Type",
     "Authorization",
     "X-Owner-Key",
-    "x-admin-token",
     "x-owner-key",
+    "x-admin-token",
   ],
   exposedHeaders: ["Content-Type", "Content-Length"],
   optionsSuccessStatus: 204,
@@ -112,10 +112,11 @@ app.use(express.json({ limit: "100mb" }));
 app.use(express.urlencoded({ extended: true, limit: "100mb" }));
 
 app.use((req, _res, next) => {
-  if (req.path !== "/favicon.ico")
+  if (req.path !== "/favicon.ico") {
     console.log(
       `[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`
     );
+  }
   next();
 });
 
@@ -196,26 +197,18 @@ import libraryAdminRouter from "./routes/libraryAdmin.js";
 /* 📌 Mount Routes                                                            */
 /* -------------------------------------------------------------------------- */
 
-/* ---------------------------------------------------------
-   1) MAIN LIBRARY ROUTES (public + user)
---------------------------------------------------------- */
+/* 1) Library public + user routes                                            */
 app.use("/api/library", libraryRouter);
 app.use("/api/library", libraryUserRouter);
 
-/* ---------------------------------------------------------
-   ⭐ 2) ADMIN AUTH FIRST  (so req.user is set)
---------------------------------------------------------- */
+/* 2) Admin auth routes (login, etc.)                                         */
 app.use("/api/admin", adminAuthRoutes);
 
-/* ---------------------------------------------------------
-   ⭐ 3) ADMIN LIBRARY ROUTES (requireAdmin uses req.user)
---------------------------------------------------------- */
+/* 3) Admin library routes (now see req.user OR header token)                 */
 app.use("/api/admin/library", libraryAdminRouter);
 app.use("/api/admin/library", librarySettingsAdmin);
 
-/* ---------------------------------------------------------
-   OTHER ROUTES (unchanged)
---------------------------------------------------------- */
+/* Other routes (unchanged)                                                   */
 app.use("/api/articles", articleRoutes);
 app.use("/api/banners", bannerRoutes);
 app.use("/api/consultancy", consultancyRoutes);
@@ -244,7 +237,9 @@ app.use("/api/terms", termsRoutes);
 /* 📌 Health Routes                                                           */
 /* -------------------------------------------------------------------------- */
 app.get("/api/ping", (_req, res) => res.json({ ok: true, ts: Date.now() }));
-app.get("/", (_req, res) => res.json({ ok: true, service: "Law Network API" }));
+app.get("/", (_req, res) =>
+  res.json({ ok: true, service: "Law Network API" })
+);
 
 /* -------------------------------------------------------------------------- */
 /* 📌 Global Errors                                                           */
