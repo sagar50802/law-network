@@ -1,43 +1,35 @@
-const Topic = require("../models/Topic");
-const Unit = require("../models/Unit");
+import Topic from "../models/Topic.js";
 
-exports.createTopic = async (req, res) => {
-  try {
-    const { unitId } = req.params;
-    const { name } = req.body;
+const topicController = {
+  async createTopic(req, res) {
+    try {
+      const topic = await Topic.create({
+        unitId: req.params.unitId,
+        name: req.body.name,
+      });
 
-    if (!name) return res.status(400).json({ message: "Name is required" });
+      res.json({ success: true, topic });
+    } catch (err) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  },
 
-    const unit = await Unit.findById(unitId);
-    if (!unit) return res.status(404).json({ message: "Unit not found" });
+  async toggleLock(req, res) {
+    try {
+      const topicId = req.params.topicId;
+      const { locked } = req.body;
 
-    const topic = await Topic.create({
-      unitId: unit._id,
-      name,
-      locked: false,
-    });
+      const topic = await Topic.findByIdAndUpdate(
+        topicId,
+        { locked },
+        { new: true }
+      );
 
-    res.status(201).json(topic);
-  } catch (err) {
-    console.error("createTopic error", err);
-    res.status(500).json({ message: "Failed to create topic" });
-  }
+      res.json({ success: true, topic });
+    } catch (err) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  },
 };
 
-exports.toggleLock = async (req, res) => {
-  try {
-    const { topicId } = req.params;
-    const { locked } = req.body;
-
-    const topic = await Topic.findById(topicId);
-    if (!topic) return res.status(404).json({ message: "Topic not found" });
-
-    topic.locked = !!locked;
-    await topic.save();
-
-    res.json(topic);
-  } catch (err) {
-    console.error("toggleLock error", err);
-    res.status(500).json({ message: "Failed to toggle lock" });
-  }
-};
+export default topicController;
