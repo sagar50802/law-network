@@ -1,66 +1,69 @@
-import { Router } from "express";
+import express from "express";
 
-import exam from "../controllers/examController.js";
-import unit from "../controllers/unitController.js";
-import topic from "../controllers/topicController.js";
-import subtopic from "../controllers/subtopicController.js";
-import question from "../controllers/questionController.js";
-import student from "../controllers/studentController.js";
+import {
+  createExam,
+  getAllExams,
+  getExamDetail,
+} from "../controllers/examController.js";
 
-const router = Router();
+import {
+  createUnit,
+  deleteUnit,
+  updateUnit,
+} from "../controllers/unitController.js";
 
-/* -----------------------------------------------------------
-   EXAMS
------------------------------------------------------------ */
-router.post("/exams", exam.createExam);
-router.get("/exams", exam.getAllExams);
-router.get("/exams/:examId", exam.getExamDetail);
+import {
+  createTopic,
+  toggleLock,
+  deleteTopic,
+  updateTopic,
+} from "../controllers/topicController.js";
 
-/* -----------------------------------------------------------
-   UNITS
------------------------------------------------------------ */
-router.post("/exams/:examId/units", unit.createUnit);
+import {
+  createSubtopic,
+  deleteSubtopic,
+  updateSubtopic,
+} from "../controllers/subtopicController.js";
 
-// ⭐ NEW — Update Unit
-router.patch("/units/:unitId", unit.updateUnit);
+import {
+  createQuestion,
+  deleteQuestion,
+} from "../controllers/questionController.js";
 
-// ⭐ NEW — Delete Unit
-router.delete("/units/:unitId", unit.deleteUnit);
+import {
+  getDashboard,
+  getLiveQuestion,
+} from "../controllers/studentController.js";
 
-/* -----------------------------------------------------------
-   TOPICS
------------------------------------------------------------ */
-router.post("/units/:unitId/topics", topic.createTopic);
+const router = express.Router();
 
-router.patch("/topics/:topicId/lock", topic.toggleLock);
+// Exam
+router.post("/exams", createExam);
+router.get("/exams", getAllExams);
+router.get("/exams/:examId", getExamDetail);
 
-// ⭐ NEW — Update Topic
-router.patch("/topics/:topicId", topic.updateTopic);
+// Units
+router.post("/exams/:examId/units", createUnit);
+router.delete("/units/:unitId", deleteUnit);
+router.patch("/units/:unitId", updateUnit);
 
-// ⭐ NEW — Delete Topic
-router.delete("/topics/:topicId", topic.deleteTopic);
+// Topics
+router.post("/units/:unitId/topics", createTopic);
+router.patch("/topics/:topicId/lock", toggleLock);
+router.delete("/topics/:topicId", deleteTopic);
+router.patch("/topics/:topicId", updateTopic);
 
-/* -----------------------------------------------------------
-   SUBTOPICS
------------------------------------------------------------ */
-router.post("/topics/:topicId/subtopics", subtopic.createSubtopic);
+// Subtopics
+router.post("/topics/:topicId/subtopics", createSubtopic);
+router.delete("/subtopics/:subtopicId", deleteSubtopic);
+router.patch("/subtopics/:subtopicId", updateSubtopic);
 
-// ⭐ NEW — Update Subtopic
-router.patch("/subtopics/:subtopicId", subtopic.updateSubtopic);
+// Questions
+router.post("/subtopics/:subtopicId/questions", createQuestion);
+router.delete("/questions/:questionId", deleteQuestion);
 
-// ⭐ NEW — Delete Subtopic
-router.delete("/subtopics/:subtopicId", subtopic.deleteSubtopic);
-
-/* -----------------------------------------------------------
-   QUESTIONS
------------------------------------------------------------ */
-router.post("/subtopics/:subtopicId/questions", question.createQuestion);
-router.delete("/questions/:questionId", question.deleteQuestion);
-
-/* -----------------------------------------------------------
-   STUDENT DASHBOARD
------------------------------------------------------------ */
-router.get("/student/:examId/dashboard", student.getDashboard);
-router.get("/student/:examId/live-question", student.getLiveQuestion);
+// Student
+router.get("/student/:examId/dashboard", getDashboard);
+router.get("/student/:examId/live-question", getLiveQuestion);
 
 export default router;
