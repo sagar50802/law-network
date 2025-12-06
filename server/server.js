@@ -17,7 +17,7 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 const HOST = "0.0.0.0";
 
-app.set("trust proxy", 1); // on Render / behind load balancers
+app.set("trust proxy", 1);
 
 /* Resolve Dirname */
 const __filename = fileURLToPath(import.meta.url);
@@ -128,7 +128,7 @@ app.use((req, _res, next) => {
 });
 
 /* -------------------------------------------------------------------------- */
-/* 📌 Ensure Upload folders                                                   */
+/* 📌 Ensure Upload Folders                                                   */
 /* -------------------------------------------------------------------------- */
 [
   "uploads",
@@ -211,7 +211,6 @@ app.use("/api/admin", adminAuthRoutes);
 app.use("/api/admin/library", libraryAdminRouter);
 app.use("/api/admin/library", librarySettingsAdmin);
 
-/* Existing Routes */
 app.use("/api/articles", articleRoutes);
 app.use("/api/banners", bannerRoutes);
 app.use("/api/consultancy", consultancyRoutes);
@@ -236,7 +235,7 @@ app.use("/api/classroom/media", classroomUploadRoutes);
 app.use("/api/footer", footerRoutes);
 app.use("/api/terms", termsRoutes);
 
-/* ⭐ NEW — Answer Writing Feature Routes */
+/* ⭐ NEW — Answer Writing API */
 app.use("/api/answer-writing", answerWritingRoutes);
 
 /* -------------------------------------------------------------------------- */
