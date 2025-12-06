@@ -1,25 +1,19 @@
-const Unit = require("../models/Unit");
-const { findExamByParam } = require("./examController");
+// server/answerWriting/controllers/unitController.js
+import Unit from "../models/Unit.js";
 
-exports.createUnit = async (req, res) => {
-  try {
-    const { examId } = req.params;
-    const { name } = req.body;
+const unitController = {
+  async createUnit(req, res) {
+    try {
+      const unit = await Unit.create({
+        examId: req.params.examId,
+        name: req.body.name,
+      });
 
-    if (!name) return res.status(400).json({ message: "Name is required" });
-
-    const exam = await findExamByParam(examId);
-    if (!exam) return res.status(404).json({ message: "Exam not found" });
-
-    const unit = await Unit.create({
-      examId: exam._id,
-      name,
-      locked: false,
-    });
-
-    res.status(201).json(unit);
-  } catch (err) {
-    console.error("createUnit error", err);
-    res.status(500).json({ message: "Failed to create unit" });
-  }
+      res.json({ success: true, unit });
+    } catch (err) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  },
 };
+
+export default unitController;
