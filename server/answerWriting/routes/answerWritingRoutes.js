@@ -1,11 +1,13 @@
-const router = require("express").Router();
+import { Router } from "express";
 
-const exam = require("../controllers/examController");
-const unit = require("../controllers/unitController");
-const topic = require("../controllers/topicController");
-const subtopic = require("../controllers/subtopicController");
-const question = require("../controllers/questionController");
-const student = require("../controllers/studentController");
+import exam from "../controllers/examController.js";
+import unit from "../controllers/unitController.js";
+import topic from "../controllers/topicController.js";
+import subtopic from "../controllers/subtopicController.js";
+import question from "../controllers/questionController.js";
+import student from "../controllers/studentController.js";
+
+const router = Router();
 
 // Exam
 router.post("/exams", exam.createExam);
@@ -30,4 +32,4 @@ router.delete("/questions/:questionId", question.deleteQuestion);
 router.get("/student/:examId/dashboard", student.getDashboard);
 router.get("/student/:examId/live-question", student.getLiveQuestion);
 
-module.exports = router;
+export default router;
