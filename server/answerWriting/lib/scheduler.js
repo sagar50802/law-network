@@ -1,20 +1,25 @@
-const cron = require("node-cron");
-const Question = require("../models/Question");
+import cron from "node-cron";
+import Question from "../models/Question.js";
 
+// Auto-release scheduler runs every minute
 cron.schedule("* * * * *", async () => {
-  const now = new Date();
+  try {
+    const now = new Date();
 
-  const dueQuestions = await Question.find({
-    isReleased: false,
-    releaseAt: { $lte: now },
-  });
+    const pending = await Question.find({
+      releaseAt: { $lte: now },
+      isReleased: false,
+    });
 
-  for (let q of dueQuestions) {
-    q.isReleased = true;
-    await q.save();
-  }
+    if (pending.length > 0) {
+      for (const q of pending) {
+        q.isReleased = true;
+        await q.save();
+      }
 
-  if (dueQuestions.length > 0) {
-    console.log("Released questions:", dueQuestions.length);
+      console.log(`✅ Auto Released ${pending.length} questions at ${now}`);
+    }
+  } catch (err) {
+    console.error("Scheduler error:", err.message);
   }
 });
