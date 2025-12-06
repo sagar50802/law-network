@@ -17,7 +17,7 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 const HOST = "0.0.0.0";
 
-app.set("trust proxy", 1); // important on Render / behind proxy
+app.set("trust proxy", 1); // on Render / behind load balancers
 
 /* Resolve Dirname */
 const __filename = fileURLToPath(import.meta.url);
@@ -193,22 +193,25 @@ import librarySettingsAdmin from "./routes/librarySettingsAdmin.js";
 import libraryUserRouter from "./routes/libraryUser.js";
 import libraryAdminRouter from "./routes/libraryAdmin.js";
 
+/* ⭐ NEW — Answer Writing Feature */
+import answerWritingRoutes from "./answerWriting/routes/answerWritingRoutes.js";
+
+/* ⭐ NEW — Auto Release Cron Scheduler */
+import "./answerWriting/lib/scheduler.js";
+
 /* -------------------------------------------------------------------------- */
 /* 📌 Mount Routes                                                            */
 /* -------------------------------------------------------------------------- */
 
-/* 1) Library public + user routes                                            */
 app.use("/api/library", libraryRouter);
 app.use("/api/library", libraryUserRouter);
 
-/* 2) Admin auth routes (login, etc.)                                         */
 app.use("/api/admin", adminAuthRoutes);
 
-/* 3) Admin library routes (now see req.user OR header token)                 */
 app.use("/api/admin/library", libraryAdminRouter);
 app.use("/api/admin/library", librarySettingsAdmin);
 
-/* Other routes (unchanged)                                                   */
+/* Existing Routes */
 app.use("/api/articles", articleRoutes);
 app.use("/api/banners", bannerRoutes);
 app.use("/api/consultancy", consultancyRoutes);
@@ -232,6 +235,9 @@ app.use("/api/classroom-access", classroomAccessRoutes);
 app.use("/api/classroom/media", classroomUploadRoutes);
 app.use("/api/footer", footerRoutes);
 app.use("/api/terms", termsRoutes);
+
+/* ⭐ NEW — Answer Writing Feature Routes */
+app.use("/api/answer-writing", answerWritingRoutes);
 
 /* -------------------------------------------------------------------------- */
 /* 📌 Health Routes                                                           */
