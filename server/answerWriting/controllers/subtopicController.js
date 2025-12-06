@@ -1,24 +1,18 @@
-const Subtopic = require("../models/Subtopic");
-const Topic = require("../models/Topic");
+import Subtopic from "../models/Subtopic.js";
 
-exports.createSubtopic = async (req, res) => {
-  try {
-    const { topicId } = req.params;
-    const { name } = req.body;
+const subtopicController = {
+  async createSubtopic(req, res) {
+    try {
+      const sub = await Subtopic.create({
+        topicId: req.params.topicId,
+        name: req.body.name,
+      });
 
-    if (!name) return res.status(400).json({ message: "Name is required" });
-
-    const topic = await Topic.findById(topicId);
-    if (!topic) return res.status(404).json({ message: "Topic not found" });
-
-    const subtopic = await Subtopic.create({
-      topicId: topic._id,
-      name,
-    });
-
-    res.status(201).json(subtopic);
-  } catch (err) {
-    console.error("createSubtopic error", err);
-    res.status(500).json({ message: "Failed to create subtopic" });
-  }
+      res.json({ success: true, subtopic: sub });
+    } catch (err) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  },
 };
+
+export default subtopicController;
