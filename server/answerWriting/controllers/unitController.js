@@ -1,34 +1,33 @@
-// server/answerWriting/controllers/unitController.js
+// server/answerWriting/controllers/topicController.js
 
-import Unit from "../models/Unit.js";
 import Topic from "../models/Topic.js";
 import Subtopic from "../models/Subtopic.js";
 import Question from "../models/Question.js";
 
-const unitController = {
+const topicController = {
   /* ------------------------------------------------------
-     CREATE UNIT
+     CREATE TOPIC
   ------------------------------------------------------ */
-  async createUnit(req, res) {
+  async createTopic(req, res) {
     try {
-      const unit = await Unit.create({
-        examId: req.params.examId,
+      const topic = await Topic.create({
+        unitId: req.params.unitId,
         name: req.body.name,
       });
 
-      res.json({ success: true, unit });
+      res.json({ success: true, topic });
     } catch (err) {
       res.status(500).json({ success: false, message: err.message });
     }
   },
 
   /* ------------------------------------------------------
-     UPDATE UNIT NAME
+     UPDATE TOPIC
   ------------------------------------------------------ */
-  async updateUnit(req, res) {
+  async updateTopic(req, res) {
     try {
-      const updated = await Unit.findByIdAndUpdate(
-        req.params.unitId,
+      const updated = await Topic.findByIdAndUpdate(
+        req.params.topicId,
         { name: req.body.name },
         { new: true }
       );
@@ -36,47 +35,35 @@ const unitController = {
       if (!updated)
         return res
           .status(404)
-          .json({ success: false, message: "Unit not found" });
+          .json({ success: false, message: "Topic not found" });
 
-      res.json({ success: true, unit: updated });
+      res.json({ success: true, topic: updated });
     } catch (err) {
       res.status(500).json({ success: false, message: err.message });
     }
   },
 
   /* ------------------------------------------------------
-     DELETE UNIT + CASCADE DELETE (Topics → Subtopics → Questions)
+     DELETE TOPIC + CASCADE DELETE (Subtopics + Questions)
   ------------------------------------------------------ */
-  async deleteUnit(req, res) {
+  async deleteTopic(req, res) {
     try {
-      const { unitId } = req.params;
+      const { topicId } = req.params;
 
-      // Find Topics under this Unit
-      const topics = await Topic.find({ unitId });
+      const subs = await Subtopic.find({ topicId });
 
-      for (const t of topics) {
-        const subs = await Subtopic.find({ topicId: t._id });
-
-        // Delete all Questions under each Subtopic
-        for (const s of subs) {
-          await Question.deleteMany({ subtopicId: s._id });
-        }
-
-        // Delete Subtopics
-        await Subtopic.deleteMany({ topicId: t._id });
+      for (const s of subs) {
+        await Question.deleteMany({ subtopicId: s._id });
       }
 
-      // Delete Topics under Unit
-      await Topic.deleteMany({ unitId });
+      await Subtopic.deleteMany({ topicId });
+      await Topic.findByIdAndDelete(topicId);
 
-      // Finally delete the Unit
-      await Unit.findByIdAndDelete(unitId);
-
-      res.json({ success: true, message: "Unit deleted successfully" });
+      res.json({ success: true, message: "Topic deleted successfully" });
     } catch (err) {
       res.status(500).json({ success: false, message: err.message });
     }
-  }
+  },
 };
 
-export default unitController;
+export default topicController;
