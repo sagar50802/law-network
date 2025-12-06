@@ -1,21 +1,15 @@
-const mongoose = require("mongoose");
+import mongoose from "mongoose";
 
-const questionSchema = new mongoose.Schema(
+const QuestionSchema = new mongoose.Schema(
   {
-    subtopicId: { type: mongoose.Schema.Types.ObjectId, ref: "Subtopic", required: true },
-
-    hindiText: { type: String },
-    englishText: { type: String },
-
-    releaseAt: { type: Date, required: true },
+    subtopicId: { type: mongoose.Schema.Types.ObjectId, ref: "AnswerWritingSubtopic", required: true },
+    hindiText: String,
+    englishText: String,
+    releaseAt: Date,
     isReleased: { type: Boolean, default: false },
-
-    // Auto mapping
-    topicId: { type: mongoose.Schema.Types.ObjectId, ref: "Topic" },
-    unitId: { type: mongoose.Schema.Types.ObjectId, ref: "Unit" },
-    examId: { type: mongoose.Schema.Types.ObjectId, ref: "Exam" },
   },
   { timestamps: true }
 );
 
-module.exports = mongoose.model("Question", questionSchema);
+const Question = mongoose.model("AnswerWritingQuestion", QuestionSchema);
+export default Question;
