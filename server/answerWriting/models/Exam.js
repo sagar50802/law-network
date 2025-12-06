@@ -1,12 +1,11 @@
-const mongoose = require("mongoose");
+import mongoose from "mongoose";
 
-const examSchema = new mongoose.Schema(
+const ExamSchema = new mongoose.Schema(
   {
-    name: { type: String, required: true, unique: true },
-    // e.g. "bihar-apo", "up-apo"
-    code: { type: String, required: true, unique: true },
+    name: { type: String, required: true },
   },
   { timestamps: true }
 );
 
-module.exports = mongoose.model("Exam", examSchema);
+const Exam = mongoose.model("AnswerWritingExam", ExamSchema);
+export default Exam;
