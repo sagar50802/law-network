@@ -1,74 +1,40 @@
-const Exam = require("../models/Exam");
-const Unit = require("../models/Unit");
+// server/answerWriting/controllers/examController.js
+import Exam from "../models/Exam.js";
+import Unit from "../models/Unit.js";
 
-function toCode(name = "") {
-  return String(name).trim().toLowerCase().replace(/\s+/g, "-");
-}
+const examController = {
+  async createExam(req, res) {
+    try {
+      const exam = await Exam.create({ name: req.body.name });
+      res.json({ success: true, exam });
+    } catch (err) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  },
 
-exports.createExam = async (req, res) => {
-  try {
-    const { name, code } = req.body;
-    if (!name) return res.status(400).json({ message: "Name is required" });
+  async getAllExams(_req, res) {
+    try {
+      const exams = await Exam.find();
+      res.json({ success: true, exams });
+    } catch (err) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  },
 
-    const finalCode = code || toCode(name);
+  async getExamDetail(req, res) {
+    try {
+      const examId = req.params.examId;
 
-    const exam = await Exam.create({ name, code: finalCode });
-    res.status(201).json(exam);
-  } catch (err) {
-    console.error("createExam error", err);
-    res.status(500).json({ message: "Failed to create exam" });
-  }
+      const exam = await Exam.findById(examId);
+      if (!exam) return res.status(404).json({ success: false, message: "Exam not found" });
+
+      const units = await Unit.find({ examId });
+
+      res.json({ success: true, exam, units });
+    } catch (err) {
+      res.status(500).json({ success: false, message: err.message });
+    }
+  },
 };
 
-exports.getAllExams = async (req, res) => {
-  try {
-    const exams = await Exam.find().sort("createdAt").lean();
-
-    const unitCounts = await Unit.aggregate([
-      { $group: { _id: "$examId", count: { $sum: 1 } } },
-    ]);
-
-    const countMap = {};
-    unitCounts.forEach((u) => {
-      countMap[String(u._id)] = u.count;
-    });
-
-    const result = exams.map((e) => ({
-      id: e.code, // important: frontend uses this in URL
-      name: e.name,
-      unitCount: countMap[String(e._id)] || 0,
-    }));
-
-    res.json(result);
-  } catch (err) {
-    console.error("getAllExams error", err);
-    res.status(500).json({ message: "Failed to fetch exams" });
-  }
-};
-
-async function findExamByParam(examId) {
-  if (!examId) return null;
-  // try code first (bihar-apo etc)
-  let exam = await Exam.findOne({ code: examId });
-  if (exam) return exam;
-  // fallback: treat as Mongo _id
-  if (examId.match(/^[0-9a-fA-F]{24}$/)) {
-    exam = await Exam.findById(examId);
-  }
-  return exam;
-}
-
-exports.getExamDetail = async (req, res) => {
-  try {
-    const { examId } = req.params;
-    const exam = await findExamByParam(examId);
-    if (!exam) return res.status(404).json({ message: "Exam not found" });
-    res.json(exam);
-  } catch (err) {
-    console.error("getExamDetail error", err);
-    res.status(500).json({ message: "Failed to fetch exam detail" });
-  }
-};
-
-// Export helper for other controllers
-exports.findExamByParam = findExamByParam;
+export default examController;
