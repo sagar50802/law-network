@@ -1,12 +1,13 @@
-const mongoose = require("mongoose");
+import mongoose from "mongoose";
 
-const topicSchema = new mongoose.Schema(
+const TopicSchema = new mongoose.Schema(
   {
-    unitId: { type: mongoose.Schema.Types.ObjectId, ref: "Unit", required: true },
-    name: { type: String, required: true },
+    unitId: { type: mongoose.Schema.Types.ObjectId, ref: "AnswerWritingUnit", required: true },
+    name: String,
     locked: { type: Boolean, default: false },
   },
   { timestamps: true }
 );
 
-module.exports = mongoose.model("Topic", topicSchema);
+const Topic = mongoose.model("AnswerWritingTopic", TopicSchema);
+export default Topic;
