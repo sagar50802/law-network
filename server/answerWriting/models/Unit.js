@@ -1,12 +1,12 @@
-const mongoose = require("mongoose");
+import mongoose from "mongoose";
 
-const unitSchema = new mongoose.Schema(
+const UnitSchema = new mongoose.Schema(
   {
-    examId: { type: mongoose.Schema.Types.ObjectId, ref: "Exam", required: true },
-    name: { type: String, required: true },
-    locked: { type: Boolean, default: false },
+    examId: { type: mongoose.Schema.Types.ObjectId, ref: "AnswerWritingExam", required: true },
+    name: String,
   },
   { timestamps: true }
 );
 
-module.exports = mongoose.model("Unit", unitSchema);
+const Unit = mongoose.model("AnswerWritingUnit", UnitSchema);
+export default Unit;
