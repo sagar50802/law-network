@@ -1,45 +1,42 @@
 import Subtopic from "../models/Subtopic.js";
-import Question from "../models/Question.js";
+import Topic from "../models/Topic.js";
 
-export async function createSubtopic(req, res) {
+export const createSubtopic = async (req, res) => {
   try {
-    const subtopic = await Subtopic.create({
-      topicId: req.params.topicId,
+    const sub = await Subtopic.create({
+      topic: req.params.topicId,
       name: req.body.name,
     });
 
-    return res.json({ success: true, subtopic });
-  } catch (err) {
-    console.error("createSubtopic error:", err);
-    return res.status(500).json({ success: false, message: err.message });
-  }
-}
+    await Topic.findByIdAndUpdate(req.params.topicId, {
+      $push: { subtopics: sub._id },
+    });
 
-export async function updateSubtopic(req, res) {
+    res.json({ success: true, subtopic: sub });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+export const updateSubtopic = async (req, res) => {
   try {
-    const updated = await Subtopic.findByIdAndUpdate(
+    const sub = await Subtopic.findByIdAndUpdate(
       req.params.subtopicId,
-      req.body,
+      { name: req.body.name },
       { new: true }
     );
 
-    return res.json({ success: true, subtopic: updated });
+    res.json({ success: true, subtopic: sub });
   } catch (err) {
-    console.error("updateSubtopic error:", err);
-    return res.status(500).json({ success: false, message: err.message });
+    res.status(500).json({ success: false, message: err.message });
   }
-}
+};
 
-export async function deleteSubtopic(req, res) {
+export const deleteSubtopic = async (req, res) => {
   try {
-    const { subtopicId } = req.params;
-
-    await Question.deleteMany({ subtopicId });
-    await Subtopic.findByIdAndDelete(subtopicId);
-
-    return res.json({ success: true, message: "Subtopic deleted" });
+    await Subtopic.findByIdAndDelete(req.params.subtopicId);
+    res.json({ success: true });
   } catch (err) {
-    console.error("deleteSubtopic error:", err);
-    return res.status(500).json({ success: false, message: err.message });
+    res.status(500).json({ success: false, message: err.message });
   }
-}
+};
