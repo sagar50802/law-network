@@ -1,56 +1,39 @@
 import Unit from "../models/Unit.js";
-import Topic from "../models/Topic.js";
-import Subtopic from "../models/Subtopic.js";
-import Question from "../models/Question.js";
+import Exam from "../models/Exam.js";
 
-export async function createUnit(req, res) {
+export const createUnit = async (req, res) => {
   try {
-    const unit = await Unit.create({
-      examId: req.params.examId,
-      name: req.body.name,
-    });
+    const { name } = req.body;
+    const { examId } = req.params;
 
-    return res.json({ success: true, unit });
+    const unit = await Unit.create({ name, exam: examId });
+
+    await Exam.findByIdAndUpdate(examId, { $push: { units: unit._id } });
+
+    res.json({ success: true, unit });
   } catch (err) {
-    console.error("createUnit error:", err);
-    return res.status(500).json({ success: false, message: err.message });
+    res.status(500).json({ success: false, message: err.message });
   }
-}
+};
 
-export async function updateUnit(req, res) {
+export const updateUnit = async (req, res) => {
   try {
-    const updated = await Unit.findByIdAndUpdate(req.params.unitId, req.body, {
-      new: true,
-    });
-    return res.json({ success: true, unit: updated });
+    const unit = await Unit.findByIdAndUpdate(
+      req.params.unitId,
+      { name: req.body.name },
+      { new: true }
+    );
+    res.json({ success: true, unit });
   } catch (err) {
-    console.error("updateUnit error:", err);
-    return res.status(500).json({ success: false, message: err.message });
+    res.status(500).json({ success: false, message: err.message });
   }
-}
+};
 
-export async function deleteUnit(req, res) {
+export const deleteUnit = async (req, res) => {
   try {
-    const { unitId } = req.params;
-
-    const topics = await Topic.find({ unitId });
-
-    for (const t of topics) {
-      const subs = await Subtopic.find({ topicId: t._id });
-
-      for (const s of subs) {
-        await Question.deleteMany({ subtopicId: s._id });
-      }
-
-      await Subtopic.deleteMany({ topicId: t._id });
-    }
-
-    await Topic.deleteMany({ unitId });
-    await Unit.findByIdAndDelete(unitId);
-
-    return res.json({ success: true, message: "Unit deleted" });
+    await Unit.findByIdAndDelete(req.params.unitId);
+    res.json({ success: true });
   } catch (err) {
-    console.error("deleteUnit error:", err);
-    return res.status(500).json({ success: false, message: err.message });
+    res.status(500).json({ success: false, message: err.message });
   }
-}
+};
