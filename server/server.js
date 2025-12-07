@@ -28,7 +28,7 @@ const __dirname = path.dirname(__filename);
 /* -------------------------------------------------------------------------- */
 app.use(express.json({ limit: "100mb" }));
 app.use(express.urlencoded({ extended: true, limit: "100mb" }));
-
+app.use(express.text({ type: "*/*" }));
 /* -------------------------------------------------------------------------- */
 /* 📌 Simplified, Safe CORS                                                   */
 /* -------------------------------------------------------------------------- */
