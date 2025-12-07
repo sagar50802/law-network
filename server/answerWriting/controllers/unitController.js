@@ -1,22 +1,23 @@
+// server/answerWriting/controllers/unitController.js
 import Unit from "../models/Unit.js";
 import Topic from "../models/Topic.js";
 import Subtopic from "../models/Subtopic.js";
 import Question from "../models/Question.js";
 
-export const createUnit = async (req, res) => {
+export async function createUnit(req, res) {
   try {
     const unit = await Unit.create({
       examId: req.params.examId,
       name: req.body.name,
     });
 
-    res.json(unit);
+    res.json({ success: true, unit });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    res.status(500).json({ success: false, message: err.message });
   }
-};
+}
 
-export const deleteUnit = async (req, res) => {
+export async function deleteUnit(req, res) {
   try {
     const { unitId } = req.params;
 
@@ -37,20 +38,18 @@ export const deleteUnit = async (req, res) => {
 
     res.json({ success: true, message: "Unit deleted" });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    res.status(500).json({ success: false, message: err.message });
   }
-};
+}
 
-export const updateUnit = async (req, res) => {
+export async function updateUnit(req, res) {
   try {
-    const updated = await Unit.findByIdAndUpdate(
-      req.params.unitId,
-      req.body,
-      { new: true }
-    );
+    const updated = await Unit.findByIdAndUpdate(req.params.unitId, req.body, {
+      new: true,
+    });
 
-    res.json(updated);
+    res.json({ success: true, unit: updated });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    res.status(500).json({ success: false, message: err.message });
   }
-};
+}
