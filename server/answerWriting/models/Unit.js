@@ -2,17 +2,18 @@ import mongoose from "mongoose";
 
 const UnitSchema = new mongoose.Schema(
   {
-    exam: { type: mongoose.Schema.Types.ObjectId, ref: "Exam", required: true },
+    examId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Exam",
+      required: true,
+    },
     name: { type: String, required: true },
-
-    topics: [
-      {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "Topic",
-      },
-    ],
   },
-  { timestamps: true }
+  {
+    timestamps: true,
+    collection: "answer_writing_units",
+  }
 );
 
-export default mongoose.model("Unit", UnitSchema);
+export default mongoose.models.Unit ||
+  mongoose.model("Unit", UnitSchema);
