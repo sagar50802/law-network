@@ -2,18 +2,10 @@ import mongoose from "mongoose";
 
 const SubtopicSchema = new mongoose.Schema(
   {
-    topicId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Topic",
-      required: true,
-    },
     name: { type: String, required: true },
+    topic: { type: mongoose.Schema.Types.ObjectId, ref: "Topic", required: true },
   },
-  {
-    timestamps: true,
-    collection: "answer_writing_subtopics",
-  }
+  { timestamps: true }
 );
 
-export default mongoose.models.Subtopic ||
-  mongoose.model("Subtopic", SubtopicSchema);
+export default mongoose.models.Subtopic || mongoose.model("Subtopic", SubtopicSchema);
