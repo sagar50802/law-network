@@ -1,3 +1,4 @@
+// server/answerWriting/models/Exam.js
 import mongoose from "mongoose";
 
 const examSchema = new mongoose.Schema(
@@ -7,5 +8,4 @@ const examSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// Prevent OverwriteModelError
 export default mongoose.models.Exam || mongoose.model("Exam", examSchema);
