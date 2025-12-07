@@ -1,8 +1,8 @@
+// answerWriting/routes/answerWritingRoutes.js
 import express from "express";
-
 import {
   createExam,
-  getAllExams,
+  getExams,
   getExamDetail,
 } from "../controllers/examController.js";
 
@@ -14,7 +14,6 @@ import {
 
 import {
   createTopic,
-  toggleLock,
   deleteTopic,
   updateTopic,
 } from "../controllers/topicController.js";
@@ -28,42 +27,36 @@ import {
 import {
   createQuestion,
   deleteQuestion,
+  getReleasedQuestions,
 } from "../controllers/questionController.js";
-
-import {
-  getDashboard,
-  getLiveQuestion,
-} from "../controllers/studentController.js";
 
 const router = express.Router();
 
-// Exams
+/* ---------------- EXAMS ---------------- */
 router.post("/exams", createExam);
-router.get("/exams", getAllExams);
+router.get("/exams", getExams);
 router.get("/exams/:examId", getExamDetail);
 
-// Units
-router.post("/exams/:examId/units", createUnit);
-router.patch("/units/:unitId", updateUnit);
+/* ---------------- UNITS ---------------- */
+router.post("/units/:examId", createUnit);
+router.put("/units/:unitId", updateUnit);
 router.delete("/units/:unitId", deleteUnit);
 
-// Topics
-router.post("/units/:unitId/topics", createTopic);
-router.patch("/topics/:topicId", updateTopic);
-router.patch("/topics/:topicId/lock", toggleLock);
+/* ---------------- TOPICS ---------------- */
+router.post("/topics/:unitId", createTopic);
+router.put("/topics/:topicId", updateTopic);
 router.delete("/topics/:topicId", deleteTopic);
 
-// Subtopics
-router.post("/topics/:topicId/subtopics", createSubtopic);
-router.patch("/subtopics/:subtopicId", updateSubtopic);
+/* ---------------- SUBTOPICS ---------------- */
+router.post("/subtopics/:topicId", createSubtopic);
+router.put("/subtopics/:subtopicId", updateSubtopic);
 router.delete("/subtopics/:subtopicId", deleteSubtopic);
 
-// Questions
-router.post("/subtopics/:subtopicId/questions", createQuestion);
+/* ---------------- QUESTIONS ---------------- */
+router.post("/questions/:examId", createQuestion);
 router.delete("/questions/:questionId", deleteQuestion);
 
-// Student
-router.get("/student/:examId/dashboard", getDashboard);
-router.get("/student/:examId/live-question", getLiveQuestion);
+/* ---- Students Only See Released Questions ---- */
+router.get("/released/:examId", getReleasedQuestions);
 
 export default router;
