@@ -1,4 +1,3 @@
-// server/answerWriting/routes/answerWritingRoutes.js
 import express from "express";
 
 import {
@@ -45,25 +44,25 @@ router.get("/exams/:examId", getExamDetail);
 
 // Units
 router.post("/exams/:examId/units", createUnit);
-router.delete("/units/:unitId", deleteUnit);
 router.patch("/units/:unitId", updateUnit);
+router.delete("/units/:unitId", deleteUnit);
 
 // Topics
 router.post("/units/:unitId/topics", createTopic);
+router.patch("/topics/:topicId", updateTopic);
 router.patch("/topics/:topicId/lock", toggleLock);
 router.delete("/topics/:topicId", deleteTopic);
-router.patch("/topics/:topicId", updateTopic);
 
 // Subtopics
 router.post("/topics/:topicId/subtopics", createSubtopic);
-router.delete("/subtopics/:subtopicId", deleteSubtopic);
 router.patch("/subtopics/:subtopicId", updateSubtopic);
+router.delete("/subtopics/:subtopicId", deleteSubtopic);
 
 // Questions
 router.post("/subtopics/:subtopicId/questions", createQuestion);
 router.delete("/questions/:questionId", deleteQuestion);
 
-// Student-facing
+// Student
 router.get("/student/:examId/dashboard", getDashboard);
 router.get("/student/:examId/live-question", getLiveQuestion);
 
