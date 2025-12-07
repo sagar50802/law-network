@@ -1,3 +1,4 @@
+// server/answerWriting/routes/answerWritingRoutes.js
 import express from "express";
 
 import {
@@ -37,7 +38,7 @@ import {
 
 const router = express.Router();
 
-// Exam
+// Exams
 router.post("/exams", createExam);
 router.get("/exams", getAllExams);
 router.get("/exams/:examId", getExamDetail);
@@ -62,7 +63,7 @@ router.patch("/subtopics/:subtopicId", updateSubtopic);
 router.post("/subtopics/:subtopicId/questions", createQuestion);
 router.delete("/questions/:questionId", deleteQuestion);
 
-// Student
+// Student-facing
 router.get("/student/:examId/dashboard", getDashboard);
 router.get("/student/:examId/live-question", getLiveQuestion);
 
