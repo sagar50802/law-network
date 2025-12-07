@@ -2,20 +2,44 @@ import mongoose from "mongoose";
 
 const QuestionSchema = new mongoose.Schema(
   {
-    exam: { type: mongoose.Schema.Types.ObjectId, ref: "Exam", required: true },
+    examId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Exam",
+      required: true,
+    },
+    unitId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Unit",
+      required: true,
+    },
+    topicId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Topic",
+      required: true,
+    },
+    subtopicId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Subtopic",
+      required: true,
+    },
 
-    unit: { type: mongoose.Schema.Types.ObjectId, ref: "Unit", required: true },
-    topic: { type: mongoose.Schema.Types.ObjectId, ref: "Topic", required: true },
-    subtopic: { type: mongoose.Schema.Types.ObjectId, ref: "Subtopic" },
+    // Question text
+    hindiText: { type: String, default: "" },
+    englishText: { type: String, default: "" },
 
-    questionHindi: String,
-    questionEnglish: String,
-    answerHindi: String,
-    answerEnglish: String,
+    // Answers
+    hindiAnswer: { type: String, default: "" },
+    englishAnswer: { type: String, default: "" },
 
-    releaseAt: { type: Date, required: true }, // schedule time
+    // Scheduling
+    releaseAt: { type: Date, required: true },
+    isReleased: { type: Boolean, default: false },
   },
-  { timestamps: true }
+  {
+    timestamps: true,
+    collection: "answer_writing_questions",
+  }
 );
 
-export default mongoose.model("Question", QuestionSchema);
+export default mongoose.models.Question ||
+  mongoose.model("Question", QuestionSchema);
