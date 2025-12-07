@@ -1,56 +1,51 @@
-// server/answerWriting/controllers/questionController.js
 import Question from "../models/Question.js";
-import Subtopic from "../models/Subtopic.js";
-import Topic from "../models/Topic.js";
-import Unit from "../models/Unit.js";
 
-export async function createQuestion(req, res) {
+export const createQuestion = async (req, res) => {
   try {
-    const { subtopicId } = req.params;
-    const {
-      hindiText,
-      englishText,
-      hindiAnswer,
-      englishAnswer,
-      releaseAt,
-    } = req.body;
+    const q = await Question.create({
+      exam: req.params.examId,
+      unit: req.body.unit,
+      topic: req.body.topic,
+      subtopic: req.body.subtopic || null,
 
-    const subtopic = await Subtopic.findById(subtopicId);
-    if (!subtopic) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Subtopic not found" });
-    }
+      questionHindi: req.body.questionHindi,
+      questionEnglish: req.body.questionEnglish,
+      answerHindi: req.body.answerHindi,
+      answerEnglish: req.body.answerEnglish,
 
-    const topic = await Topic.findById(subtopic.topicId);
-    const unit = topic ? await Unit.findById(topic.unitId) : null;
-
-    const question = await Question.create({
-      subtopicId: subtopic._id,
-      topicId: topic?._id,
-      unitId: unit?._id,
-      examId: unit?.examId,
-      hindiText,
-      englishText,
-      hindiAnswer,
-      englishAnswer,
-      releaseAt,
-      isReleased: true,     // 👈 IMPORTANT: make it visible to students
+      releaseAt: req.body.releaseAt, // Date object
     });
 
-    return res.json({ success: true, question });
+    res.json({ success: true, question: q });
   } catch (err) {
-    console.error("createQuestion error:", err);
-    return res.status(500).json({ success: false, message: err.message });
+    res.status(500).json({ success: false, message: err.message });
   }
-}
+};
 
-export async function deleteQuestion(req, res) {
+export const deleteQuestion = async (req, res) => {
   try {
     await Question.findByIdAndDelete(req.params.questionId);
-    return res.json({ success: true });
+    res.json({ success: true });
   } catch (err) {
-    console.error("deleteQuestion error:", err);
-    return res.status(500).json({ success: false, message: err.message });
+    res.status(500).json({ success: false, message: err.message });
   }
-}
+};
+
+/* --------------------- STUDENT SEE ONLY RELEASED --------------------- */
+
+export const getReleasedQuestions = async (req, res) => {
+  try {
+    const now = new Date();
+
+    const questions = await Question.find({
+      exam: req.params.examId,
+      releaseAt: { $lte: now }, // released only
+    })
+      .sort({ releaseAt: 1 })
+      .lean();
+
+    res.json({ success: true, questions });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
