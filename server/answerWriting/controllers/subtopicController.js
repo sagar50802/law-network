@@ -3,14 +3,30 @@ import Question from "../models/Question.js";
 
 export async function createSubtopic(req, res) {
   try {
-    const { topicId } = req.params;
-    const { name } = req.body;
+    const subtopic = await Subtopic.create({
+      topicId: req.params.topicId,
+      name: req.body.name,
+    });
 
-    const subtopic = await Subtopic.create({ topicId, name });
-
-    res.json({ success: true, subtopic });
+    return res.json({ success: true, subtopic });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    console.error("createSubtopic error:", err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+}
+
+export async function updateSubtopic(req, res) {
+  try {
+    const updated = await Subtopic.findByIdAndUpdate(
+      req.params.subtopicId,
+      req.body,
+      { new: true }
+    );
+
+    return res.json({ success: true, subtopic: updated });
+  } catch (err) {
+    console.error("updateSubtopic error:", err);
+    return res.status(500).json({ success: false, message: err.message });
   }
 }
 
@@ -21,17 +37,9 @@ export async function deleteSubtopic(req, res) {
     await Question.deleteMany({ subtopicId });
     await Subtopic.findByIdAndDelete(subtopicId);
 
-    res.json({ success: true });
+    return res.json({ success: true, message: "Subtopic deleted" });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-}
-
-export async function updateSubtopic(req, res) {
-  try {
-    const updated = await Subtopic.findByIdAndUpdate(req.params.subtopicId, req.body, { new: true });
-    res.json({ success: true, subtopic: updated });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    console.error("deleteSubtopic error:", err);
+    return res.status(500).json({ success: false, message: err.message });
   }
 }
