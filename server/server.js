@@ -1,6 +1,6 @@
-/* -------------------------------------------------------------------------- */
-/* ✅ Law Network — Full Production Backend (server.js)                       */
-/* -------------------------------------------------------------------------- */
+/* ----------------------------------------------------------------------------------
+   ✅ Law Network — Clean & Stable Backend (server.js)
+---------------------------------------------------------------------------------- */
 
 import "dotenv/config";
 import express from "express";
@@ -24,105 +24,32 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 /* -------------------------------------------------------------------------- */
-/* 📌 Allowed Origins                                                         */
-/* -------------------------------------------------------------------------- */
-const CLIENT_URL =
-  process.env.CLIENT_URL || "https://law-network-client.onrender.com";
-
-const ALLOWED = new Set([
-  CLIENT_URL,
-  "https://law-network-client.onrender.com",
-  "https://law-network.onrender.com",
-  "https://law-network-api.onrender.com",
-  "http://localhost:5173",
-  "http://localhost:3000",
-]);
-
-/* -------------------------------------------------------------------------- */
-/* ✅ CORS                                                                    */
-/* -------------------------------------------------------------------------- */
-const corsOptions = {
-  origin(origin, cb) {
-    if (!origin) return cb(null, true);
-    if (ALLOWED.has(origin)) return cb(null, true);
-
-    try {
-      const host = new URL(origin).hostname;
-      if (/\.onrender\.com$/.test(host)) return cb(null, true);
-    } catch {}
-
-    return cb(new Error("CORS blocked: " + origin));
-  },
-  credentials: true,
-  methods: "GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD",
-  allowedHeaders: [
-    "Content-Type",
-    "Authorization",
-    "X-Owner-Key",
-    "x-owner-key",
-    "x-admin-token",
-  ],
-  exposedHeaders: ["Content-Type", "Content-Length"],
-  optionsSuccessStatus: 204,
-};
-
-app.use(cors(corsOptions));
-app.options("*", cors(corsOptions));
-
-/* -------------------------------------------------------------------------- */
-/* 📌 Fallback Headers                                                        */
-/* -------------------------------------------------------------------------- */
-app.use((req, res, next) => {
-  const origin = req.headers.origin;
-  let ok = false;
-
-  if (origin) {
-    if (ALLOWED.has(origin)) ok = true;
-    else {
-      try {
-        const host = new URL(origin).hostname;
-        if (/\.onrender\.com$/.test(host)) ok = true;
-      } catch {}
-    }
-  }
-
-  if (ok) {
-    res.header("Access-Control-Allow-Origin", origin);
-    res.header("Vary", "Origin");
-    res.header("Access-Control-Allow-Credentials", "true");
-    res.header(
-      "Access-Control-Allow-Headers",
-      "Content-Type, Authorization, X-Owner-Key, x-owner-key, x-admin-token"
-    );
-    res.header(
-      "Access-Control-Allow-Methods",
-      "GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD"
-    );
-  }
-
-  if (req.method === "OPTIONS") return res.sendStatus(204);
-
-  next();
-});
-
-/* -------------------------------------------------------------------------- */
-/* 📌 Middleware                                                              */
+/* 📌 Body Parser MUST COME BEFORE CORS                                       */
 /* -------------------------------------------------------------------------- */
 app.use(express.json({ limit: "100mb" }));
 app.use(express.urlencoded({ extended: true, limit: "100mb" }));
 
+/* -------------------------------------------------------------------------- */
+/* 📌 Simplified, Safe CORS                                                   */
+/* -------------------------------------------------------------------------- */
+const corsOptions = {
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true);
+    if (origin.includes("onrender.com")) return callback(null, true);
+    if (origin.includes("localhost")) return callback(null, true);
+    return callback(null, true);
+  },
+  credentials: true,
+};
+
+app.use(cors(corsOptions));
+
+/* -------------------------------------------------------------------------- */
+/* 📌 Logger                                                                  */
+/* -------------------------------------------------------------------------- */
 app.use((req, _res, next) => {
   if (req.path !== "/favicon.ico") {
-    console.log(
-      `[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`
-    );
-  }
-  next();
-});
-
-app.use((req, _res, next) => {
-  if (req.url.startsWith("/api/api/")) {
-    req.url = req.url.replace(/^\/api\/api\//, "/api/");
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
   }
   next();
 });
@@ -161,8 +88,9 @@ app.use(
 );
 
 /* -------------------------------------------------------------------------- */
-/* 📌 Import Routes                                                           */
+/* 📌 IMPORT ROUTES                                                           */
 /* -------------------------------------------------------------------------- */
+
 import articleRoutes from "./routes/articles.js";
 import bannerRoutes from "./routes/banners.js";
 import consultancyRoutes from "./routes/consultancy.js";
@@ -189,8 +117,8 @@ import footerRoutes from "./routes/footer.js";
 import termsRoutes from "./routes/terms.js";
 
 import libraryRouter from "./routes/library.js";
-import librarySettingsAdmin from "./routes/librarySettingsAdmin.js";
 import libraryUserRouter from "./routes/libraryUser.js";
+import librarySettingsAdmin from "./routes/librarySettingsAdmin.js";
 import libraryAdminRouter from "./routes/libraryAdmin.js";
 
 /* ⭐ NEW — Answer Writing Feature */
@@ -200,7 +128,7 @@ import answerWritingRoutes from "./answerWriting/routes/answerWritingRoutes.js";
 import "./answerWriting/lib/scheduler.js";
 
 /* -------------------------------------------------------------------------- */
-/* 📌 Mount Routes                                                            */
+/* 📌 MOUNT ROUTES                                                            */
 /* -------------------------------------------------------------------------- */
 
 app.use("/api/library", libraryRouter);
@@ -229,6 +157,7 @@ app.use("/api/plagiarism", plagiarismRoutes);
 app.use("/api/research-drafting", researchDraftingRoutes);
 app.use("/api/live", livePublic);
 app.use("/api/admin/live", liveAdmin);
+
 app.use("/api/classroom", classroomRoutes);
 app.use("/api/classroom-access", classroomAccessRoutes);
 app.use("/api/classroom/media", classroomUploadRoutes);
@@ -239,41 +168,44 @@ app.use("/api/terms", termsRoutes);
 app.use("/api/answer-writing", answerWritingRoutes);
 
 /* -------------------------------------------------------------------------- */
-/* 📌 Health Routes                                                           */
+/* 📌 Health Check                                                            */
 /* -------------------------------------------------------------------------- */
 app.get("/api/ping", (_req, res) => res.json({ ok: true, ts: Date.now() }));
-app.get("/", (_req, res) =>
-  res.json({ ok: true, service: "Law Network API" })
-);
+app.get("/", (_req, res) => res.json({ ok: true, service: "Law Network API" }));
 
 /* -------------------------------------------------------------------------- */
-/* 📌 Global Errors                                                           */
+/* 📌 404 Handler                                                             */
 /* -------------------------------------------------------------------------- */
 app.use((req, res) => {
-  res
-    .status(404)
-    .json({ success: false, message: `Not Found: ${req.method} ${req.url}` });
-});
-
-app.use((err, _req, res, _next) => {
-  console.error("🔥 Error:", err);
-  res
-    .status(500)
-    .json({ success: false, message: err.message || "Server Error" });
+  res.status(404).json({
+    success: false,
+    message: `Not Found: ${req.method} ${req.url}`,
+  });
 });
 
 /* -------------------------------------------------------------------------- */
-/* 📌 MongoDB                                                                 */
+/* 📌 GLOBAL ERROR HANDLER                                                    */
+/* -------------------------------------------------------------------------- */
+app.use((err, req, res, next) => {
+  console.error("🔥 GLOBAL ERROR:", err);
+  res.status(500).json({
+    success: false,
+    message: err.message || "Internal Server Error",
+  });
+});
+
+/* -------------------------------------------------------------------------- */
+/* 📌 MongoDB Connect                                                         */
 /* -------------------------------------------------------------------------- */
 mongoose
   .connect(process.env.MONGO_URI, {
     dbName: process.env.MONGO_DB || undefined,
   })
   .then(() => console.log("✅ MongoDB connected"))
-  .catch((err) => console.error("MongoDB error:", err.message));
+  .catch((err) => console.error("❌ MongoDB Connection Error:", err.message));
 
 /* -------------------------------------------------------------------------- */
-/* 📌 Startup                                                                 */
+/* 📌 Start Server                                                            */
 /* -------------------------------------------------------------------------- */
 const server = app.listen(PORT, HOST, () =>
   console.log(`🚀 API running on http://${HOST}:${PORT}`)
