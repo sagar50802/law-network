@@ -13,5 +13,4 @@ const subtopicSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-const Subtopic = mongoose.model("Subtopic", subtopicSchema);
-export default Subtopic;
+export default mongoose.models.Subtopic || mongoose.model("Subtopic", subtopicSchema);
