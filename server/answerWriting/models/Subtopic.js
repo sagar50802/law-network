@@ -1,12 +1,17 @@
+// server/answerWriting/models/Subtopic.js
 import mongoose from "mongoose";
 
-const SubtopicSchema = new mongoose.Schema(
+const subtopicSchema = new mongoose.Schema(
   {
-    topicId: { type: mongoose.Schema.Types.ObjectId, ref: "AnswerWritingTopic", required: true },
-    name: String,
+    topicId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Topic",
+      required: true,
+    },
+    name: { type: String, required: true },
   },
   { timestamps: true }
 );
 
-const Subtopic = mongoose.model("AnswerWritingSubtopic", SubtopicSchema);
+const Subtopic = mongoose.model("Subtopic", subtopicSchema);
 export default Subtopic;
