@@ -1,22 +1,19 @@
 import mongoose from "mongoose";
 
-const topicSchema = new mongoose.Schema(
+const TopicSchema = new mongoose.Schema(
   {
-    unitId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "AnswerWritingUnit",
-      required: true,
-    },
+    unit: { type: mongoose.Schema.Types.ObjectId, ref: "Unit", required: true },
     name: { type: String, required: true },
     locked: { type: Boolean, default: false },
+
+    subtopics: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Subtopic",
+      },
+    ],
   },
-  {
-    timestamps: true,
-    collection: "answer_writing_topics",
-  }
+  { timestamps: true }
 );
 
-export default (
-  mongoose.models.AnswerWritingTopic ||
-  mongoose.model("AnswerWritingTopic", topicSchema)
-);
+export default mongoose.model("Topic", TopicSchema);
