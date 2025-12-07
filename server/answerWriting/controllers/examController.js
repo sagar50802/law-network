@@ -1,40 +1,79 @@
-// server/answerWriting/controllers/examController.js
 import Exam from "../models/Exam.js";
 import Unit from "../models/Unit.js";
+import Topic from "../models/Topic.js";
+import Subtopic from "../models/Subtopic.js";
+import Question from "../models/Question.js";
 
-export async function createExam(req, res) {
+/* ---------------------------------------------------------
+   CREATE EXAM
+--------------------------------------------------------- */
+export const createExam = async (req, res) => {
   try {
-    const exam = await Exam.create({ name: req.body.name });
-    res.json({ success: true, exam });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-}
+    const { name } = req.body;
 
-export async function getAllExams(_req, res) {
-  try {
-    const exams = await Exam.find().sort({ createdAt: 1 });
-    res.json({ success: true, exams });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-}
-
-export async function getExamDetail(req, res) {
-  try {
-    const examId = req.params.examId;
-
-    const exam = await Exam.findById(examId);
-    if (!exam) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Exam not found" });
+    if (!name) {
+      return res.status(400).json({ message: "Exam name is required" });
     }
 
-    const units = await Unit.find({ examId }).sort({ createdAt: 1 });
+    const exam = await Exam.create({ name });
 
-    res.json({ success: true, exam, units });
+    res.json({
+      message: "Exam created successfully",
+      exam,
+    });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    console.error("❌ createExam error:", err);
+    res.status(500).json({ message: "Server error", error: err.message });
   }
-}
+};
+
+/* ---------------------------------------------------------
+   GET ALL EXAMS
+--------------------------------------------------------- */
+export const getAllExams = async (_req, res) => {
+  try {
+    const exams = await Exam.find().sort({ createdAt: -1 });
+
+    res.json({ exams });
+  } catch (err) {
+    console.error("❌ getAllExams error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+/* ---------------------------------------------------------
+   GET FULL EXAM DETAIL (UNITS → TOPICS → SUBTOPICS → QUESTIONS)
+--------------------------------------------------------- */
+export const getExamDetail = async (req, res) => {
+  try {
+    const { examId } = req.params;
+
+    const exam = await Exam.findById(examId);
+    if (!exam) return res.status(404).json({ message: "Exam not found" });
+
+    const units = await Unit.find({ examId });
+
+    const topics = await Topic.find({
+      unitId: { $in: units.map((u) => u._id) },
+    });
+
+    const subtopics = await Subtopic.find({
+      topicId: { $in: topics.map((t) => t._id) },
+    });
+
+    const questions = await Question.find({
+      subtopicId: { $in: subtopics.map((s) => s._id) },
+    });
+
+    res.json({
+      exam,
+      units,
+      topics,
+      subtopics,
+      questions,
+    });
+  } catch (err) {
+    console.error("❌ getExamDetail error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
