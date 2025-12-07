@@ -1,21 +1,22 @@
+// server/answerWriting/controllers/topicController.js
 import Topic from "../models/Topic.js";
 import Subtopic from "../models/Subtopic.js";
 import Question from "../models/Question.js";
 
-export const createTopic = async (req, res) => {
+export async function createTopic(req, res) {
   try {
     const topic = await Topic.create({
       unitId: req.params.unitId,
       name: req.body.name,
     });
 
-    res.json(topic);
+    res.json({ success: true, topic });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    res.status(500).json({ success: false, message: err.message });
   }
-};
+}
 
-export const toggleLock = async (req, res) => {
+export async function toggleLock(req, res) {
   try {
     const updated = await Topic.findByIdAndUpdate(
       req.params.topicId,
@@ -23,13 +24,13 @@ export const toggleLock = async (req, res) => {
       { new: true }
     );
 
-    res.json(updated);
+    res.json({ success: true, topic: updated });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    res.status(500).json({ success: false, message: err.message });
   }
-};
+}
 
-export const deleteTopic = async (req, res) => {
+export async function deleteTopic(req, res) {
   try {
     const { topicId } = req.params;
 
@@ -44,11 +45,11 @@ export const deleteTopic = async (req, res) => {
 
     res.json({ success: true, message: "Topic deleted" });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    res.status(500).json({ success: false, message: err.message });
   }
-};
+}
 
-export const updateTopic = async (req, res) => {
+export async function updateTopic(req, res) {
   try {
     const updated = await Topic.findByIdAndUpdate(
       req.params.topicId,
@@ -56,8 +57,8 @@ export const updateTopic = async (req, res) => {
       { new: true }
     );
 
-    res.json(updated);
+    res.json({ success: true, topic: updated });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    res.status(500).json({ success: false, message: err.message });
   }
-};
+}
