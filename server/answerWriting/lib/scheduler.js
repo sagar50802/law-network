@@ -1,7 +1,7 @@
+// server/answerWriting/lib/scheduler.js
 import cron from "node-cron";
 import Question from "../models/Question.js";
 
-// Auto-release scheduler runs every minute
 cron.schedule("* * * * *", async () => {
   try {
     const now = new Date();
