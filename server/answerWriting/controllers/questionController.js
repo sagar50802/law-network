@@ -1,3 +1,4 @@
+// server/answerWriting/controllers/questionController.js
 import Question from "../models/Question.js";
 import Subtopic from "../models/Subtopic.js";
 import Topic from "../models/Topic.js";
@@ -34,7 +35,7 @@ export async function createQuestion(req, res) {
       hindiAnswer,
       englishAnswer,
       releaseAt,
-      isReleased: false,
+      isReleased: true,     // 👈 IMPORTANT: make it visible to students
     });
 
     return res.json({ success: true, question });
