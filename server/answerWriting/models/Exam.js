@@ -1,11 +1,12 @@
+// server/answerWriting/models/Exam.js
 import mongoose from "mongoose";
 
-const ExamSchema = new mongoose.Schema(
+const examSchema = new mongoose.Schema(
   {
-    name: { type: String, required: true },
+    name: { type: String, required: true, unique: true },
   },
   { timestamps: true }
 );
 
-const Exam = mongoose.model("AnswerWritingExam", ExamSchema);
+const Exam = mongoose.model("Exam", examSchema);
 export default Exam;
