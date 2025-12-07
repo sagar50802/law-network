@@ -1,20 +1,21 @@
+// server/answerWriting/controllers/subtopicController.js
 import Subtopic from "../models/Subtopic.js";
 import Question from "../models/Question.js";
 
-export const createSubtopic = async (req, res) => {
+export async function createSubtopic(req, res) {
   try {
     const subtopic = await Subtopic.create({
       topicId: req.params.topicId,
       name: req.body.name,
     });
 
-    res.json(subtopic);
+    res.json({ success: true, subtopic });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    res.status(500).json({ success: false, message: err.message });
   }
-};
+}
 
-export const deleteSubtopic = async (req, res) => {
+export async function deleteSubtopic(req, res) {
   try {
     const { subtopicId } = req.params;
 
@@ -23,11 +24,11 @@ export const deleteSubtopic = async (req, res) => {
 
     res.json({ success: true, message: "Subtopic deleted" });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    res.status(500).json({ success: false, message: err.message });
   }
-};
+}
 
-export const updateSubtopic = async (req, res) => {
+export async function updateSubtopic(req, res) {
   try {
     const updated = await Subtopic.findByIdAndUpdate(
       req.params.subtopicId,
@@ -35,8 +36,8 @@ export const updateSubtopic = async (req, res) => {
       { new: true }
     );
 
-    res.json(updated);
+    res.json({ success: true, subtopic: updated });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    res.status(500).json({ success: false, message: err.message });
   }
-};
+}
