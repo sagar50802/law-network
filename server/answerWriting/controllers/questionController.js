@@ -1,4 +1,3 @@
-// server/answerWriting/controllers/questionController.js
 import Question from "../models/Question.js";
 import Subtopic from "../models/Subtopic.js";
 import Topic from "../models/Topic.js";
@@ -10,24 +9,20 @@ export async function createQuestion(req, res) {
     const { hindiText, englishText, releaseAt } = req.body;
 
     const subtopic = await Subtopic.findById(subtopicId);
-    if (!subtopic) {
-      return res
-        .status(404)
-        .json({ success: false, message: "Subtopic not found" });
-    }
+    if (!subtopic) return res.status(404).json({ message: "Subtopic not found" });
 
     const topic = await Topic.findById(subtopic.topicId);
-    const unit = topic ? await Unit.findById(topic.unitId) : null;
+    const unit = await Unit.findById(topic.unitId);
 
     const question = await Question.create({
-      subtopicId: subtopic._id,
-      topicId: topic?._id,
-      unitId: unit?._id,
-      examId: unit?.examId,
+      subtopicId,
+      topicId: topic._id,
+      unitId: unit._id,
+      examId: unit.examId,
       hindiText,
       englishText,
       releaseAt,
-      isReleased: false,
+      isReleased: false
     });
 
     res.json({ success: true, question });
