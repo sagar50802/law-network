@@ -1,9 +1,11 @@
 import mongoose from "mongoose";
 
-const ExamSchema = new mongoose.Schema({
-  name: { type: String, required: true },
-  createdAt: { type: Date, default: Date.now },
-});
+const examSchema = new mongoose.Schema(
+  {
+    name: { type: String, required: true },
+  },
+  { timestamps: true }
+);
 
-// FIX ⬇️ Prevent model overwrite error
-export default mongoose.models.Exam || mongoose.model("Exam", ExamSchema);
+// Prevent OverwriteModelError
+export default mongoose.models.Exam || mongoose.model("Exam", examSchema);
