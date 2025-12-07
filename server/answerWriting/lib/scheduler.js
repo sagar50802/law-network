@@ -1,25 +1,25 @@
-// server/answerWriting/lib/scheduler.js
-import cron from "node-cron";
 import Question from "../models/Question.js";
 
-cron.schedule("* * * * *", async () => {
+const INTERVAL_MS = 60 * 1000; // every 1 minute
+
+async function releaseDueQuestions() {
+  const now = new Date();
   try {
-    const now = new Date();
+    const res = await Question.updateMany(
+      { isReleased: false, releaseAt: { $lte: now } },
+      { $set: { isReleased: true } }
+    );
 
-    const pending = await Question.find({
-      releaseAt: { $lte: now },
-      isReleased: false,
-    });
-
-    if (pending.length > 0) {
-      for (const q of pending) {
-        q.isReleased = true;
-        await q.save();
-      }
-
-      console.log(`✅ Auto Released ${pending.length} questions at ${now}`);
+    if (res.modifiedCount) {
+      console.log(
+        `[AnswerWriting] Released ${res.modifiedCount} questions at ${now.toISOString()}`
+      );
     }
   } catch (err) {
-    console.error("Scheduler error:", err.message);
+    console.error("[AnswerWriting] Scheduler error:", err.message);
   }
-});
+}
+
+// run once on startup + every minute
+releaseDueQuestions();
+setInterval(releaseDueQuestions, INTERVAL_MS);
