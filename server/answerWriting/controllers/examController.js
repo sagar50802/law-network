@@ -1,3 +1,4 @@
+// server/answerWriting/controllers/examController.js
 import Exam from "../models/Exam.js";
 import Unit from "../models/Unit.js";
 import Topic from "../models/Topic.js";
@@ -11,13 +12,15 @@ export const createExam = async (req, res) => {
   try {
     const { name } = req.body;
 
-    if (!name) return res.status(400).json({ message: "Exam name is required" });
-
     const exam = await Exam.create({ name });
 
-    res.json({ message: "Exam created successfully", exam });
+    return res.json({
+      success: true,
+      exam,
+    });
   } catch (err) {
-    res.status(500).json({ message: "Server error", error: err.message });
+    console.error("createExam error:", err);
+    return res.status(500).json({ success: false, message: err.message });
   }
 };
 
@@ -27,46 +30,68 @@ export const createExam = async (req, res) => {
 export const getAllExams = async (_req, res) => {
   try {
     const exams = await Exam.find().sort({ createdAt: -1 });
-    res.json({ exams });
+    return res.json({ success: true, exams });
   } catch (err) {
-    res.status(500).json({ message: "Server error" });
+    return res.status(500).json({ success: false, message: err.message });
   }
 };
 
 /* ---------------------------------------------------------
-   GET FULL EXAM DETAIL (Nested Tree)
+   GET FULL EXAM DETAIL (FULL TREE)
 --------------------------------------------------------- */
 export const getExamDetail = async (req, res) => {
   try {
     const { examId } = req.params;
 
     const exam = await Exam.findById(examId);
-    if (!exam) return res.status(404).json({ message: "Exam not found" });
+    if (!exam) {
+      return res.status(404).json({ success: false, message: "Exam not found" });
+    }
 
     const units = await Unit.find({ examId });
-    const topics = await Topic.find({ unitId: { $in: units.map(u => u._id) } });
-    const subtopics = await Subtopic.find({ topicId: { $in: topics.map(t => t._id) } });
-    const questions = await Question.find({ subtopicId: { $in: subtopics.map(s => s._id) } });
 
+    const topics = await Topic.find({
+      unitId: { $in: units.map(u => u._id) },
+    });
+
+    const subtopics = await Subtopic.find({
+      topicId: { $in: topics.map(t => t._id) },
+    });
+
+    const questions = await Question.find({
+      subtopicId: { $in: subtopics.map(s => s._id) },
+    });
+
+    // -------------------------------------------
     // BUILD NESTED TREE
-    const nestedUnits = units.map(unit => ({
+    // -------------------------------------------
+    const unitsNested = units.map(unit => ({
       ...unit.toObject(),
       topics: topics
-        .filter(t => String(t.unitId) === String(unit._id))
+        .filter(t => t.unitId.toString() === unit._id.toString())
         .map(topic => ({
           ...topic.toObject(),
           subtopics: subtopics
-            .filter(s => String(s.topicId) === String(topic._id))
-            .map(st => ({
-              ...st.toObject(),
-              questions: questions.filter(q => String(q.subtopicId) === String(st._id))
-            }))
-        }))
+            .filter(s => s.topicId.toString() === topic._id.toString())
+            .map(sub => ({
+              ...sub.toObject(),
+              questions: questions.filter(
+                q => q.subtopicId.toString() === sub._id.toString()
+              ),
+            })),
+        })),
     }));
 
-    res.json({ exam, units: nestedUnits });
+    return res.json({
+      success: true,
+      exam: {
+        ...exam.toObject(),
+        units: unitsNested,
+      },
+    });
+
   } catch (err) {
-    console.error("❌ getExamDetail error:", err);
-    res.status(500).json({ message: "Server error" });
+    console.error("getExamDetail error:", err);
+    res.status(500).json({ success: false, message: err.message });
   }
 };
