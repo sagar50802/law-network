@@ -3,7 +3,10 @@ import mongoose from "mongoose";
 
 const questionSchema = new mongoose.Schema(
   {
-    examId: { type: mongoose.Schema.Types.ObjectId, ref: "Exam" },
+    examId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "AnswerWritingExam",   // <--- UPDATED
+    },
     unitId: { type: mongoose.Schema.Types.ObjectId, ref: "Unit" },
     topicId: { type: mongoose.Schema.Types.ObjectId, ref: "Topic" },
     subtopicId: {
@@ -21,4 +24,7 @@ const questionSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-export default mongoose.models.Question || mongoose.model("Question", questionSchema);
+export default (
+  mongoose.models.AnswerWritingQuestion ||
+  mongoose.model("AnswerWritingQuestion", questionSchema)
+);
