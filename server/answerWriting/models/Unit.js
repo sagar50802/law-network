@@ -1,21 +1,18 @@
 import mongoose from "mongoose";
 
-const unitSchema = new mongoose.Schema(
+const UnitSchema = new mongoose.Schema(
   {
-    examId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "AnswerWritingExam",
-      required: true,
-    },
+    exam: { type: mongoose.Schema.Types.ObjectId, ref: "Exam", required: true },
     name: { type: String, required: true },
+
+    topics: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Topic",
+      },
+    ],
   },
-  {
-    timestamps: true,
-    collection: "answer_writing_units",
-  }
+  { timestamps: true }
 );
 
-export default (
-  mongoose.models.AnswerWritingUnit ||
-  mongoose.model("AnswerWritingUnit", unitSchema)
-);
+export default mongoose.model("Unit", UnitSchema);
