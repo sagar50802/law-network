@@ -14,5 +14,5 @@ const topicSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-const Topic = mongoose.model("Topic", topicSchema);
-export default Topic;
+// SAFE EXPORT
+export default mongoose.models.Topic || mongoose.model("Topic", topicSchema);
