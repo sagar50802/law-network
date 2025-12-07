@@ -1,17 +1,17 @@
 import mongoose from "mongoose";
 
-const examSchema = new mongoose.Schema(
+const ExamSchema = new mongoose.Schema(
   {
     name: { type: String, required: true },
+
+    units: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Unit",
+      },
+    ],
   },
-  {
-    timestamps: true,
-    collection: "answer_writing_exams",
-  }
+  { timestamps: true }
 );
 
-// model name is unique → no clash with other Exam models
-export default (
-  mongoose.models.AnswerWritingExam ||
-  mongoose.model("AnswerWritingExam", examSchema)
-);
+export default mongoose.model("Exam", ExamSchema);
