@@ -1,27 +1,43 @@
-// server/answerWriting/models/Question.js
 import mongoose from "mongoose";
 
 const questionSchema = new mongoose.Schema(
   {
     examId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "AnswerWritingExam",   // <--- UPDATED
+      ref: "AnswerWritingExam",
+      required: true,
     },
-    unitId: { type: mongoose.Schema.Types.ObjectId, ref: "Unit" },
-    topicId: { type: mongoose.Schema.Types.ObjectId, ref: "Topic" },
+    unitId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "AnswerWritingUnit",
+      required: true,
+    },
+    topicId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "AnswerWritingTopic",
+      required: true,
+    },
     subtopicId: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: "Subtopic",
+      ref: "AnswerWritingSubtopic",
       required: true,
     },
 
-    hindiText: { type: String },
-    englishText: { type: String },
+    // Question text
+    hindiText: { type: String, default: "" },
+    englishText: { type: String, default: "" },
+
+    // Answer text (for “tap to show answer”)
+    hindiAnswer: { type: String, default: "" },
+    englishAnswer: { type: String, default: "" },
 
     releaseAt: { type: Date, required: true },
     isReleased: { type: Boolean, default: false },
   },
-  { timestamps: true }
+  {
+    timestamps: true,
+    collection: "answer_writing_questions",
+  }
 );
 
 export default (
