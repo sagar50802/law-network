@@ -5,7 +5,14 @@ const examSchema = new mongoose.Schema(
   {
     name: { type: String, required: true },
   },
-  { timestamps: true }
+  {
+    timestamps: true,
+    collection: "answer_writing_exams", // optional but nice & clear
+  }
 );
 
-export default mongoose.models.Exam || mongoose.model("Exam", examSchema);
+// IMPORTANT: use a NEW model name so it doesn't clash with your old "Exam"
+export default (
+  mongoose.models.AnswerWritingExam ||
+  mongoose.model("AnswerWritingExam", examSchema)
+);
