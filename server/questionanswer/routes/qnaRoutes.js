@@ -1,48 +1,66 @@
-import express from "express";
-const router = express.Router();
-
-// Controllers
-import qnaExamController from "../controllers/qnaExamController.js";
-import qnaQuestionController from "../controllers/qnaQuestionController.js";
-import qnaRecommendationController from "../controllers/qnaRecommendationController.js";
-import adminController from "../controllers/adminController.js";
-
-// Middlewares
-import {
-  validateSyllabusNavigation,
+/* ----------------------------------------------------------------------------------
+   ✅ QnA Routes (Answer Writing & Reading System)
+---------------------------------------------------------------------------------- */
+import express from 'express';
+import { 
+  validateSyllabusNavigation, 
   checkContentAccess,
   trackProgress,
-  preventDirectAccess
-} from "../middlewares/validateAccess.js";
+  preventDirectAccess 
+} from '../middlewares/validateAccess.js';
 
-// Public routes
-router.get("/exams", qnaExamController.getExams);
-router.get("/syllabus/:examId", qnaExamController.getSyllabusTree);
-router.get("/progress/:examId", qnaExamController.getExamProgress);
+const router = express.Router();
 
-// Question routes
-router.get(
-  "/questions/:questionId",
+// Import controllers
+import { getExams, getSyllabusTree, validateNavigation, getExamProgress } from '../controllers/qnaExamController.js';
+import { getQuestion, saveProgress, getUserProgress } from '../controllers/qnaQuestionController.js';
+import { getRecommendations, recordUserAction } from '../controllers/qnaRecommendationController.js';
+import { 
+  createExam, 
+  createSyllabusNode, 
+  createQuestion, 
+  scheduleQuestion, 
+  getScheduledQuestions, 
+  getAnalytics 
+} from '../controllers/adminController.js';
+
+/* -------------------------------------------------------------------------- */
+/* 📌 Public Routes (no auth required for basic access)                      */
+/* -------------------------------------------------------------------------- */
+router.get('/exams', getExams);
+router.get('/syllabus/:examId', getSyllabusTree);
+router.get('/progress/:examId', getExamProgress);
+
+/* -------------------------------------------------------------------------- */
+/* 📌 Question Routes with Access Control                                    */
+/* -------------------------------------------------------------------------- */
+router.get('/questions/:questionId', 
   preventDirectAccess,
   checkContentAccess,
   trackProgress,
-  qnaQuestionController.getQuestion
+  getQuestion
 );
 
-// Progress
-router.post("/progress/:questionId", qnaQuestionController.saveProgress);
-router.get("/user/progress", qnaQuestionController.getUserProgress);
+/* -------------------------------------------------------------------------- */
+/* 📌 Progress Tracking Routes (require auth)                                */
+/* -------------------------------------------------------------------------- */
+router.post('/progress/:questionId', saveProgress);
+router.get('/user/progress', getUserProgress);
 
-// Recommendations
-router.get("/recommendations", qnaRecommendationController.getRecommendations);
-router.post("/recommendations/action", qnaRecommendationController.recordUserAction);
+/* -------------------------------------------------------------------------- */
+/* 📌 Recommendation Routes                                                  */
+/* -------------------------------------------------------------------------- */
+router.get('/recommendations', getRecommendations);
+router.post('/recommendations/action', recordUserAction);
 
-// Admin routes
-router.post("/admin/exams", adminController.createExam);
-router.post("/admin/syllabus", adminController.createSyllabusNode);
-router.post("/admin/questions", adminController.createQuestion);
-router.post("/admin/questions/:questionId/schedule", adminController.scheduleQuestion);
-router.get("/admin/scheduled", adminController.getScheduledQuestions);
-router.get("/admin/analytics", adminController.getAnalytics);
+/* -------------------------------------------------------------------------- */
+/* 📌 Admin Routes (protected by admin middleware)                           */
+/* -------------------------------------------------------------------------- */
+router.post('/admin/exams', createExam);
+router.post('/admin/syllabus', createSyllabusNode);
+router.post('/admin/questions', createQuestion);
+router.post('/admin/questions/:questionId/schedule', scheduleQuestion);
+router.get('/admin/scheduled', getScheduledQuestions);
+router.get('/admin/analytics', getAnalytics);
 
 export default router;
