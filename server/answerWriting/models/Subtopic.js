@@ -2,8 +2,9 @@ import mongoose from "mongoose";
 
 const subtopicSchema = new mongoose.Schema(
   {
-    topicId: { type: mongoose.Schema.Types.ObjectId, ref: "Topic", required: true },
-    name: { type: String, required: true, trim: true },
+    name: { type: String, required: true },
+    topic: { type: mongoose.Schema.Types.ObjectId, ref: "Topic", required: true },
+    questions: [{ type: mongoose.Schema.Types.ObjectId, ref: "Question" }]
   },
   { timestamps: true }
 );
