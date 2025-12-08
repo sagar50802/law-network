@@ -102,4 +102,4 @@ questionSchema.pre('save', function(next) {
   next();
 });
 
-module.exports = mongoose.model('Question', questionSchema);
+export default mongoose.model('Exam', examSchema);
