@@ -1,16 +1,18 @@
 import mongoose from "mongoose";
 
-const ExamSchema = new mongoose.Schema(
+const examSchema = new mongoose.Schema(
   {
-    name: {
-      type: String,
-      required: true,
-      trim: true,
-    },
+    name: { type: String, required: true },
+
+    // IMPORTANT — this MUST exist
+    units: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Unit",
+      },
+    ],
   },
   { timestamps: true }
 );
 
-//  IMPORTANT: Prevent OverwriteModelError on Render
-export default mongoose.models.AnswerWritingExam ||
-  mongoose.model("AnswerWritingExam", ExamSchema);
+export default mongoose.models.Exam || mongoose.model("Exam", examSchema);
