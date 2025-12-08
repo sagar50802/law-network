@@ -126,7 +126,8 @@ import libraryAdminRouter from "./routes/libraryAdmin.js";
 /* -------------------------------------------------------------------------- */
 /* 📌 IMPORT QnA ROUTES (Answer Writing & Reading System)                    */
 /* -------------------------------------------------------------------------- */
- import qnaRoutes from "./questionanswer/routes/qnaRoutes.js";
+  import qnaRoutes from "./questionanswer/routes/qnaRoutes.js";
+
 /* -------------------------------------------------------------------------- */
 /* 📌 MOUNT ROUTES                                                            */
 /* -------------------------------------------------------------------------- */
@@ -212,21 +213,24 @@ app.use((err, req, res, next) => {
 /* -------------------------------------------------------------------------- */
 const initializeQnAServices = async () => {
   try {
-    // Import services
-    const { initializeScheduler } = await import("./services/questionanswer/scheduler.js");
-    const { initializeTopicGraph } = await import("./services/questionanswer/recommendationService.js");
-    
+    console.log(" Initializing QnA services...");
+
+    // Load scheduler + recommendation service dynamically
+    const schedulerModule = await import("./services/questionanswer/scheduler.js");
+    const recommendationModule = await import("./services/questionanswer/recommendationService.js");
+
     // Initialize scheduler
-    await initializeScheduler();
-    console.log("✅ QnA Scheduler initialized");
-    
-    // Initialize recommendation service
-    await initializeTopicGraph();
-    console.log("✅ QnA Recommendation Service initialized");
+    await schedulerModule.initializeScheduler();
+    console.log(" QnA Scheduler initialized");
+
+    // Initialize recommendation graph
+    await recommendationModule.initializeTopicGraph();
+    console.log(" QnA Recommendation Service initialized");
   } catch (error) {
-    console.error("⚠️ QnA Services initialization failed (non-critical):", error.message);
+    console.error(" QnA Services initialization failed (non-critical):", error.message);
   }
 };
+
 
 /* -------------------------------------------------------------------------- */
 /* 📌 MongoDB Connect                                                         */
