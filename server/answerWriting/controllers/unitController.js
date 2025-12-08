@@ -1,14 +1,19 @@
-import Unit from "../models/Unit.js";
-import Exam from "../models/Exam.js";
+import Unit from "../answerWriting/models/Unit.js";
+import Exam from "../answerWriting/models/Exam.js";
 
 export const createUnit = async (req, res) => {
   try {
     const { name } = req.body;
-    const { examId } = req.params;
 
-    const unit = await Unit.create({ name, exam: examId });
+    const unit = await Unit.create({
+      name,
+      exam: req.params.examId,
+      topics: [],
+    });
 
-    await Exam.findByIdAndUpdate(examId, { $push: { units: unit._id } });
+    await Exam.findByIdAndUpdate(req.params.examId, {
+      $push: { units: unit._id },
+    });
 
     res.json({ success: true, unit });
   } catch (err) {
@@ -23,6 +28,7 @@ export const updateUnit = async (req, res) => {
       { name: req.body.name },
       { new: true }
     );
+
     res.json({ success: true, unit });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
