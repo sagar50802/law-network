@@ -1,19 +1,76 @@
+// server/answerWriting/models/Question.js
 import mongoose from "mongoose";
 
-const QuestionSchema = new mongoose.Schema(
+const { Schema } = mongoose;
+
+const QuestionSchema = new Schema(
   {
-    topic: { type: mongoose.Schema.Types.ObjectId, ref: "Topic" },
-    subtopic: { type: mongoose.Schema.Types.ObjectId, ref: "Subtopic" },
+    examId: {
+      type: Schema.Types.ObjectId,
+      ref: "AnswerWritingExam",
+      required: true,
+    },
+    unitId: {
+      type: Schema.Types.ObjectId,
+      ref: "AnswerWritingUnit",
+      required: true,
+    },
+    topicId: {
+      type: Schema.Types.ObjectId,
+      ref: "AnswerWritingTopic",
+      required: true,
+    },
+    // optional – if you create questions directly under topic,
+    // leave subtopicId null
+    subtopicId: {
+      type: Schema.Types.ObjectId,
+      ref: "AnswerWritingSubtopic",
+      default: null,
+    },
 
-    questionHindi: String,
-    questionEnglish: String,
-    answerHindi: String,
-    answerEnglish: String,
+    // BILINGUAL QUESTION
+    questionHindi: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    questionEnglish: {
+      type: String,
+      required: true,
+      trim: true,
+    },
 
-    releaseDate: Date,
-    released: { type: Boolean, default: false },
+    // BILINGUAL ANSWER
+    answerHindi: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    answerEnglish: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+
+    // release scheduling
+    releaseAt: {
+      type: Date,
+      required: true,
+    },
+
+    // set true by scheduler / when released
+    isPublished: {
+      type: Boolean,
+      default: false,
+    },
   },
-  { timestamps: true }
+  {
+    timestamps: true,
+  }
 );
 
-export default mongoose.models.Question || mongoose.model("Question", QuestionSchema);
+const Question =
+  mongoose.models.AnswerWritingQuestion ||
+  mongoose.model("AnswerWritingQuestion", QuestionSchema);
+
+export default Question;
