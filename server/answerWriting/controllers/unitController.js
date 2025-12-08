@@ -1,5 +1,5 @@
-import Unit from "../answerWriting/models/Unit.js";
-import Exam from "../answerWriting/models/Exam.js";
+ import Unit from "../models/Unit.js";
+import Exam from "../models/Exam.js";
 
 export const createUnit = async (req, res) => {
   try {
