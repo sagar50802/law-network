@@ -51,4 +51,4 @@ subtopicSchema.virtual('questions', {
   foreignField: 'subtopicId'
 });
 
-module.exports = mongoose.model('Subtopic', subtopicSchema);
+export default mongoose.model('Exam', examSchema);
