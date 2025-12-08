@@ -1,6 +1,5 @@
-import Topic from "../answerWriting/models/Topic.js";
-import Unit from "../answerWriting/models/Unit.js";
-
+import Topic from "../models/Topic.js";
+import Unit from "../models/Unit.js";
 export const createTopic = async (req, res) => {
   try {
     const topic = await Topic.create({
