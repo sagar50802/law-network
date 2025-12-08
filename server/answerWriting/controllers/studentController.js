@@ -1,17 +1,17 @@
-import Question from "../models/Question.js";
+import Question from "../answerWriting/models/Question.js";
 
-export async function getDashboard(req, res) {
+export const getDashboard = async (req, res) => {
   try {
     const examId = req.params.examId;
 
     const totalReleased = await Question.countDocuments({
-      examId,
-      isReleased: true,
+      exam: examId,
+      releaseTime: { $lte: new Date() },
     });
 
-    const totalQuestions = await Question.countDocuments({ examId });
+    const totalQuestions = await Question.countDocuments({ exam: examId });
 
-    return res.json({
+    res.json({
       success: true,
       progress: {
         totalReleased,
@@ -19,25 +19,23 @@ export async function getDashboard(req, res) {
       },
     });
   } catch (err) {
-    console.error("getDashboard error:", err);
-    return res.status(500).json({ success: false, message: err.message });
+    res.status(500).json({ success: false, message: err.message });
   }
-}
+};
 
-export async function getLiveQuestion(req, res) {
+export const getLiveQuestion = async (req, res) => {
   try {
     const examId = req.params.examId;
 
     const q = await Question.findOne({
-      examId,
-      isReleased: true,
+      exam: examId,
+      releaseTime: { $lte: new Date() },
     })
-      .sort({ releaseAt: -1 })
+      .sort({ releaseTime: -1 })
       .limit(1);
 
-    return res.json({ success: true, question: q || null });
+    res.json({ success: true, question: q || null });
   } catch (err) {
-    console.error("getLiveQuestion error:", err);
-    return res.status(500).json({ success: false, message: err.message });
+    res.status(500).json({ success: false, message: err.message });
   }
-}
+};
