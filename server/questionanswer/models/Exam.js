@@ -41,4 +41,4 @@ examSchema.pre('save', function(next) {
   next();
 });
 
-module.exports = mongoose.model('Exam', examSchema);
+ export default mongoose.model('Exam', examSchema);
