@@ -2,15 +2,7 @@ import mongoose from "mongoose";
 
 const examSchema = new mongoose.Schema(
   {
-    name: { type: String, required: true },
-
-    // IMPORTANT — this MUST exist
-    units: [
-      {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: "Unit",
-      },
-    ],
+    name: { type: String, required: true, trim: true },
   },
   { timestamps: true }
 );
