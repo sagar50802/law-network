@@ -1,68 +1,16 @@
-const mongoose = require('mongoose');
+import mongoose from "mongoose";
 
-const progressSchema = new mongoose.Schema({
-  userId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
-  },
-  examId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Exam'
-  },
-  unitId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Unit'
-  },
-  topicId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Topic'
-  },
-  subtopicId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Subtopic'
-  },
-  completedQuestions: [{
-    questionId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Question'
-    },
-    completedAt: {
-      type: Date,
-      default: Date.now
-    },
-    timeSpent: Number, // in seconds
-    accuracy: Number
-  }],
-  currentQuestion: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Question'
-  },
-  streak: {
-    type: Number,
-    default: 0
-  },
-  lastActive: {
-    type: Date,
-    default: Date.now
-  },
-  totalTimeSpent: {
-    type: Number,
-    default: 0
-  },
-  createdAt: {
-    type: Date,
-    default: Date.now
-  },
-  updatedAt: {
-    type: Date,
-    default: Date.now
-  }
+const ProgressSchema = new mongoose.Schema({
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+  questionId: { type: mongoose.Schema.Types.ObjectId, ref: "Question", required: true },
+
+  lastViewedAt: { type: Date, default: Date.now },
+  isCompleted: { type: Boolean, default: false },
+  score: { type: Number, default: null },
+
+  createdAt: { type: Date, default: Date.now },
 });
 
-progressSchema.pre('save', function(next) {
-  this.updatedAt = Date.now();
-  next();
-});
+const Progress = mongoose.model("Progress", ProgressSchema);
 
-export default mongoose.model('Exam', examSchema);
+export default Progress;
