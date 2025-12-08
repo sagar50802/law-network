@@ -1,6 +1,5 @@
 /* ----------------------------------------------------------------------------------
    ✅ Law Network — Clean & Stable Backend (server.js)
-   ✅ Added: Answer Writing & Reading System
 ---------------------------------------------------------------------------------- */
 
 import "dotenv/config";
@@ -30,6 +29,7 @@ const __dirname = path.dirname(__filename);
 app.use(express.json({ limit: "100mb" }));
 app.use(express.urlencoded({ extended: true, limit: "100mb" }));
 app.use(express.text({ type: "*/*" }));
+
 /* -------------------------------------------------------------------------- */
 /* 📌 Simplified, Safe CORS                                                   */
 /* -------------------------------------------------------------------------- */
@@ -70,7 +70,7 @@ app.use((req, _res, next) => {
   "uploads/testseries",
   "uploads/classroom",
   "uploads/library",
-  "uploads/qna", // ✅ Added for Answer Writing System
+  "uploads/questionanswer", // ✅ Add QnA uploads folder
 ].forEach((rel) => {
   const full = path.join(__dirname, rel);
   if (!fs.existsSync(full)) fs.mkdirSync(full, { recursive: true });
@@ -93,7 +93,6 @@ app.use(
 /* 📌 IMPORT ROUTES                                                           */
 /* -------------------------------------------------------------------------- */
 
-// ✅ Existing Routes
 import articleRoutes from "./routes/articles.js";
 import bannerRoutes from "./routes/banners.js";
 import consultancyRoutes from "./routes/consultancy.js";
@@ -124,15 +123,13 @@ import libraryUserRouter from "./routes/libraryUser.js";
 import librarySettingsAdmin from "./routes/librarySettingsAdmin.js";
 import libraryAdminRouter from "./routes/libraryAdmin.js";
 
-// ✅ NEW: Answer Writing & Reading System Routes
-import qnaRoutes from "./routes/qnaRoutes.js";
-import qnaAdminRoutes from "./routes/qnaAdminRoutes.js";
+// ✅ IMPORT QnA ROUTES
+import qnaRoutes from "./questionanswer/routes/qnaRoutes.js";
 
 /* -------------------------------------------------------------------------- */
 /* 📌 MOUNT ROUTES                                                            */
 /* -------------------------------------------------------------------------- */
 
-// ✅ Existing Routes
 app.use("/api/library", libraryRouter);
 app.use("/api/library", libraryUserRouter);
 
@@ -166,26 +163,14 @@ app.use("/api/classroom/media", classroomUploadRoutes);
 app.use("/api/footer", footerRoutes);
 app.use("/api/terms", termsRoutes);
 
-// ✅ NEW: Answer Writing & Reading System Routes
-app.use("/api/qna", qnaRoutes);          // Student routes
-app.use("/api/admin/qna", qnaAdminRoutes); // Admin routes
+// ✅ MOUNT QnA ROUTES
+app.use("/api/qna", qnaRoutes);
 
 /* -------------------------------------------------------------------------- */
 /* 📌 Health Check                                                            */
 /* -------------------------------------------------------------------------- */
 app.get("/api/ping", (_req, res) => res.json({ ok: true, ts: Date.now() }));
-app.get("/", (_req, res) => res.json({ 
-  ok: true, 
-  service: "Law Network API",
-  features: [
-    "Articles & News",
-    "Video & Podcast Library",
-    "Classroom Management",
-    "Test Series",
-    "Research & Drafting",
-    "✅ Answer Writing & Reading System (New)"
-  ]
-}));
+app.get("/", (_req, res) => res.json({ ok: true, service: "Law Network API" }));
 
 /* -------------------------------------------------------------------------- */
 /* 📌 404 Handler                                                             */
@@ -215,19 +200,7 @@ mongoose
   .connect(process.env.MONGO_URI, {
     dbName: process.env.MONGO_DB || undefined,
   })
-  .then(() => {
-    console.log("✅ MongoDB connected");
-    
-    // ✅ Initialize QnA Scheduler if needed
-    import("./services/qnaScheduler.js")
-      .then(module => {
-        if (module.default) {
-          module.default.start();
-          console.log("✅ QnA Scheduler initialized");
-        }
-      })
-      .catch(err => console.log("ℹ️ QnA Scheduler not loaded:", err.message));
-  })
+  .then(() => console.log("✅ MongoDB connected"))
   .catch((err) => console.error("❌ MongoDB Connection Error:", err.message));
 
 /* -------------------------------------------------------------------------- */
@@ -237,12 +210,5 @@ const server = app.listen(PORT, HOST, () =>
   console.log(`🚀 API running on http://${HOST}:${PORT}`)
 );
 
-process.on("SIGTERM", () => {
-  console.log("🛑 SIGTERM received. Shutting down gracefully...");
-  server.close();
-});
-
-process.on("SIGINT", () => {
-  console.log("🛑 SIGINT received. Shutting down gracefully...");
-  server.close();
-});
+process.on("SIGTERM", () => server.close());
+process.on("SIGINT", () => server.close());
