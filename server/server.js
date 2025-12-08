@@ -1,5 +1,6 @@
 /* ----------------------------------------------------------------------------------
    ✅ Law Network — Clean & Stable Backend (server.js)
+   ✅ Added: Answer Writing & Reading System
 ---------------------------------------------------------------------------------- */
 
 import "dotenv/config";
@@ -69,6 +70,7 @@ app.use((req, _res, next) => {
   "uploads/testseries",
   "uploads/classroom",
   "uploads/library",
+  "uploads/qna", // ✅ Added for Answer Writing System
 ].forEach((rel) => {
   const full = path.join(__dirname, rel);
   if (!fs.existsSync(full)) fs.mkdirSync(full, { recursive: true });
@@ -91,6 +93,7 @@ app.use(
 /* 📌 IMPORT ROUTES                                                           */
 /* -------------------------------------------------------------------------- */
 
+// ✅ Existing Routes
 import articleRoutes from "./routes/articles.js";
 import bannerRoutes from "./routes/banners.js";
 import consultancyRoutes from "./routes/consultancy.js";
@@ -120,16 +123,16 @@ import libraryRouter from "./routes/library.js";
 import libraryUserRouter from "./routes/libraryUser.js";
 import librarySettingsAdmin from "./routes/librarySettingsAdmin.js";
 import libraryAdminRouter from "./routes/libraryAdmin.js";
-/*  NEW — Answer Writing Feature */
-import answerWritingRoutes from "./answerWriting/routes/answerWritingRoutes.js";
 
-/*  NEW — Auto Release Cron Scheduler */
-import "./answerWriting/lib/scheduler.js";
+// ✅ NEW: Answer Writing & Reading System Routes
+import qnaRoutes from "./routes/qnaRoutes.js";
+import qnaAdminRoutes from "./routes/qnaAdminRoutes.js";
 
 /* -------------------------------------------------------------------------- */
 /* 📌 MOUNT ROUTES                                                            */
 /* -------------------------------------------------------------------------- */
 
+// ✅ Existing Routes
 app.use("/api/library", libraryRouter);
 app.use("/api/library", libraryUserRouter);
 
@@ -162,13 +165,27 @@ app.use("/api/classroom-access", classroomAccessRoutes);
 app.use("/api/classroom/media", classroomUploadRoutes);
 app.use("/api/footer", footerRoutes);
 app.use("/api/terms", termsRoutes);
-app.use("/api/answer-writing", answerWritingRoutes);
+
+// ✅ NEW: Answer Writing & Reading System Routes
+app.use("/api/qna", qnaRoutes);          // Student routes
+app.use("/api/admin/qna", qnaAdminRoutes); // Admin routes
 
 /* -------------------------------------------------------------------------- */
 /* 📌 Health Check                                                            */
 /* -------------------------------------------------------------------------- */
 app.get("/api/ping", (_req, res) => res.json({ ok: true, ts: Date.now() }));
-app.get("/", (_req, res) => res.json({ ok: true, service: "Law Network API" }));
+app.get("/", (_req, res) => res.json({ 
+  ok: true, 
+  service: "Law Network API",
+  features: [
+    "Articles & News",
+    "Video & Podcast Library",
+    "Classroom Management",
+    "Test Series",
+    "Research & Drafting",
+    "✅ Answer Writing & Reading System (New)"
+  ]
+}));
 
 /* -------------------------------------------------------------------------- */
 /* 📌 404 Handler                                                             */
@@ -198,7 +215,19 @@ mongoose
   .connect(process.env.MONGO_URI, {
     dbName: process.env.MONGO_DB || undefined,
   })
-  .then(() => console.log("✅ MongoDB connected"))
+  .then(() => {
+    console.log("✅ MongoDB connected");
+    
+    // ✅ Initialize QnA Scheduler if needed
+    import("./services/qnaScheduler.js")
+      .then(module => {
+        if (module.default) {
+          module.default.start();
+          console.log("✅ QnA Scheduler initialized");
+        }
+      })
+      .catch(err => console.log("ℹ️ QnA Scheduler not loaded:", err.message));
+  })
   .catch((err) => console.error("❌ MongoDB Connection Error:", err.message));
 
 /* -------------------------------------------------------------------------- */
@@ -208,5 +237,12 @@ const server = app.listen(PORT, HOST, () =>
   console.log(`🚀 API running on http://${HOST}:${PORT}`)
 );
 
-process.on("SIGTERM", () => server.close());
-process.on("SIGINT", () => server.close());
+process.on("SIGTERM", () => {
+  console.log("🛑 SIGTERM received. Shutting down gracefully...");
+  server.close();
+});
+
+process.on("SIGINT", () => {
+  console.log("🛑 SIGINT received. Shutting down gracefully...");
+  server.close();
+});
