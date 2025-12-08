@@ -1,4 +1,4 @@
-import Exam from "../models/Exam.js";
+ import Exam from "../models/Exam.js";  // Now loads AnswerWritingExam correctly
 import Unit from "../models/Unit.js";
 
 export const createExam = async (req, res) => {
