@@ -1,6 +1,5 @@
-import Exam from "../answerWriting/models/Exam.js";
-import Unit from "../answerWriting/models/Unit.js";
-
+import Exam from "../models/Exam.js";
+import Unit from "../models/Unit.js";
 export const createExam = async (req, res) => {
   try {
     const exam = await Exam.create({ name: req.body.name, units: [] });
