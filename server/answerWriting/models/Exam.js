@@ -1,9 +1,6 @@
-// server/answerWriting/models/Exam.js
 import mongoose from "mongoose";
 
-const { Schema } = mongoose;
-
-const ExamSchema = new Schema(
+const ExamSchema = new mongoose.Schema(
   {
     name: {
       type: String,
@@ -11,14 +8,9 @@ const ExamSchema = new Schema(
       trim: true,
     },
   },
-  {
-    timestamps: true,
-  }
+  { timestamps: true }
 );
 
-// IMPORTANT: use unique model name AND guard with mongoose.models
-const Exam =
-  mongoose.models.AnswerWritingExam ||
+//  IMPORTANT: Prevent OverwriteModelError on Render
+export default mongoose.models.AnswerWritingExam ||
   mongoose.model("AnswerWritingExam", ExamSchema);
-
-export default Exam;
