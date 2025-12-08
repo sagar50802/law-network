@@ -1,32 +1,23 @@
-// server/answerWriting/models/Unit.js
 import mongoose from "mongoose";
 
-const { Schema } = mongoose;
+const unitSchema = new mongoose.Schema(
+  {
+    name: { type: String, required: true },
 
-const UnitSchema = new Schema(
-  {
-    examId: {
-      type: Schema.Types.ObjectId,
-      ref: "AnswerWritingExam",
+    exam: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Exam",
       required: true,
     },
-    name: {
-      type: String,
-      required: true,
-      trim: true,
-    },
-    order: {
-      type: Number,
-      default: 0,
-    },
+
+    topics: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Topic",
+      },
+    ],
   },
-  {
-    timestamps: true,
-  }
+  { timestamps: true }
 );
 
-const Unit =
-  mongoose.models.AnswerWritingUnit ||
-  mongoose.model("AnswerWritingUnit", UnitSchema);
-
-export default Unit;
+export default mongoose.models.Unit || mongoose.model("Unit", unitSchema);
