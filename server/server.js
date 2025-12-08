@@ -120,6 +120,11 @@ import libraryRouter from "./routes/library.js";
 import libraryUserRouter from "./routes/libraryUser.js";
 import librarySettingsAdmin from "./routes/librarySettingsAdmin.js";
 import libraryAdminRouter from "./routes/libraryAdmin.js";
+/*  NEW — Answer Writing Feature */
+import answerWritingRoutes from "./answerWriting/routes/answerWritingRoutes.js";
+
+/*  NEW — Auto Release Cron Scheduler */
+import "./answerWriting/lib/scheduler.js";
 
 /* -------------------------------------------------------------------------- */
 /* 📌 MOUNT ROUTES                                                            */
@@ -157,6 +162,7 @@ app.use("/api/classroom-access", classroomAccessRoutes);
 app.use("/api/classroom/media", classroomUploadRoutes);
 app.use("/api/footer", footerRoutes);
 app.use("/api/terms", termsRoutes);
+app.use("/api/answer-writing", answerWritingRoutes);
 
 /* -------------------------------------------------------------------------- */
 /* 📌 Health Check                                                            */
