@@ -16,4 +16,5 @@ examSchema.pre("save", function (next) {
   next();
 });
 
-export default mongoose.model("Exam", examSchema);
+ export default mongoose.model("QnaExam", examSchema);
+
