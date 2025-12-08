@@ -1,5 +1,5 @@
-const Topic = require('../models/Topic');
-const Progress = require('../models/Progress');
+import Topic from '../models/Topic.js';
+import Progress from '../models/Progress.js';
 
 class RecommendationService {
   constructor() {
@@ -23,9 +23,9 @@ class RecommendationService {
         });
       }
       
-      console.log(`Initialized topic graph with ${topics.length} topics`);
+      console.log(`✅ Initialized topic graph with ${topics.length} topics`);
     } catch (error) {
-      console.error('Error initializing topic graph:', error);
+      console.error('❌ Error initializing topic graph:', error.message);
     }
   }
 
@@ -82,7 +82,7 @@ class RecommendationService {
       // Return top 5 recommendations
       return scoredRecommendations.slice(0, 5);
     } catch (error) {
-      console.error('Error generating personalized recommendations:', error);
+      console.error('❌ Error generating personalized recommendations:', error.message);
       return this.getDefaultRecommendations(currentTopicId);
     }
   }
@@ -135,7 +135,7 @@ class RecommendationService {
         confidence: 0.7
       }));
     } catch (error) {
-      console.error('Error getting default recommendations:', error);
+      console.error('❌ Error getting default recommendations:', error.message);
       return [];
     }
   }
@@ -166,7 +166,7 @@ class RecommendationService {
       
       return completedTopicIds;
     } catch (error) {
-      console.error('Error getting completed topics:', error);
+      console.error('❌ Error getting completed topics:', error.message);
       return new Set();
     }
   }
@@ -211,7 +211,7 @@ class RecommendationService {
       
       return patterns;
     } catch (error) {
-      console.error('Error analyzing user patterns:', error);
+      console.error('❌ Error analyzing user patterns:', error.message);
       return {
         difficultyLevel: 'medium',
         preferredStudyTime: 'any',
@@ -250,7 +250,7 @@ class RecommendationService {
         confidence: 0.9
       }));
     } catch (error) {
-      console.error('Error getting syllabus recommendations:', error);
+      console.error('❌ Error getting syllabus recommendations:', error.message);
       return [];
     }
   }
@@ -282,7 +282,7 @@ class RecommendationService {
       
       return recommendations;
     } catch (error) {
-      console.error('Error getting dependency recommendations:', error);
+      console.error('❌ Error getting dependency recommendations:', error.message);
       return [];
     }
   }
@@ -314,7 +314,7 @@ class RecommendationService {
         confidence: 0.7
       }));
     } catch (error) {
-      console.error('Error getting difficulty recommendations:', error);
+      console.error('❌ Error getting difficulty recommendations:', error.message);
       return [];
     }
   }
@@ -398,7 +398,7 @@ class RecommendationService {
       
       return difficulties;
     } catch (error) {
-      console.error('Error getting completed difficulties:', error);
+      console.error('❌ Error getting completed difficulties:', error.message);
       return [];
     }
   }
@@ -472,9 +472,9 @@ class RecommendationService {
         userModel.topicPreferences.set(topicId, currentCount + 1);
       }
       
-      console.log(`Recorded interaction for user ${userId}: ${action} on ${type}`);
+      console.log(`✅ Recorded interaction for user ${userId}: ${action} on ${type}`);
     } catch (error) {
-      console.error('Error recording user interaction:', error);
+      console.error('❌ Error recording user interaction:', error.message);
     }
   }
 }
@@ -482,4 +482,11 @@ class RecommendationService {
 // Create singleton instance
 const recommendationService = new RecommendationService();
 
-module.exports = recommendationService;
+// Export for ES modules
+export default recommendationService;
+
+// Named exports for initialization
+export const initializeTopicGraph = async () => {
+  await recommendationService.initializeTopicGraph();
+  return recommendationService;
+};
