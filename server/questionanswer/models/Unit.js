@@ -55,4 +55,4 @@ unitSchema.virtual('topics', {
   foreignField: 'unitId'
 });
 
-module.exports = mongoose.model('Unit', unitSchema);
+ export default mongoose.model('Exam', examSchema);
