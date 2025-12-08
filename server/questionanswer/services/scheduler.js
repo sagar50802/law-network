@@ -1,34 +1,39 @@
-const cron = require('node-cron');
-const Question = require('../models/Question');
+import cron from 'node-cron';
+import Question from '../models/Question.js';
 
 class QuestionScheduler {
   constructor() {
     this.jobs = new Map();
-    this.initializeScheduler();
   }
 
   // Initialize the scheduler
   async initializeScheduler() {
-    console.log('Initializing question scheduler...');
+    console.log('🔄 Initializing question scheduler...');
     
-    // Load pending scheduled questions
-    const pendingQuestions = await Question.find({
-      scheduledRelease: { $ne: null },
-      isReleased: false,
-      scheduledRelease: { $gt: new Date() }
-    });
-    
-    // Schedule each question
-    for (const question of pendingQuestions) {
-      this.scheduleQuestionRelease(question);
+    try {
+      // Load pending scheduled questions
+      const pendingQuestions = await Question.find({
+        scheduledRelease: { $ne: null },
+        isReleased: false,
+        scheduledRelease: { $gt: new Date() }
+      });
+      
+      // Schedule each question
+      for (const question of pendingQuestions) {
+        this.scheduleQuestionRelease(question);
+      }
+      
+      // Daily cleanup job
+      cron.schedule('0 0 * * *', async () => {
+        await this.cleanupReleasedQuestions();
+      });
+      
+      console.log(`✅ Scheduler initialized with ${pendingQuestions.length} pending questions`);
+      this.isRunning = true;
+    } catch (error) {
+      console.error('❌ Error initializing scheduler:', error.message);
+      this.isRunning = false;
     }
-    
-    // Daily cleanup job
-    cron.schedule('0 0 * * *', async () => {
-      await this.cleanupReleasedQuestions();
-    });
-    
-    console.log(`Scheduler initialized with ${pendingQuestions.length} pending questions`);
   }
 
   // Schedule a question for release
@@ -61,9 +66,9 @@ class QuestionScheduler {
       // Store the job reference
       this.jobs.set(question._id.toString(), job);
       
-      console.log(`Scheduled question ${question._id} for release at ${releaseTime}`);
+      console.log(`⏰ Scheduled question ${question._id} for release at ${releaseTime}`);
     } catch (error) {
-      console.error(`Error scheduling question ${question._id}:`, error);
+      console.error(`❌ Error scheduling question ${question._id}:`, error.message);
     }
   }
 
@@ -80,7 +85,7 @@ class QuestionScheduler {
       );
       
       if (question) {
-        console.log(`Question ${questionId} released successfully`);
+        console.log(`✅ Question ${questionId} released successfully`);
         
         // Here you could:
         // 1. Send notifications to users
@@ -89,7 +94,7 @@ class QuestionScheduler {
         // 4. Log the release
       }
     } catch (error) {
-      console.error(`Error releasing question ${questionId}:`, error);
+      console.error(`❌ Error releasing question ${questionId}:`, error.message);
     }
   }
 
@@ -116,9 +121,9 @@ class QuestionScheduler {
       // Schedule the new release
       this.scheduleQuestionRelease(question);
       
-      console.log(`Added scheduled question ${questionId} for ${releaseTime}`);
+      console.log(`✅ Added scheduled question ${questionId} for ${releaseTime}`);
     } catch (error) {
-      console.error(`Error adding scheduled question ${questionId}:`, error);
+      console.error(`❌ Error adding scheduled question ${questionId}:`, error.message);
       throw error;
     }
   }
@@ -136,9 +141,9 @@ class QuestionScheduler {
         isReleased: true
       });
       
-      console.log(`Cancelled scheduled release for question ${questionId}`);
+      console.log(`✅ Cancelled scheduled release for question ${questionId}`);
     } catch (error) {
-      console.error(`Error cancelling scheduled question ${questionId}:`, error);
+      console.error(`❌ Error cancelling scheduled question ${questionId}:`, error.message);
       throw error;
     }
   }
@@ -172,16 +177,17 @@ class QuestionScheduler {
       );
       
       if (result.modifiedCount > 0) {
-        console.log(`Cleaned up ${result.modifiedCount} released questions`);
+        console.log(`🧹 Cleaned up ${result.modifiedCount} released questions`);
       }
     } catch (error) {
-      console.error('Error cleaning up released questions:', error);
+      console.error('❌ Error cleaning up released questions:', error.message);
     }
   }
 
   // Start the scheduler
   start() {
-    console.log('Question scheduler started');
+    console.log('▶️ Question scheduler started');
+    this.isRunning = true;
   }
 
   // Stop the scheduler
@@ -190,11 +196,24 @@ class QuestionScheduler {
       job.stop();
     }
     this.jobs.clear();
-    console.log('Question scheduler stopped');
+    console.log('⏹️ Question scheduler stopped');
+    this.isRunning = false;
   }
 }
 
 // Create singleton instance
 const scheduler = new QuestionScheduler();
 
-module.exports = scheduler;
+// Export for ES modules
+export default scheduler;
+
+// Named exports for initialization
+export const initializeScheduler = async () => {
+  await scheduler.initializeScheduler();
+  scheduler.start();
+  return scheduler;
+};
+
+export const stopScheduler = async () => {
+  scheduler.stop();
+};
