@@ -1,3 +1,5 @@
+import { createRequire } from "module";
+const require = createRequire(import.meta.url);
 /* ----------------------------------------------------------------------------------
    ✅ Law Network — Clean & Stable Backend (server.js)
 ---------------------------------------------------------------------------------- */
@@ -126,8 +128,7 @@ import libraryAdminRouter from "./routes/libraryAdmin.js";
 /* -------------------------------------------------------------------------- */
 /* 📌 IMPORT QnA ROUTES (Answer Writing & Reading System)                    */
 /* -------------------------------------------------------------------------- */
- import qnaRoutes from "./questionanswer/routes/qnaRoutes.js";
-
+const qnaRoutes = require("./questionanswer/routes/qnaRoutes.js");
 /* -------------------------------------------------------------------------- */
 /* 📌 MOUNT ROUTES                                                            */
 /* -------------------------------------------------------------------------- */
