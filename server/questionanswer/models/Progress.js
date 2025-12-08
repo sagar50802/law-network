@@ -65,4 +65,4 @@ progressSchema.pre('save', function(next) {
   next();
 });
 
-module.exports = mongoose.model('Progress', progressSchema);
+export default mongoose.model('Exam', examSchema);
