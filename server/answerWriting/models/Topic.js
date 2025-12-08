@@ -1,12 +1,41 @@
+// server/answerWriting/models/Topic.js
 import mongoose from "mongoose";
 
-const TopicSchema = new mongoose.Schema(
+const { Schema } = mongoose;
+
+const TopicSchema = new Schema(
   {
-    name: { type: String, required: true },
-    unit: { type: mongoose.Schema.Types.ObjectId, ref: "Unit", required: true },
-    locked: { type: Boolean, default: false },
+    examId: {
+      type: Schema.Types.ObjectId,
+      ref: "AnswerWritingExam",
+      required: true,
+    },
+    unitId: {
+      type: Schema.Types.ObjectId,
+      ref: "AnswerWritingUnit",
+      required: true,
+    },
+    name: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    locked: {
+      type: Boolean,
+      default: false,
+    },
+    order: {
+      type: Number,
+      default: 0,
+    },
   },
-  { timestamps: true }
+  {
+    timestamps: true,
+  }
 );
 
-export default mongoose.models.Topic || mongoose.model("Topic", TopicSchema);
+const Topic =
+  mongoose.models.AnswerWritingTopic ||
+  mongoose.model("AnswerWritingTopic", TopicSchema);
+
+export default Topic;
