@@ -1,5 +1,4 @@
-import Question from "../answerWriting/models/Question.js";
-
+ import Question from "../models/Question.js";
 export const getDashboard = async (req, res) => {
   try {
     const examId = req.params.examId;
