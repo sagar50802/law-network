@@ -126,7 +126,7 @@ import libraryAdminRouter from "./routes/libraryAdmin.js";
 /* -------------------------------------------------------------------------- */
 /* 📌 IMPORT QnA ROUTES (Answer Writing & Reading System)                    */
 /* -------------------------------------------------------------------------- */
-import qnaRoutes from "./routes/questionanswer/qnaRoutes.js";
+ import qnaRoutes from "./questionanswer/routes/qnaRoutes.js";
 
 /* -------------------------------------------------------------------------- */
 /* 📌 MOUNT ROUTES                                                            */
