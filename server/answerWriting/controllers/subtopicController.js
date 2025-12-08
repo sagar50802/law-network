@@ -1,5 +1,5 @@
-import Subtopic from "../answerWriting/models/Subtopic.js";
-import Topic from "../answerWriting/models/Topic.js";
+import Subtopic from "../models/Subtopic.js";
+import Topic from "../models/Topic.js";
 
 export const createSubtopic = async (req, res) => {
   try {
