@@ -1,4 +1,4 @@
-import Question from "../models/Question.js";
+import Question from "../answerWriting/models/Question.js";
 
 export const createQuestion = async (req, res) => {
   try {
@@ -13,7 +13,7 @@ export const createQuestion = async (req, res) => {
       answerHindi: req.body.answerHindi,
       answerEnglish: req.body.answerEnglish,
 
-      releaseAt: req.body.releaseAt, // Date object
+      releaseTime: req.body.releaseTime,
     });
 
     res.json({ success: true, question: q });
@@ -31,18 +31,14 @@ export const deleteQuestion = async (req, res) => {
   }
 };
 
-/* --------------------- STUDENT SEE ONLY RELEASED --------------------- */
-
 export const getReleasedQuestions = async (req, res) => {
   try {
     const now = new Date();
 
     const questions = await Question.find({
       exam: req.params.examId,
-      releaseAt: { $lte: now }, // released only
-    })
-      .sort({ releaseAt: 1 })
-      .lean();
+      releaseTime: { $lte: now },
+    }).sort({ releaseTime: 1 });
 
     res.json({ success: true, questions });
   } catch (err) {
