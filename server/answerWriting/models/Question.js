@@ -1,76 +1,40 @@
-// server/answerWriting/models/Question.js
 import mongoose from "mongoose";
 
-const { Schema } = mongoose;
-
-const QuestionSchema = new Schema(
+const questionSchema = new mongoose.Schema(
   {
-    examId: {
-      type: Schema.Types.ObjectId,
-      ref: "AnswerWritingExam",
-      required: true,
-    },
-    unitId: {
-      type: Schema.Types.ObjectId,
-      ref: "AnswerWritingUnit",
-      required: true,
-    },
-    topicId: {
-      type: Schema.Types.ObjectId,
-      ref: "AnswerWritingTopic",
-      required: true,
-    },
-    // optional – if you create questions directly under topic,
-    // leave subtopicId null
-    subtopicId: {
-      type: Schema.Types.ObjectId,
-      ref: "AnswerWritingSubtopic",
-      default: null,
-    },
+    questionHindi: { type: String, required: true },
+    questionEnglish: { type: String, required: true },
 
-    // BILINGUAL QUESTION
-    questionHindi: {
-      type: String,
-      required: true,
-      trim: true,
-    },
-    questionEnglish: {
-      type: String,
-      required: true,
-      trim: true,
-    },
+    answerHindi: { type: String, required: true },
+    answerEnglish: { type: String, required: true },
 
-    // BILINGUAL ANSWER
-    answerHindi: {
-      type: String,
-      required: true,
-      trim: true,
-    },
-    answerEnglish: {
-      type: String,
-      required: true,
-      trim: true,
-    },
+    releaseAt: { type: Date, required: true },
 
-    // release scheduling
-    releaseAt: {
-      type: Date,
+    exam: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Exam",
       required: true,
     },
 
-    // set true by scheduler / when released
-    isPublished: {
-      type: Boolean,
-      default: false,
+    unit: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Unit",
+      required: true,
+    },
+
+    topic: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Topic",
+      required: true,
+    },
+
+    subtopic: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Subtopic",
+      required: true,
     },
   },
-  {
-    timestamps: true,
-  }
+  { timestamps: true }
 );
 
-const Question =
-  mongoose.models.AnswerWritingQuestion ||
-  mongoose.model("AnswerWritingQuestion", QuestionSchema);
-
-export default Question;
+export default mongoose.models.Question || mongoose.model("Question", questionSchema);
