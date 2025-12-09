@@ -129,11 +129,6 @@ import libraryAdminRouter from "./routes/libraryAdmin.js";
 import qnaRoutes from "./questionanswer/routes/qnaRoutes.js";
 
 /* -------------------------------------------------------------------------- */
-/* 📌 IMPORT ADMIN QnA CONTROLLER (NEW)                                      */
-/* -------------------------------------------------------------------------- */
-import qnaAdminController from "./questionanswer/controllers/adminController.js";
-
-/* -------------------------------------------------------------------------- */
 /* 📌 MOUNT ROUTES                                                            */
 /* -------------------------------------------------------------------------- */
 
