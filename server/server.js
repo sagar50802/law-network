@@ -1,4 +1,4 @@
- /* ----------------------------------------------------------------------------------
+/* ----------------------------------------------------------------------------------
    ✅ Law Network — Clean & Stable Backend (server.js)
 ---------------------------------------------------------------------------------- */
 
@@ -70,7 +70,7 @@ app.use((req, _res, next) => {
   "uploads/testseries",
   "uploads/classroom",
   "uploads/library",
-  "uploads/questionanswer", // Add QnA upload folder
+  "uploads/questionanswer",
 ].forEach((rel) => {
   const full = path.join(__dirname, rel);
   if (!fs.existsSync(full)) fs.mkdirSync(full, { recursive: true });
@@ -124,9 +124,14 @@ import librarySettingsAdmin from "./routes/librarySettingsAdmin.js";
 import libraryAdminRouter from "./routes/libraryAdmin.js";
 
 /* -------------------------------------------------------------------------- */
-/* 📌 IMPORT QnA ROUTES (Answer Writing & Reading System)                    */
+/* 📌 IMPORT QnA ROUTES (Student-side)                                       */
 /* -------------------------------------------------------------------------- */
-  import qnaRoutes from "./questionanswer/routes/qnaRoutes.js";
+import qnaRoutes from "./questionanswer/routes/qnaRoutes.js";
+
+/* -------------------------------------------------------------------------- */
+/* 📌 IMPORT ADMIN QnA CONTROLLER (NEW)                                      */
+/* -------------------------------------------------------------------------- */
+import qnaAdminController from "./questionanswer/controllers/adminController.js";
 
 /* -------------------------------------------------------------------------- */
 /* 📌 MOUNT ROUTES                                                            */
@@ -166,7 +171,15 @@ app.use("/api/footer", footerRoutes);
 app.use("/api/terms", termsRoutes);
 
 /* -------------------------------------------------------------------------- */
-/* 📌 MOUNT QnA ROUTES (Answer Writing & Reading System)                     */
+/* 📌 ADMIN QnA ROUTES (NEW - FULL CRUD)                                     */
+/* -------------------------------------------------------------------------- */
+app.get("/api/admin/qna/questions", qnaAdminController.getQuestions);
+app.post("/api/admin/qna/questions", qnaAdminController.createQuestion);
+app.delete("/api/admin/qna/questions/:id", qnaAdminController.deleteQuestion);
+app.post("/api/admin/qna/questions/:id/schedule", qnaAdminController.scheduleQuestion);
+
+/* -------------------------------------------------------------------------- */
+/* 📌 STUDENT QnA ROUTES                                                     */
 /* -------------------------------------------------------------------------- */
 app.use("/api/qna", qnaRoutes);
 
@@ -174,18 +187,20 @@ app.use("/api/qna", qnaRoutes);
 /* 📌 Health Check                                                            */
 /* -------------------------------------------------------------------------- */
 app.get("/api/ping", (_req, res) => res.json({ ok: true, ts: Date.now() }));
-app.get("/", (_req, res) => res.json({ 
-  ok: true, 
-  service: "Law Network API",
-  features: [
-    "Core Platform",
-    "Answer Writing & Reading System (QnA)",
-    "Library",
-    "Classroom",
-    "Test Series",
-    "Live Sessions"
-  ]
-}));
+app.get("/", (_req, res) =>
+  res.json({
+    ok: true,
+    service: "Law Network API",
+    features: [
+      "Core Platform",
+      "Answer Writing & Reading System (QnA)",
+      "Library",
+      "Classroom",
+      "Test Series",
+      "Live Sessions",
+    ],
+  })
+);
 
 /* -------------------------------------------------------------------------- */
 /* 📌 404 Handler                                                             */
@@ -215,22 +230,18 @@ const initializeQnAServices = async () => {
   try {
     console.log(" Initializing QnA services...");
 
-    // Load scheduler + recommendation service dynamically
     const schedulerModule = await import("./services/questionanswer/scheduler.js");
     const recommendationModule = await import("./services/questionanswer/recommendationService.js");
 
-    // Initialize scheduler
     await schedulerModule.initializeScheduler();
     console.log(" QnA Scheduler initialized");
 
-    // Initialize recommendation graph
     await recommendationModule.initializeTopicGraph();
     console.log(" QnA Recommendation Service initialized");
   } catch (error) {
     console.error(" QnA Services initialization failed (non-critical):", error.message);
   }
 };
-
 
 /* -------------------------------------------------------------------------- */
 /* 📌 MongoDB Connect                                                         */
@@ -241,8 +252,7 @@ mongoose
   })
   .then(async () => {
     console.log("✅ MongoDB connected");
-    
-    // Initialize QnA services after DB connection
+
     await initializeQnAServices();
   })
   .catch((err) => console.error("❌ MongoDB Connection Error:", err.message));
@@ -259,16 +269,15 @@ const server = app.listen(PORT, HOST, () =>
 /* -------------------------------------------------------------------------- */
 const gracefulShutdown = async () => {
   console.log("🔄 Graceful shutdown initiated...");
-  
+
   try {
-    // Stop QnA scheduler if it exists
     const { stopScheduler } = await import("./services/questionanswer/scheduler.js");
     await stopScheduler();
     console.log("✅ QnA Scheduler stopped");
   } catch (error) {
     console.error("⚠️ Error stopping QnA scheduler:", error.message);
   }
-  
+
   server.close(() => {
     console.log("✅ HTTP server closed");
     mongoose.connection.close(false, () => {
