@@ -1,5 +1,5 @@
 /* ----------------------------------------------------------------------------------
-   ✅ Law Network — Clean & Stable Backend (server.js)
+   ✅ Law Network — Clean & Stable Backend (Final Corrected server.js)
 ---------------------------------------------------------------------------------- */
 
 import "dotenv/config";
@@ -24,14 +24,14 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 /* -------------------------------------------------------------------------- */
-/* 📌 Body Parser MUST COME BEFORE CORS                                       */
+/* 📌 Body Parser                                                             */
 /* -------------------------------------------------------------------------- */
 app.use(express.json({ limit: "100mb" }));
 app.use(express.urlencoded({ extended: true, limit: "100mb" }));
 app.use(express.text({ type: "*/*" }));
 
 /* -------------------------------------------------------------------------- */
-/* 📌 Simplified, Safe CORS                                                   */
+/* 📌 CORS                                                                    */
 /* -------------------------------------------------------------------------- */
 const corsOptions = {
   origin: (origin, callback) => {
@@ -70,7 +70,7 @@ app.use((req, _res, next) => {
   "uploads/testseries",
   "uploads/classroom",
   "uploads/library",
-  "uploads/questionanswer",
+  "uploads/questionanswer"
 ].forEach((rel) => {
   const full = path.join(__dirname, rel);
   if (!fs.existsSync(full)) fs.mkdirSync(full, { recursive: true });
@@ -118,13 +118,14 @@ import adminAuthRoutes from "./routes/adminAuth.js";
 import footerRoutes from "./routes/footer.js";
 import termsRoutes from "./routes/terms.js";
 
+/* Library */
 import libraryRouter from "./routes/library.js";
 import libraryUserRouter from "./routes/libraryUser.js";
 import librarySettingsAdmin from "./routes/librarySettingsAdmin.js";
 import libraryAdminRouter from "./routes/libraryAdmin.js";
 
 /* -------------------------------------------------------------------------- */
-/* 📌 IMPORT QnA ROUTES (Student-side)                                       */
+/* 📌 IMPORT QnA ROUTES (STUDENT + ADMIN)                                    */
 /* -------------------------------------------------------------------------- */
 import qnaRoutes from "./questionanswer/routes/qnaRoutes.js";
 
@@ -166,17 +167,9 @@ app.use("/api/footer", footerRoutes);
 app.use("/api/terms", termsRoutes);
 
 /* -------------------------------------------------------------------------- */
-/* 📌 ADMIN QnA ROUTES (NEW - FULL CRUD)                                     */
+/* 📌 MOUNT QnA ROUTES (FULL SYSTEM)                                         */
 /* -------------------------------------------------------------------------- */
-app.get("/api/admin/qna/questions", qnaAdminController.getQuestions);
-app.post("/api/admin/qna/questions", qnaAdminController.createQuestion);
-app.delete("/api/admin/qna/questions/:id", qnaAdminController.deleteQuestion);
-app.post("/api/admin/qna/questions/:id/schedule", qnaAdminController.scheduleQuestion);
-
-/* -------------------------------------------------------------------------- */
-/* 📌 STUDENT QnA ROUTES                                                     */
-/* -------------------------------------------------------------------------- */
-app.use("/api/qna", qnaRoutes);
+app.use("/api/qna", qnaRoutes);   // ✔ STUDENT + ADMIN WORK THROUGH THIS FILE ONLY
 
 /* -------------------------------------------------------------------------- */
 /* 📌 Health Check                                                            */
@@ -247,7 +240,6 @@ mongoose
   })
   .then(async () => {
     console.log("✅ MongoDB connected");
-
     await initializeQnAServices();
   })
   .catch((err) => console.error("❌ MongoDB Connection Error:", err.message));
