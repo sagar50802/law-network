@@ -1,5 +1,5 @@
 /* ----------------------------------------------------------------------------------
-   ✅ QnA Routes (Answer Writing & Reading System)
+   QnA Routes (Answer Writing System)
 ---------------------------------------------------------------------------------- */
 import express from 'express';
 import { 
@@ -11,10 +11,25 @@ import {
 
 const router = express.Router();
 
-// Import controllers
-import { getExams, getSyllabusTree, validateNavigation, getExamProgress } from '../controllers/qnaExamController.js';
-import { getQuestion, saveProgress, getUserProgress } from '../controllers/qnaQuestionController.js';
-import { getRecommendations, recordUserAction } from '../controllers/qnaRecommendationController.js';
+/* Controllers */
+import { 
+  getExams, 
+  getSyllabusTree, 
+  validateNavigation, 
+  getExamProgress 
+} from '../controllers/qnaExamController.js';
+
+import { 
+  getQuestion, 
+  saveProgress, 
+  getUserProgress 
+} from '../controllers/qnaQuestionController.js';
+
+import { 
+  getRecommendations, 
+  recordUserAction 
+} from '../controllers/qnaRecommendationController.js';
+
 import { 
   createExam, 
   createSyllabusNode, 
@@ -25,42 +40,54 @@ import {
 } from '../controllers/adminController.js';
 
 /* -------------------------------------------------------------------------- */
-/* 📌 Public Routes (no auth required for basic access)                      */
+/* PUBLIC ROUTES — match frontend EXACTLY                                     */
 /* -------------------------------------------------------------------------- */
-router.get('/exams', getExams);
-router.get('/syllabus/:examId', getSyllabusTree);
-router.get('/progress/:examId', getExamProgress);
 
-/* -------------------------------------------------------------------------- */
-/* 📌 Question Routes with Access Control                                    */
-/* -------------------------------------------------------------------------- */
-router.get('/questions/:questionId', 
+router.get("/exams", getExams);
+
+router.get("/syllabus/:examId", getSyllabusTree);
+
+/* Frontend expects GET /qna/question/:id */
+router.get(
+  "/question/:questionId",
   preventDirectAccess,
   checkContentAccess,
   trackProgress,
   getQuestion
 );
 
-/* -------------------------------------------------------------------------- */
-/* 📌 Progress Tracking Routes (require auth)                                */
-/* -------------------------------------------------------------------------- */
-router.post('/progress/:questionId', saveProgress);
-router.get('/user/progress', getUserProgress);
+/* Frontend expects GET /qna/progress */
+router.get("/progress", getUserProgress);
+
+/* Frontend expects POST /qna/progress with { questionId, ...data } */
+router.post("/progress", saveProgress);
 
 /* -------------------------------------------------------------------------- */
-/* 📌 Recommendation Routes                                                  */
+/* RECOMMENDATIONS                                                            */
 /* -------------------------------------------------------------------------- */
-router.get('/recommendations', getRecommendations);
-router.post('/recommendations/action', recordUserAction);
+
+router.get("/recommendations", getRecommendations);
+router.post("/recommendations/action", recordUserAction);
 
 /* -------------------------------------------------------------------------- */
-/* 📌 Admin Routes (protected by admin middleware)                           */
+/* TOPIC NAVIGATION (optional, required by frontend)                          */
 /* -------------------------------------------------------------------------- */
-router.post('/admin/exams', createExam);
-router.post('/admin/syllabus', createSyllabusNode);
-router.post('/admin/questions', createQuestion);
-router.post('/admin/questions/:questionId/schedule', scheduleQuestion);
-router.get('/admin/scheduled', getScheduledQuestions);
-router.get('/admin/analytics', getAnalytics);
+
+router.get("/topics/next/:topicId", validateNavigation);
+router.get("/topics/dependent/:subtopicId", validateNavigation);
+
+/* -------------------------------------------------------------------------- */
+/* ADMIN ROUTES — match frontend                                             */
+/* -------------------------------------------------------------------------- */
+
+router.post("/admin/questions", createQuestion);
+
+router.post("/admin/questions/:questionId/schedule", scheduleQuestion);
+
+router.get("/admin/questions", getScheduledQuestions);
+
+router.delete("/admin/questions/:questionId", createQuestion);
+
+router.get("/admin/analytics", getAnalytics);
 
 export default router;
