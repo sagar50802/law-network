@@ -1,7 +1,7 @@
 import mongoose from "mongoose";
 
 const unitSchema = new mongoose.Schema({
-  examId: { type: mongoose.Schema.Types.ObjectId, ref: "Exam", required: true },
+  examId: { type: mongoose.Schema.Types.ObjectId, ref: "QnaExam", required: true },
   order: { type: Number, required: true },
   name: { type: String, required: true, trim: true },
   nameHindi: { type: String, required: true },
