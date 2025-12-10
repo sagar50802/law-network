@@ -1,5 +1,5 @@
 /* ----------------------------------------------------------------------------------
-   ✅ Law Network — Clean & Stable Backend (Final Corrected server.js)
+   ✅ Law Network — Clean & Stable Backend (server.js)
 ---------------------------------------------------------------------------------- */
 
 import "dotenv/config";
@@ -24,14 +24,14 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 /* -------------------------------------------------------------------------- */
-/* 📌 Body Parser                                                             */
+/* 📌 Body Parser MUST COME BEFORE CORS                                       */
 /* -------------------------------------------------------------------------- */
 app.use(express.json({ limit: "100mb" }));
 app.use(express.urlencoded({ extended: true, limit: "100mb" }));
 app.use(express.text({ type: "*/*" }));
 
 /* -------------------------------------------------------------------------- */
-/* 📌 CORS                                                                    */
+/* 📌 Simplified, Safe CORS                                                   */
 /* -------------------------------------------------------------------------- */
 const corsOptions = {
   origin: (origin, callback) => {
@@ -50,7 +50,9 @@ app.use(cors(corsOptions));
 /* -------------------------------------------------------------------------- */
 app.use((req, _res, next) => {
   if (req.path !== "/favicon.ico") {
-    console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
+    console.log(
+      `[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`
+    );
   }
   next();
 });
@@ -70,7 +72,7 @@ app.use((req, _res, next) => {
   "uploads/testseries",
   "uploads/classroom",
   "uploads/library",
-  "uploads/questionanswer"
+  "uploads/questionanswer", // QnA upload folder
 ].forEach((rel) => {
   const full = path.join(__dirname, rel);
   if (!fs.existsSync(full)) fs.mkdirSync(full, { recursive: true });
@@ -118,14 +120,13 @@ import adminAuthRoutes from "./routes/adminAuth.js";
 import footerRoutes from "./routes/footer.js";
 import termsRoutes from "./routes/terms.js";
 
-/* Library */
 import libraryRouter from "./routes/library.js";
 import libraryUserRouter from "./routes/libraryUser.js";
 import librarySettingsAdmin from "./routes/librarySettingsAdmin.js";
 import libraryAdminRouter from "./routes/libraryAdmin.js";
 
 /* -------------------------------------------------------------------------- */
-/* 📌 IMPORT QnA ROUTES (STUDENT + ADMIN)                                    */
+/* 📌 IMPORT QnA ROUTES (Answer Writing & Reading System)                     */
 /* -------------------------------------------------------------------------- */
 import qnaRoutes from "./questionanswer/routes/qnaRoutes.js";
 
@@ -167,9 +168,9 @@ app.use("/api/footer", footerRoutes);
 app.use("/api/terms", termsRoutes);
 
 /* -------------------------------------------------------------------------- */
-/* 📌 MOUNT QnA ROUTES (FULL SYSTEM)                                         */
+/* 📌 MOUNT QnA ROUTES (mounted under /api/qna/...)                           */
 /* -------------------------------------------------------------------------- */
-app.use("/api/qna", qnaRoutes);   // ✔ STUDENT + ADMIN WORK THROUGH THIS FILE ONLY
+app.use("/api/qna", qnaRoutes);
 
 /* -------------------------------------------------------------------------- */
 /* 📌 Health Check                                                            */
@@ -216,18 +217,25 @@ app.use((err, req, res, next) => {
 /* -------------------------------------------------------------------------- */
 const initializeQnAServices = async () => {
   try {
-    console.log(" Initializing QnA services...");
+    console.log("🧩 Initializing QnA services...");
 
-    const schedulerModule = await import("./services/questionanswer/scheduler.js");
-    const recommendationModule = await import("./services/questionanswer/recommendationService.js");
+    const schedulerModule = await import(
+      "./services/questionanswer/scheduler.js"
+    );
+    const recommendationModule = await import(
+      "./services/questionanswer/recommendationService.js"
+    );
 
     await schedulerModule.initializeScheduler();
-    console.log(" QnA Scheduler initialized");
+    console.log("✅ QnA Scheduler initialized");
 
     await recommendationModule.initializeTopicGraph();
-    console.log(" QnA Recommendation Service initialized");
+    console.log("✅ QnA Recommendation Service initialized");
   } catch (error) {
-    console.error(" QnA Services initialization failed (non-critical):", error.message);
+    console.error(
+      "⚠️ QnA Services initialization failed (non-critical):",
+      error.message
+    );
   }
 };
 
@@ -240,6 +248,8 @@ mongoose
   })
   .then(async () => {
     console.log("✅ MongoDB connected");
+
+    // Initialize QnA services after DB connection
     await initializeQnAServices();
   })
   .catch((err) => console.error("❌ MongoDB Connection Error:", err.message));
@@ -258,7 +268,9 @@ const gracefulShutdown = async () => {
   console.log("🔄 Graceful shutdown initiated...");
 
   try {
-    const { stopScheduler } = await import("./services/questionanswer/scheduler.js");
+    const { stopScheduler } = await import(
+      "./services/questionanswer/scheduler.js"
+    );
     await stopScheduler();
     console.log("✅ QnA Scheduler stopped");
   } catch (error) {
