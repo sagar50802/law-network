@@ -1,32 +1,49 @@
-const express = require("express");
+import express from "express";
+import Unit from "../../models/qna/Unit.js";
+
 const router = express.Router();
-const ownerCheck = require("../../middleware/ownerCheck");
 
-const Unit = require("../../models/qna/Unit");
-
-/* PUBLIC */
+/* GET units for exam */
 router.get("/exams/:examId/units", async (req, res) => {
-  const units = await Unit.find({ examId: req.params.examId }).sort({ order: 1 });
-  res.json(units);
+  try {
+    const units = await Unit.find({ examId: req.params.examId }).sort({ order: 1 });
+    res.json(units);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
 });
 
-/* ADMIN */
-router.post("/exams/:examId/units", ownerCheck, async (req, res) => {
-  const unit = await Unit.create({
-    examId: req.params.examId,
-    name: req.body.name
-  });
-  res.json(unit);
+/* POST create unit */
+router.post("/exams/:examId/units", async (req, res) => {
+  try {
+    const unit = await Unit.create({
+      examId: req.params.examId,
+      name: req.body.name
+    });
+    res.status(201).json(unit);
+  } catch (err) {
+    res.status(400).json({ message: err.message });
+  }
 });
 
-router.put("/:unitId", ownerCheck, async (req, res) => {
-  const updated = await Unit.findByIdAndUpdate(req.params.unitId, req.body, { new: true });
-  res.json(updated);
+/* PUT update unit */
+router.put("/units/:id", async (req, res) => {
+  try {
+    const unit = await Unit.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    res.json(unit);
+  } catch (err) {
+    res.status(400).json({ message: err.message });
+  }
 });
 
-router.delete("/:unitId", ownerCheck, async (req, res) => {
-  await Unit.findByIdAndDelete(req.params.unitId);
-  res.json({ success: true });
+/* DELETE unit */
+router.delete("/units/:id", async (req, res) => {
+  try {
+    await Unit.findByIdAndDelete(req.params.id);
+    res.json({ message: "Unit deleted" });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
 });
 
-module.exports = router;
+export default router;
