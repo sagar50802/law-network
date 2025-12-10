@@ -1,30 +1,49 @@
-const express = require("express");
+import express from "express";
+import Subtopic from "../../models/qna/Subtopic.js";
+
 const router = express.Router();
-const ownerCheck = require("../../middleware/ownerCheck");
 
-const Subtopic = require("../../models/qna/Subtopic");
-
-router.get("/:topicId/subtopics", async (req, res) => {
-  const subs = await Subtopic.find({ topicId: req.params.topicId }).sort({ order: 1 });
-  res.json(subs);
+/* GET subtopics for topic */
+router.get("/topics/:topicId/subtopics", async (req, res) => {
+  try {
+    const subtopics = await Subtopic.find({ topicId: req.params.topicId }).sort({ order: 1 });
+    res.json(subtopics);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
 });
 
-router.post("/:topicId/subtopics", ownerCheck, async (req, res) => {
-  const sub = await Subtopic.create({
-    topicId: req.params.topicId,
-    name: req.body.name
-  });
-  res.json(sub);
+/* POST create subtopic */
+router.post("/topics/:topicId/subtopics", async (req, res) => {
+  try {
+    const subtopic = await Subtopic.create({
+      topicId: req.params.topicId,
+      name: req.body.name
+    });
+    res.status(201).json(subtopic);
+  } catch (err) {
+    res.status(400).json({ message: err.message });
+  }
 });
 
-router.put("/:id", ownerCheck, async (req, res) => {
-  const updated = await Subtopic.findByIdAndUpdate(req.params.id, req.body, { new: true });
-  res.json(updated);
+/* PUT update subtopic */
+router.put("/subtopics/:id", async (req, res) => {
+  try {
+    const subtopic = await Subtopic.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    res.json(subtopic);
+  } catch (err) {
+    res.status(400).json({ message: err.message });
+  }
 });
 
-router.delete("/:id", ownerCheck, async (req, res) => {
-  await Subtopic.findByIdAndDelete(req.params.id);
-  res.json({ success: true });
+/* DELETE subtopic */
+router.delete("/subtopics/:id", async (req, res) => {
+  try {
+    await Subtopic.findByIdAndDelete(req.params.id);
+    res.json({ message: "Subtopic deleted" });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
 });
 
-module.exports = router;
+export default router;
