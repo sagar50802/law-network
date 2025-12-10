@@ -1,8 +1,8 @@
-import Exam from "../models/Exam.js";
-import Unit from "../models/Unit.js";
-import Topic from "../models/Topic.js";
-import Subtopic from "../models/Subtopic.js";
-import Question from "../models/Question.js";
+ import Exam from '../models/Exam.js';
+import Unit from '../models/Unit.js';
+import Topic from '../models/Topic.js';
+import Subtopic from '../models/Subtopic.js';
+import Question from '../models/Question.js';
 
 /* =============================================================================
    EXAMS & SYLLABUS
