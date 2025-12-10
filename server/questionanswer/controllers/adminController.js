@@ -1,12 +1,14 @@
-import Exam from '../models/Exam.js';
-import Unit from '../models/Unit.js';
-import Topic from '../models/Topic.js';
-import Subtopic from '../models/Subtopic.js';
-import Question from '../models/Question.js';
+import Exam from "../models/Exam.js";
+import Unit from "../models/Unit.js";
+import Topic from "../models/Topic.js";
+import Subtopic from "../models/Subtopic.js";
+import Question from "../models/Question.js";
 
-/* ============================================================================
-   CREATE EXAM
-============================================================================ */
+/* -----------------------------------------------------------------------------
+   EXAMS & SYLLABUS
+----------------------------------------------------------------------------- */
+
+// Create new exam
 export const createExam = async (req, res) => {
   try {
     const { name, nameHindi, description, icon } = req.body;
@@ -19,6 +21,7 @@ export const createExam = async (req, res) => {
     });
 
     await exam.save();
+
     res.json({ success: true, exam });
   } catch (error) {
     console.error("Error creating exam:", error);
@@ -26,29 +29,42 @@ export const createExam = async (req, res) => {
   }
 };
 
-/* ============================================================================
-   CREATE SYLLABUS NODE (Unit → Topic → Subtopic)
-============================================================================ */
+// Create syllabus node: unit / topic / subtopic
 export const createSyllabusNode = async (req, res) => {
   try {
     const { type, parentId, ...data } = req.body;
+
     let node;
 
     switch (type) {
       case "unit":
-        node = new Unit({ examId: parentId, ...data });
+        node = new Unit({
+          examId: parentId,
+          ...data,
+        });
         break;
+
       case "topic":
-        node = new Topic({ unitId: parentId, ...data });
+        node = new Topic({
+          unitId: parentId,
+          ...data,
+        });
         break;
+
       case "subtopic":
-        node = new Subtopic({ topicId: parentId, ...data });
+        node = new Subtopic({
+          topicId: parentId,
+          ...data,
+        });
         break;
+
       default:
         return res.status(400).json({ error: "Invalid node type" });
     }
 
     await node.save();
+
+    // lightweight parent count update
     await updateParentCounts(type, parentId);
 
     res.json({ success: true, node });
@@ -58,9 +74,11 @@ export const createSyllabusNode = async (req, res) => {
   }
 };
 
-/* ============================================================================
-   CREATE QUESTION (Hindi + English)
-============================================================================ */
+/* -----------------------------------------------------------------------------
+   QUESTIONS
+----------------------------------------------------------------------------- */
+
+// Create bilingual question
 export const createQuestion = async (req, res) => {
   try {
     const {
@@ -76,23 +94,29 @@ export const createQuestion = async (req, res) => {
       isPremium,
     } = req.body;
 
+    // Get exam & chain via subtopic → topic → unit → exam
     const subtopic = await Subtopic.findById(subtopicId)
-      .populate("topicId", "unitId")
-      .populate("topicId.unitId", "examId");
+      .populate({
+        path: "topicId",
+        populate: { path: "unitId", select: "examId" },
+      })
+      .lean();
 
     if (!subtopic) {
       return res.status(404).json({ error: "Subtopic not found" });
     }
 
-    const lastQuestion = await Question.findOne({ subtopicId }).sort({
-      order: -1,
-    });
+    const examId = subtopic.topicId.unitId.examId;
 
+    // Get next order number within subtopic
+    const lastQuestion = await Question.findOne({ subtopicId })
+      .sort({ order: -1 })
+      .lean();
     const order = lastQuestion ? lastQuestion.order + 1 : 1;
 
     const question = new Question({
       subtopicId,
-      examId: subtopic.topicId.unitId.examId,
+      examId,
       order,
       questionHindi,
       questionEnglish,
@@ -101,21 +125,19 @@ export const createQuestion = async (req, res) => {
       difficulty: difficulty || "medium",
       keywords: keywords || [],
       caseLaws: caseLaws || [],
-      scheduledRelease: scheduledRelease ? new Date(scheduledRelease) : null,
+      scheduledRelease: scheduledRelease
+        ? new Date(scheduledRelease)
+        : null,
       isReleased: !scheduledRelease,
-      isPremium: isPremium || false,
+      isPremium: !!isPremium,
     });
 
     await question.save();
 
+    // Update counts (best effort)
     await Subtopic.findByIdAndUpdate(subtopicId, {
       $inc: { totalQuestions: 1 },
-    });
-
-    await updateParentQuestionCounts(
-      subtopic.topicId._id,
-      subtopic.topicId.unitId._id
-    );
+    }).catch(() => {});
 
     res.json({ success: true, question });
   } catch (error) {
@@ -124,9 +146,55 @@ export const createQuestion = async (req, res) => {
   }
 };
 
-/* ============================================================================
-   SCHEDULE QUESTION RELEASE
-============================================================================ */
+// List questions (optionally by subtopic)
+export const getQuestions = async (req, res) => {
+  try {
+    const { subtopicId } = req.query;
+    const filter = {};
+    if (subtopicId) filter.subtopicId = subtopicId;
+
+    const questions = await Question.find(filter)
+      .sort({ createdAt: -1 })
+      .populate("subtopicId", "name")
+      .lean();
+
+    res.json({ success: true, questions });
+  } catch (error) {
+    console.error("Error fetching questions:", error);
+    res.status(500).json({ error: "Failed to fetch questions" });
+  }
+};
+
+// Delete question
+export const deleteQuestion = async (req, res) => {
+  try {
+    const { questionId } = req.params;
+
+    const q = await Question.findById(questionId);
+    if (!q) {
+      return res.status(404).json({ error: "Question not found" });
+    }
+
+    await Question.deleteOne({ _id: questionId });
+
+    // best-effort count update
+    if (q.subtopicId) {
+      await Subtopic.findByIdAndUpdate(q.subtopicId, {
+        $inc: { totalQuestions: -1 },
+      }).catch(() => {});
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error("Error deleting question:", error);
+    res.status(500).json({ error: "Failed to delete question" });
+  }
+};
+
+/* -----------------------------------------------------------------------------
+   SCHEDULING
+----------------------------------------------------------------------------- */
+
 export const scheduleQuestion = async (req, res) => {
   try {
     const { questionId } = req.params;
@@ -141,6 +209,11 @@ export const scheduleQuestion = async (req, res) => {
       { new: true }
     );
 
+    if (!question) {
+      return res.status(404).json({ error: "Question not found" });
+    }
+
+    // Hook for real scheduler / queue
     await addToScheduler(questionId, scheduledRelease);
 
     res.json({ success: true, question });
@@ -150,9 +223,6 @@ export const scheduleQuestion = async (req, res) => {
   }
 };
 
-/* ============================================================================
-   GET ALL SCHEDULED QUESTIONS (Admin Panel)
-============================================================================ */
 export const getScheduledQuestions = async (req, res) => {
   try {
     const scheduledQuestions = await Question.find({
@@ -160,49 +230,22 @@ export const getScheduledQuestions = async (req, res) => {
       isReleased: false,
     })
       .populate("subtopicId", "name")
-      .populate("subtopicId.topicId", "name")
-      .populate("subtopicId.topicId.unitId", "name")
       .sort("scheduledRelease")
       .lean();
 
-    res.json(scheduledQuestions);
+    res.json({ success: true, questions: scheduledQuestions });
   } catch (error) {
     console.error("Error fetching scheduled questions:", error);
-    res.status(500).json({ error: "Failed to fetch scheduled questions" });
+    res
+      .status(500)
+      .json({ error: "Failed to fetch scheduled questions" });
   }
 };
 
-/* ============================================================================
-   DELETE QUESTION (MISSING BEFORE — NOW PERFECT)
-============================================================================ */
-export const deleteQuestion = async (req, res) => {
-  try {
-    const { questionId } = req.params;
+/* -----------------------------------------------------------------------------
+   ANALYTICS
+----------------------------------------------------------------------------- */
 
-    const question = await Question.findById(questionId);
-    if (!question) {
-      return res.status(404).json({ error: "Question not found" });
-    }
-
-    await Question.findByIdAndDelete(questionId);
-
-    await Subtopic.findByIdAndUpdate(question.subtopicId, {
-      $inc: { totalQuestions: -1 },
-    });
-
-    res.json({
-      success: true,
-      message: "Question deleted successfully",
-    });
-  } catch (error) {
-    console.error("Error deleting question:", error);
-    res.status(500).json({ error: "Failed to delete question" });
-  }
-};
-
-/* ============================================================================
-   ADMIN ANALYTICS
-============================================================================ */
 export const getAnalytics = async (req, res) => {
   try {
     const [
@@ -213,9 +256,9 @@ export const getAnalytics = async (req, res) => {
       totalQuestions,
       releasedQuestions,
       premiumQuestions,
-      viewsAgg,
-      completionAgg,
-      timeAgg,
+      totalViewsAgg,
+      totalCompletionsAgg,
+      averageTimeSpentAgg,
     ] = await Promise.all([
       Exam.countDocuments(),
       Unit.countDocuments(),
@@ -224,7 +267,9 @@ export const getAnalytics = async (req, res) => {
       Question.countDocuments(),
       Question.countDocuments({ isReleased: true }),
       Question.countDocuments({ isPremium: true }),
-      Question.aggregate([{ $group: { _id: null, total: { $sum: "$views" } } }]),
+      Question.aggregate([
+        { $group: { _id: null, total: { $sum: "$views" } } },
+      ]),
       Question.aggregate([
         { $group: { _id: null, total: { $sum: "$completionCount" } } },
       ]),
@@ -256,9 +301,9 @@ export const getAnalytics = async (req, res) => {
         premiumQuestions,
       },
       engagement: {
-        totalViews: viewsAgg[0]?.total || 0,
-        totalCompletions: completionAgg[0]?.total || 0,
-        averageTimeSpent: timeAgg[0]?.avg || 0,
+        totalViews: totalViewsAgg[0]?.total || 0,
+        totalCompletions: totalCompletionsAgg[0]?.total || 0,
+        averageTimeSpent: averageTimeSpentAgg[0]?.avg || 0,
       },
       recentQuestions,
       popularQuestions,
@@ -269,60 +314,25 @@ export const getAnalytics = async (req, res) => {
   }
 };
 
-/* ============================================================================
+/* -----------------------------------------------------------------------------
    HELPERS
-============================================================================ */
+----------------------------------------------------------------------------- */
+
 const updateParentCounts = async (type, parentId) => {
   try {
     if (type === "subtopic") {
       await Topic.findByIdAndUpdate(parentId, {
         $inc: { totalSubtopics: 1 },
-      });
+      }).catch(() => {});
     }
-  } catch (err) {
-    console.error("Error updating parent counts:", err);
+  } catch (error) {
+    console.error("Error updating parent counts:", error);
   }
 };
 
-const updateParentQuestionCounts = async (topicId, unitId) => {
-  try {
-    const subtopicIds = await getSubtopicIds(topicId);
-
-    const topicQuestionCount = await Question.countDocuments({
-      subtopicId: { $in: subtopicIds },
-    });
-
-    await Topic.findByIdAndUpdate(topicId, {
-      totalQuestions: topicQuestionCount,
-    });
-
-    const topicIds = await getTopicIds(unitId);
-    const allSubtopics = await Subtopic.find({
-      topicId: { $in: topicIds },
-    }).select("_id");
-
-    const unitQuestionCount = await Question.countDocuments({
-      subtopicId: { $in: allSubtopics.map((s) => s._id) },
-    });
-
-    await Unit.findByIdAndUpdate(unitId, {
-      totalQuestions: unitQuestionCount,
-    });
-  } catch (err) {
-    console.error("Error updating question counts:", err);
-  }
-};
-
-const getSubtopicIds = async (topicId) => {
-  const subs = await Subtopic.find({ topicId }).select("_id");
-  return subs.map((s) => s._id);
-};
-
-const getTopicIds = async (unitId) => {
-  const topics = await Topic.find({ unitId }).select("_id");
-  return topics.map((t) => t._id);
-};
-
+// Dummy scheduler hook (plug in node-cron / Redis / MQ later)
 const addToScheduler = async (questionId, releaseTime) => {
-  console.log(`Scheduling question ${questionId} for ${releaseTime}`);
+  console.log(
+    `Scheduling question ${questionId} for release at ${releaseTime}`
+  );
 };
