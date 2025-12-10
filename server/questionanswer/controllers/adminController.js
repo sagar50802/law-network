@@ -1,163 +1,58 @@
- import Exam from '../models/Exam.js';
+/* ----------------------------------------------------------------------------------
+   ✅ QnA Admin Controller - FINAL VERSION
+   Handles: Create questions, schedule, delete, analytics
+---------------------------------------------------------------------------------- */
+import Exam from '../models/Exam.js';
 import Unit from '../models/Unit.js';
 import Topic from '../models/Topic.js';
 import Subtopic from '../models/Subtopic.js';
 import Question from '../models/Question.js';
+import Progress from '../models/Progress.js';
 
-/* =============================================================================
-   EXAMS & SYLLABUS
-============================================================================= */
-
-// Create new exam
+/* ============================================================================
+   📌 1. CREATE EXAM (ADMIN)
+   Endpoint: POST /api/qna/admin/exams
+   Creates a new exam for QnA system
+============================================================================ */
 export const createExam = async (req, res) => {
   try {
     const { name, nameHindi, description, icon } = req.body;
 
+    // Validate required fields
+    if (!name || !nameHindi) {
+      return res.status(400).json({ error: 'Name and Hindi name are required' });
+    }
+
     const exam = new Exam({
       name,
       nameHindi,
-      description,
-      icon: icon || "⚖️",
+      description: description || '',
+      icon: icon || '⚖️',
+      isActive: true,
     });
 
     await exam.save();
-    res.json({ success: true, exam });
-  } catch (error) {
-    console.error("Error creating exam:", error);
-    res.status(500).json({ error: "Failed to create exam" });
-  }
-};
-
-// Create syllabus node: unit / topic / subtopic
-export const createSyllabusNode = async (req, res) => {
-  try {
-    const { type, parentId, ...data } = req.body;
-
-    let node;
-
-    switch (type) {
-      case "unit":
-        node = new Unit({ examId: parentId, ...data });
-        break;
-
-      case "topic":
-        node = new Topic({ unitId: parentId, ...data });
-        break;
-
-      case "subtopic":
-        node = new Subtopic({ topicId: parentId, ...data });
-        break;
-
-      default:
-        return res.status(400).json({ error: "Invalid node type" });
-    }
-
-    await node.save();
-
-    await updateParentCounts(type, parentId);
-
-    res.json({ success: true, node });
-  } catch (error) {
-    console.error("Error creating syllabus node:", error);
-    res.status(500).json({ error: "Failed to create syllabus node" });
-  }
-};
-
-/* -----------------------------------------------------------------------------
-   UPDATE SYLLABUS NODE (NEW — REQUIRED)
------------------------------------------------------------------------------ */
-export const updateSyllabusNode = async (req, res) => {
-  try {
-    const { type, id } = req.params;
-    const updates = req.body;
-
-    let Model;
-    if (type === "unit") Model = Unit;
-    else if (type === "topic") Model = Topic;
-    else if (type === "subtopic") Model = Subtopic;
-    else return res.status(400).json({ error: "Invalid node type" });
-
-    const updatedNode = await Model.findByIdAndUpdate(id, updates, {
-      new: true,
+    console.log(`✅ Exam created: ${exam.name} (ID: ${exam._id})`);
+    
+    res.json({ 
+      success: true, 
+      exam,
+      message: 'Exam created successfully'
     });
-
-    if (!updatedNode) {
-      return res.status(404).json({ error: "Node not found" });
-    }
-
-    res.json({ success: true, updatedNode });
   } catch (error) {
-    console.error("Error updating syllabus node:", error);
-    res.status(500).json({ error: "Failed to update syllabus node" });
+    console.error('❌ Error creating exam:', error);
+    res.status(500).json({ 
+      error: 'Failed to create exam',
+      details: error.message 
+    });
   }
 };
 
-/* -----------------------------------------------------------------------------
-   DELETE SYLLABUS NODE (NEW — REQUIRED)
------------------------------------------------------------------------------ */
-export const deleteSyllabusNode = async (req, res) => {
-  try {
-    const { type, id } = req.params;
-
-    if (type === "unit") {
-      const topics = await Topic.find({ unitId: id });
-      for (const t of topics) {
-        await Subtopic.deleteMany({ topicId: t._id });
-      }
-      await Topic.deleteMany({ unitId: id });
-      await Unit.findByIdAndDelete(id);
-    }
-
-    else if (type === "topic") {
-      await Subtopic.deleteMany({ topicId: id });
-      await Topic.findByIdAndDelete(id);
-    }
-
-    else if (type === "subtopic") {
-      await Subtopic.findByIdAndDelete(id);
-    }
-
-    else {
-      return res.status(400).json({ error: "Invalid node type" });
-    }
-
-    res.json({ success: true });
-  } catch (error) {
-    console.error("Error deleting syllabus node:", error);
-    res.status(500).json({ error: "Failed to delete syllabus node" });
-  }
-};
-
-/* -----------------------------------------------------------------------------
-   REORDER SYLLABUS (NEW — REQUIRED)
------------------------------------------------------------------------------ */
-export const reorderSyllabus = async (req, res) => {
-  try {
-    const { type } = req.params;
-    const { items } = req.body;
-
-    let Model;
-    if (type === "unit") Model = Unit;
-    else if (type === "topic") Model = Topic;
-    else if (type === "subtopic") Model = Subtopic;
-    else return res.status(400).json({ error: "Invalid type" });
-
-    for (const item of items) {
-      await Model.findByIdAndUpdate(item.id, { order: item.order });
-    }
-
-    res.json({ success: true });
-  } catch (error) {
-    console.error("Error reordering syllabus:", error);
-    res.status(500).json({ error: "Failed to reorder syllabus" });
-  }
-};
-
-/* =============================================================================
-   QUESTIONS
-============================================================================= */
-
-// Create bilingual question
+/* ============================================================================
+   📌 2. CREATE QUESTION (ADMIN)
+   Endpoint: POST /api/qna/admin/questions
+   Creates bilingual question (Hindi + English)
+============================================================================ */
 export const createQuestion = async (req, res) => {
   try {
     const {
@@ -173,151 +68,205 @@ export const createQuestion = async (req, res) => {
       isPremium,
     } = req.body;
 
-    const subtopic = await Subtopic.findById(subtopicId)
-      .populate({
-        path: "topicId",
-        populate: { path: "unitId", select: "examId" },
-      })
-      .lean();
+    console.log(`📝 Creating question for subtopic: ${subtopicId}`);
 
-    if (!subtopic) {
-      return res.status(404).json({ error: "Subtopic not found" });
+    // Validate required fields
+    if (!subtopicId) {
+      return res.status(400).json({ error: 'Subtopic ID is required' });
     }
 
-    const examId = subtopic.topicId.unitId.examId;
+    if (!questionHindi && !questionEnglish) {
+      return res.status(400).json({ error: 'At least one language question is required' });
+    }
 
+    // Find subtopic and populate parent relationships
+    const subtopic = await Subtopic.findById(subtopicId)
+      .populate('topicId', 'unitId')
+      .populate('topicId.unitId', 'examId');
+
+    if (!subtopic) {
+      return res.status(404).json({ error: 'Subtopic not found' });
+    }
+
+    // Get last question order in this subtopic
     const lastQuestion = await Question.findOne({ subtopicId })
       .sort({ order: -1 })
-      .lean();
+      .select('order');
+
     const order = lastQuestion ? lastQuestion.order + 1 : 1;
 
+    // Create question
     const question = new Question({
       subtopicId,
-      examId,
+      examId: subtopic.topicId?.unitId?.examId,
+      unitId: subtopic.topicId?.unitId?._id,
+      topicId: subtopic.topicId?._id,
       order,
-      questionHindi,
-      questionEnglish,
-      answerHindi,
-      answerEnglish,
-      difficulty: difficulty || "medium",
+      questionHindi: questionHindi || '',
+      questionEnglish: questionEnglish || '',
+      answerHindi: answerHindi || '',
+      answerEnglish: answerEnglish || '',
+      difficulty: difficulty || 'medium',
       keywords: keywords || [],
       caseLaws: caseLaws || [],
       scheduledRelease: scheduledRelease ? new Date(scheduledRelease) : null,
-      isReleased: !scheduledRelease,
-      isPremium: !!isPremium,
+      isReleased: !scheduledRelease, // If scheduled, not released yet
+      isPremium: isPremium || false,
     });
 
     await question.save();
 
+    // Update subtopic question count
     await Subtopic.findByIdAndUpdate(subtopicId, {
       $inc: { totalQuestions: 1 },
-    }).catch(() => {});
+    });
 
-    res.json({ success: true, question });
+    console.log(`✅ Question created: ${question._id} (Order: ${order})`);
+    
+    res.json({ 
+      success: true, 
+      question,
+      message: 'Question created successfully'
+    });
   } catch (error) {
-    console.error("Error creating question:", error);
-    res.status(500).json({ error: "Failed to create question" });
+    console.error('❌ Error creating question:', error);
+    res.status(500).json({ 
+      error: 'Failed to create question',
+      details: error.message 
+    });
   }
 };
 
-// List questions
-export const getQuestions = async (req, res) => {
-  try {
-    const { subtopicId } = req.query;
-    const filter = {};
-    if (subtopicId) filter.subtopicId = subtopicId;
-
-    const questions = await Question.find(filter)
-      .sort({ createdAt: -1 })
-      .populate("subtopicId", "name")
-      .lean();
-
-    res.json({ success: true, questions });
-  } catch (error) {
-    console.error("Error fetching questions:", error);
-    res.status(500).json({ error: "Failed to fetch questions" });
-  }
-};
-
-// Delete question
-export const deleteQuestion = async (req, res) => {
-  try {
-    const { questionId } = req.params;
-
-    const q = await Question.findById(questionId);
-    if (!q) {
-      return res.status(404).json({ error: "Question not found" });
-    }
-
-    await Question.deleteOne({ _id: questionId });
-
-    if (q.subtopicId) {
-      await Subtopic.findByIdAndUpdate(q.subtopicId, {
-        $inc: { totalQuestions: -1 },
-      }).catch(() => {});
-    }
-
-    res.json({ success: true });
-  } catch (error) {
-    console.error("Error deleting question:", error);
-    res.status(500).json({ error: "Failed to delete question" });
-  }
-};
-
-/* =============================================================================
-   SCHEDULING
-============================================================================= */
-
+/* ============================================================================
+   📌 3. SCHEDULE QUESTION RELEASE (ADMIN)
+   Endpoint: POST /api/qna/admin/questions/:questionId/schedule
+   Sets future release time for question
+============================================================================ */
 export const scheduleQuestion = async (req, res) => {
   try {
     const { questionId } = req.params;
     const { scheduledRelease } = req.body;
 
+    console.log(`⏰ Scheduling question ${questionId} for ${scheduledRelease}`);
+
+    if (!scheduledRelease) {
+      return res.status(400).json({ error: 'Release time is required' });
+    }
+
+    const releaseDate = new Date(scheduledRelease);
+    if (isNaN(releaseDate.getTime())) {
+      return res.status(400).json({ error: 'Invalid date format' });
+    }
+
     const question = await Question.findByIdAndUpdate(
       questionId,
       {
-        scheduledRelease: new Date(scheduledRelease),
+        scheduledRelease: releaseDate,
         isReleased: false,
       },
       { new: true }
     );
 
     if (!question) {
-      return res.status(404).json({ error: "Question not found" });
+      return res.status(404).json({ error: 'Question not found' });
     }
 
-    await addToScheduler(questionId, scheduledRelease);
-
-    res.json({ success: true, question });
+    // Here you would add to a scheduler service
+    console.log(`✅ Question ${questionId} scheduled for ${releaseDate}`);
+    
+    res.json({ 
+      success: true, 
+      question,
+      message: 'Question scheduled successfully'
+    });
   } catch (error) {
-    console.error("Error scheduling question:", error);
-    res.status(500).json({ error: "Failed to schedule question" });
+    console.error('❌ Error scheduling question:', error);
+    res.status(500).json({ 
+      error: 'Failed to schedule question',
+      details: error.message 
+    });
   }
 };
 
+/* ============================================================================
+   📌 4. GET SCHEDULED QUESTIONS (ADMIN)
+   Endpoint: GET /api/qna/admin/questions
+   Returns all questions with future release dates
+============================================================================ */
 export const getScheduledQuestions = async (req, res) => {
   try {
+    console.log('📅 Fetching scheduled questions...');
+
     const scheduledQuestions = await Question.find({
       scheduledRelease: { $ne: null },
       isReleased: false,
     })
-      .populate("subtopicId", "name")
-      .sort("scheduledRelease")
+      .populate('subtopicId', 'name nameHindi')
+      .populate('topicId', 'name nameHindi')
+      .populate('unitId', 'name nameHindi')
+      .populate('examId', 'name nameHindi')
+      .sort('scheduledRelease')
       .lean();
 
-    res.json({ success: true, questions: scheduledQuestions });
+    console.log(`✅ Found ${scheduledQuestions.length} scheduled questions`);
+    
+    res.json(scheduledQuestions);
   } catch (error) {
-    console.error("Error fetching scheduled questions:", error);
-    res.status(500).json({ error: "Failed to fetch scheduled questions" });
+    console.error('❌ Error fetching scheduled questions:', error);
+    res.status(500).json({ 
+      error: 'Failed to fetch scheduled questions',
+      details: error.message 
+    });
   }
 };
 
-/* =============================================================================
-   ANALYTICS
-============================================================================= */
+/* ============================================================================
+   📌 5. DELETE QUESTION (ADMIN)
+   Endpoint: DELETE /api/qna/admin/questions/:questionId
+   Removes question and updates counts
+============================================================================ */
+export const deleteQuestion = async (req, res) => {
+  try {
+    const { questionId } = req.params;
+    console.log(`🗑️ Deleting question: ${questionId}`);
 
+    const question = await Question.findById(questionId);
+    if (!question) {
+      return res.status(404).json({ error: 'Question not found' });
+    }
+
+    await Question.findByIdAndDelete(questionId);
+
+    // Update subtopic count
+    await Subtopic.findByIdAndUpdate(question.subtopicId, {
+      $inc: { totalQuestions: -1 },
+    });
+
+    console.log(`✅ Question ${questionId} deleted successfully`);
+    
+    res.json({
+      success: true,
+      message: 'Question deleted successfully',
+      deletedId: questionId,
+    });
+  } catch (error) {
+    console.error('❌ Error deleting question:', error);
+    res.status(500).json({ 
+      error: 'Failed to delete question',
+      details: error.message 
+    });
+  }
+};
+
+/* ============================================================================
+   📌 6. GET ANALYTICS (ADMIN)
+   Endpoint: GET /api/qna/admin/analytics
+   Returns system statistics and engagement data
+============================================================================ */
 export const getAnalytics = async (req, res) => {
   try {
+    console.log('📊 Generating analytics...');
+
     const [
       totalExams,
       totalUnits,
@@ -326,9 +275,7 @@ export const getAnalytics = async (req, res) => {
       totalQuestions,
       releasedQuestions,
       premiumQuestions,
-      totalViewsAgg,
-      totalCompletionsAgg,
-      averageTimeSpentAgg,
+      scheduledQuestions,
     ] = await Promise.all([
       Exam.countDocuments(),
       Unit.countDocuments(),
@@ -337,27 +284,28 @@ export const getAnalytics = async (req, res) => {
       Question.countDocuments(),
       Question.countDocuments({ isReleased: true }),
       Question.countDocuments({ isPremium: true }),
-      Question.aggregate([{ $group: { _id: null, total: { $sum: "$views" } } }]),
-      Question.aggregate([
-        { $group: { _id: null, total: { $sum: "$completionCount" } } },
-      ]),
-      Question.aggregate([
-        { $group: { _id: null, avg: { $avg: "$averageTimeSpent" } } },
-      ]),
+      Question.countDocuments({ 
+        scheduledRelease: { $ne: null },
+        isReleased: false 
+      }),
     ]);
 
-    const recentQuestions = await Question.find()
-      .sort({ createdAt: -1 })
-      .limit(10)
-      .populate("subtopicId", "name")
-      .lean();
-
+    // Get popular questions (most views)
     const popularQuestions = await Question.find()
       .sort({ views: -1 })
       .limit(10)
-      .populate("subtopicId", "name")
+      .populate('subtopicId', 'name')
       .lean();
 
+    // Get recent questions
+    const recentQuestions = await Question.find()
+      .sort({ createdAt: -1 })
+      .limit(10)
+      .populate('subtopicId', 'name')
+      .lean();
+
+    console.log('✅ Analytics generated successfully');
+    
     res.json({
       counts: {
         exams: totalExams,
@@ -367,38 +315,29 @@ export const getAnalytics = async (req, res) => {
         questions: totalQuestions,
         releasedQuestions,
         premiumQuestions,
+        scheduledQuestions,
       },
-      engagement: {
-        totalViews: totalViewsAgg[0]?.total || 0,
-        totalCompletions: totalCompletionsAgg[0]?.total || 0,
-        averageTimeSpent: averageTimeSpentAgg[0]?.avg || 0,
-      },
-      recentQuestions,
       popularQuestions,
+      recentQuestions,
+      generatedAt: new Date().toISOString(),
     });
   } catch (error) {
-    console.error("Error fetching analytics:", error);
-    res.status(500).json({ error: "Failed to fetch analytics" });
+    console.error('❌ Error generating analytics:', error);
+    res.status(500).json({ 
+      error: 'Failed to generate analytics',
+      details: error.message 
+    });
   }
 };
 
-/* =============================================================================
-   HELPERS
-============================================================================= */
-
-const updateParentCounts = async (type, parentId) => {
-  try {
-    if (type === "subtopic") {
-      await Topic.findByIdAndUpdate(parentId, {
-        $inc: { totalSubtopics: 1 },
-      }).catch(() => {});
-    }
-  } catch (error) {
-    console.error("Error updating parent counts:", error);
-  }
-};
-
-// Dummy scheduler hook
-const addToScheduler = async (questionId, releaseTime) => {
-  console.log(`Scheduling question ${questionId} for release at ${releaseTime}`);
+/* ============================================================================
+   📌 EXPORTS (MATCHES ROUTES IMPORT)
+============================================================================ */
+export {
+  createExam,
+  createQuestion,
+  scheduleQuestion,
+  getScheduledQuestions,
+  deleteQuestion,
+  getAnalytics,
 };
