@@ -1,8 +1,6 @@
 /* ----------------------------------------------------------------------------------
    QnA Routes (Answer Writing System)
-   Base path from server: /api/qna/...
 ---------------------------------------------------------------------------------- */
-
 import express from "express";
 import {
   validateSyllabusNavigation,
@@ -11,7 +9,7 @@ import {
   preventDirectAccess,
 } from "../middlewares/validateAccess.js";
 
-/* Controllers */
+/* Student-facing controllers */
 import {
   getExams,
   getSyllabusTree,
@@ -30,23 +28,30 @@ import {
   recordUserAction,
 } from "../controllers/qnaRecommendationController.js";
 
+/* Admin controllers */
 import {
+  createExam,
+  createSyllabusNode,
   createQuestion,
   scheduleQuestion,
   getScheduledQuestions,
   deleteQuestion,
   getAnalytics,
+  getQuestions,
 } from "../controllers/adminController.js";
 
 const router = express.Router();
 
 /* -------------------------------------------------------------------------- */
-/* PUBLIC ROUTES — MUST MATCH FRONTEND                                        */
+/* PUBLIC ROUTES — MUST MATCH FRONTEND EXACTLY                                */
+/* (all mounted under /api/qna in server.js)                                  */
 /* -------------------------------------------------------------------------- */
 
-router.get("/exams", getExams); // GET /api/qna/exams
-router.get("/syllabus/:examId", getSyllabusTree); // GET /api/qna/syllabus/:examId
+// Exams & syllabus
+router.get("/exams", getExams);
+router.get("/syllabus/:examId", getSyllabusTree);
 
+// Single question view
 router.get(
   "/question/:questionId",
   preventDirectAccess,
@@ -56,32 +61,42 @@ router.get(
 );
 
 // Student progress
-router.get("/progress", getUserProgress); // GET /api/qna/progress
-router.post("/progress", saveProgress); // POST /api/qna/progress
+router.get("/progress", getUserProgress);
+router.post("/progress", saveProgress);
 
-/* -------------------------------------------------------------------------- */
-/* RECOMMENDATIONS                                                            */
-/* -------------------------------------------------------------------------- */
-
+// Recommendations / navigation
 router.get("/recommendations", getRecommendations);
 router.post("/recommendations/action", recordUserAction);
-
-/* -------------------------------------------------------------------------- */
-/* TOPIC NAVIGATION                                                           */
-/* -------------------------------------------------------------------------- */
 
 router.get("/topics/next/:topicId", validateNavigation);
 router.get("/topics/dependent/:subtopicId", validateNavigation);
 
 /* -------------------------------------------------------------------------- */
-/* ADMIN ROUTES                                                               */
-/* Base URL: /api/qna/admin/...                                              */
+/* ADMIN ROUTES — CLEAN & CORRECT                                            */
+/* (all require admin on frontend; you can add auth middleware later)        */
 /* -------------------------------------------------------------------------- */
 
-router.get("/admin/questions", getScheduledQuestions);
-router.post("/admin/questions", createQuestion);
-router.post("/admin/questions/:questionId/schedule", scheduleQuestion);
-router.delete("/admin/questions/:questionId", deleteQuestion);
+// Exams & syllabus structure
+router.post("/admin/exams", createExam);          // create new exam
+router.post("/admin/syllabus", createSyllabusNode); // create unit/topic/subtopic
+
+// Questions CRUD + scheduling
+router.get("/admin/questions", getQuestions);     // list/filter questions
+router.post("/admin/questions", createQuestion);  // create question
+router.post(
+  "/admin/questions/:questionId/schedule",
+  scheduleQuestion
+);
+router.get(
+  "/admin/scheduled-questions",
+  getScheduledQuestions
+);
+router.delete(
+  "/admin/questions/:questionId",
+  deleteQuestion
+);
+
+// Analytics
 router.get("/admin/analytics", getAnalytics);
 
 export default router;
