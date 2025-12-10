@@ -1,7 +1,8 @@
+// server/questionanswer/models/Question.js
 import mongoose from "mongoose";
 
 const QuestionSchema = new mongoose.Schema({
-  examId: { type: mongoose.Schema.Types.ObjectId, ref: "QnaExam" },
+  examId: { type: mongoose.Schema.Types.ObjectId, ref: "QnaExam" }, // CHANGED from "Exam" to "QnaExam"
   unitId: { type: mongoose.Schema.Types.ObjectId, ref: "Unit" },
   topicId: { type: mongoose.Schema.Types.ObjectId, ref: "Topic" },
   subtopicId: { type: mongoose.Schema.Types.ObjectId, ref: "Subtopic" },
