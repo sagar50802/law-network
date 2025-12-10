@@ -1,20 +1,32 @@
 import mongoose from "mongoose";
 
 const QuestionSchema = new mongoose.Schema({
-  examId: { type: mongoose.Schema.Types.ObjectId, ref: "Exam" },
+  examId: { type: mongoose.Schema.Types.ObjectId, ref: "QnaExam" },
+  unitId: { type: mongoose.Schema.Types.ObjectId, ref: "Unit" },
   topicId: { type: mongoose.Schema.Types.ObjectId, ref: "Topic" },
-  text: { type: String, required: true },
+  subtopicId: { type: mongoose.Schema.Types.ObjectId, ref: "Subtopic" },
 
-  isLocked: { type: Boolean, default: false },
-  isPremium: { type: Boolean, default: false },
-  scheduledRelease: { type: Date, default: null },
+  order: { type: Number, default: 1 },
+
+  questionHindi: String,
+  questionEnglish: String,
+  answerHindi: String,
+  answerEnglish: String,
+
+  keywords: [String],
+  caseLaws: [String],
 
   difficulty: { type: String, enum: ["easy", "medium", "hard"], default: "medium" },
+
+  isPremium: { type: Boolean, default: false },
+  scheduledRelease: { type: Date, default: null },
+  isReleased: { type: Boolean, default: true },
+
   views: { type: Number, default: 0 },
+  completionCount: { type: Number, default: 0 },
+  averageTimeSpent: { type: Number, default: 0 },
 
   createdAt: { type: Date, default: Date.now },
 });
 
-const Question = mongoose.model("Question", QuestionSchema);
-
-export default Question;
+export default mongoose.model("Question", QuestionSchema);
