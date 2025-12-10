@@ -124,6 +124,13 @@ import libraryRouter from "./routes/library.js";
 import libraryUserRouter from "./routes/libraryUser.js";
 import librarySettingsAdmin from "./routes/librarySettingsAdmin.js";
 import libraryAdminRouter from "./routes/libraryAdmin.js";
+/* ---------- QNA EXAM PLATFORM ---------- */
+import qnaExamRoutes from "./routes/qna/exams.js";
+import qnaUnitRoutes from "./routes/qna/units.js";
+import qnaTopicRoutes from "./routes/qna/topics.js";
+import qnaSubtopicRoutes from "./routes/qna/subtopics.js";
+import qnaQuestionRoutes from "./routes/qna/questions.js";
+
 
 /* ❌ Removed QnA Routes */
 // import qnaRoutes from "./questionanswer/routes/qnaRoutes.js";
@@ -164,6 +171,13 @@ app.use("/api/classroom-access", classroomAccessRoutes);
 app.use("/api/classroom/media", classroomUploadRoutes);
 app.use("/api/footer", footerRoutes);
 app.use("/api/terms", termsRoutes);
+/* ---------- QNA PLATFORM ROUTES ---------- */
+app.use("/api/qna/exams", qnaExamRoutes);
+app.use("/api/qna", qnaUnitRoutes);
+app.use("/api/qna/units", qnaTopicRoutes);
+app.use("/api/qna/topics", qnaSubtopicRoutes);
+app.use("/api/qna/subtopics", qnaQuestionRoutes);
+
 
 /* ❌ Removed QnA mount */
 // app.use("/api/qna", qnaRoutes);
