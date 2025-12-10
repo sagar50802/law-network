@@ -1,9 +1,13 @@
-const mongoose = require("mongoose");
+import mongoose from "mongoose";
 
-const TopicSchema = new mongoose.Schema({
-  unitId: { type: mongoose.Schema.Types.ObjectId, ref: "QnaUnit", required: true },
-  name: { type: String, required: true },
-  order: Number
-});
+const topicSchema = new mongoose.Schema(
+  {
+    unitId: { type: mongoose.Schema.Types.ObjectId, ref: "Unit", required: true },
+    name: { type: String, required: true },
+    order: { type: Number, default: 0 }
+  },
+  { timestamps: true }
+);
 
-module.exports = mongoose.model("QnaTopic", TopicSchema);
+const Topic = mongoose.model("Topic", topicSchema);
+export default Topic;
