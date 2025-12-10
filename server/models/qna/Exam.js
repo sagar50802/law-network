@@ -1,10 +1,13 @@
-const mongoose = require("mongoose");
+import mongoose from "mongoose";
 
-const ExamSchema = new mongoose.Schema({
-  name: { type: String, required: true },
-  description: String,
-  isLocked: { type: Boolean, default: false },
-  createdAt: { type: Date, default: Date.now }
-});
+const examSchema = new mongoose.Schema(
+  {
+    name: { type: String, required: true },
+    description: String,
+    isLocked: { type: Boolean, default: false }
+  },
+  { timestamps: true }
+);
 
-module.exports = mongoose.model("QnaExam", ExamSchema);
+const Exam = mongoose.model("Exam", examSchema);
+export default Exam;
