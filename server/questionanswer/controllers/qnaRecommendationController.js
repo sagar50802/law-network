@@ -1,8 +1,7 @@
-import Topic from '../models/Topic.js';
-import Subtopic from '../models/Subtopic.js';
-import Question from '../models/Question.js';
-import Progress from '../models/Progress.js';
-
+ import Topic from "../models/Topic.js";
+import Subtopic from "../models/Subtopic.js";
+import Question from "../models/Question.js";
+import Progress from "../models/Progress.js";
 // Get recommendations based on current topic
 export const getRecommendations = async (req, res) => {
   try {
