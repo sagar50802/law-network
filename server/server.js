@@ -71,8 +71,8 @@ app.use((req, _res, next) => {
   "uploads/qr",
   "uploads/testseries",
   "uploads/classroom",
-  "uploads/library",
-  "uploads/questionanswer", // QnA upload folder
+  "uploads/library"
+  // ❌ Removed QnA folder
 ].forEach((rel) => {
   const full = path.join(__dirname, rel);
   if (!fs.existsSync(full)) fs.mkdirSync(full, { recursive: true });
@@ -125,10 +125,8 @@ import libraryUserRouter from "./routes/libraryUser.js";
 import librarySettingsAdmin from "./routes/librarySettingsAdmin.js";
 import libraryAdminRouter from "./routes/libraryAdmin.js";
 
-/* -------------------------------------------------------------------------- */
-/* 📌 IMPORT QnA ROUTES (Answer Writing & Reading System)                     */
-/* -------------------------------------------------------------------------- */
-import qnaRoutes from "./questionanswer/routes/qnaRoutes.js";
+/* ❌ Removed QnA Routes */
+// import qnaRoutes from "./questionanswer/routes/qnaRoutes.js";
 
 /* -------------------------------------------------------------------------- */
 /* 📌 MOUNT ROUTES                                                            */
@@ -167,10 +165,8 @@ app.use("/api/classroom/media", classroomUploadRoutes);
 app.use("/api/footer", footerRoutes);
 app.use("/api/terms", termsRoutes);
 
-/* -------------------------------------------------------------------------- */
-/* 📌 MOUNT QnA ROUTES (mounted under /api/qna/...)                           */
-/* -------------------------------------------------------------------------- */
-app.use("/api/qna", qnaRoutes);
+/* ❌ Removed QnA mount */
+// app.use("/api/qna", qnaRoutes);
 
 /* -------------------------------------------------------------------------- */
 /* 📌 Health Check                                                            */
@@ -182,7 +178,7 @@ app.get("/", (_req, res) =>
     service: "Law Network API",
     features: [
       "Core Platform",
-      "Answer Writing & Reading System (QnA)",
+      // ❌ Removed QnA from list
       "Library",
       "Classroom",
       "Test Series",
@@ -213,31 +209,8 @@ app.use((err, req, res, next) => {
 });
 
 /* -------------------------------------------------------------------------- */
-/* 📌 Initialize QnA Services (Scheduler & Recommendation)                    */
+/* ❌ Removed QnA Service Initialization                                      */
 /* -------------------------------------------------------------------------- */
-const initializeQnAServices = async () => {
-  try {
-    console.log("🧩 Initializing QnA services...");
-
-    const schedulerModule = await import(
-      "./services/questionanswer/scheduler.js"
-    );
-    const recommendationModule = await import(
-      "./services/questionanswer/recommendationService.js"
-    );
-
-    await schedulerModule.initializeScheduler();
-    console.log("✅ QnA Scheduler initialized");
-
-    await recommendationModule.initializeTopicGraph();
-    console.log("✅ QnA Recommendation Service initialized");
-  } catch (error) {
-    console.error(
-      "⚠️ QnA Services initialization failed (non-critical):",
-      error.message
-    );
-  }
-};
 
 /* -------------------------------------------------------------------------- */
 /* 📌 MongoDB Connect                                                         */
@@ -246,11 +219,8 @@ mongoose
   .connect(process.env.MONGO_URI, {
     dbName: process.env.MONGO_DB || undefined,
   })
-  .then(async () => {
+  .then(() => {
     console.log("✅ MongoDB connected");
-
-    // Initialize QnA services after DB connection
-    await initializeQnAServices();
   })
   .catch((err) => console.error("❌ MongoDB Connection Error:", err.message));
 
@@ -262,29 +232,8 @@ const server = app.listen(PORT, HOST, () =>
 );
 
 /* -------------------------------------------------------------------------- */
-/* 📌 Graceful Shutdown                                                       */
+/* ❌ Removed QnA Graceful Shutdown                                           */
 /* -------------------------------------------------------------------------- */
-const gracefulShutdown = async () => {
-  console.log("🔄 Graceful shutdown initiated...");
 
-  try {
-    const { stopScheduler } = await import(
-      "./services/questionanswer/scheduler.js"
-    );
-    await stopScheduler();
-    console.log("✅ QnA Scheduler stopped");
-  } catch (error) {
-    console.error("⚠️ Error stopping QnA scheduler:", error.message);
-  }
-
-  server.close(() => {
-    console.log("✅ HTTP server closed");
-    mongoose.connection.close(false, () => {
-      console.log("✅ MongoDB connection closed");
-      process.exit(0);
-    });
-  });
-};
-
-process.on("SIGTERM", gracefulShutdown);
-process.on("SIGINT", gracefulShutdown);
+process.on("SIGTERM", () => process.exit(0));
+process.on("SIGINT", () => process.exit(0));
