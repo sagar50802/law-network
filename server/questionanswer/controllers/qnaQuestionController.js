@@ -1,5 +1,5 @@
-import Question from '../models/Question.js';
-import Progress from '../models/Progress.js';
+ import Question from "../models/Question.js";
+import Progress from "../models/Progress.js";
 
 // Get question by ID
 export const getQuestion = async (req, res) => {
