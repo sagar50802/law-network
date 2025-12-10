@@ -1,7 +1,8 @@
+// server/questionanswer/models/Unit.js
 import mongoose from "mongoose";
 
 const unitSchema = new mongoose.Schema({
-  examId: { type: mongoose.Schema.Types.ObjectId, ref: "QnaExam", required: true },
+  examId: { type: mongoose.Schema.Types.ObjectId, ref: "QnaExam", required: true }, // CHANGED from "Exam" to "QnaExam"
   order: { type: Number, required: true },
   name: { type: String, required: true, trim: true },
   nameHindi: { type: String, required: true },
@@ -12,12 +13,6 @@ const unitSchema = new mongoose.Schema({
   isLocked: { type: Boolean, default: false },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
-});
-
-unitSchema.virtual("topics", {
-  ref: "Topic",
-  localField: "_id",
-  foreignField: "unitId",
 });
 
 export default mongoose.model("Unit", unitSchema);
