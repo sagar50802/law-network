@@ -1,61 +1,72 @@
-const express = require("express");
+import express from "express";
+import Exam from "../../models/qna/Exam.js";
+
 const router = express.Router();
-const ownerCheck = require("../../middleware/ownerCheck");
 
-const Exam = require("../../models/qna/Exam");
-const Unit = require("../../models/qna/Unit");
-const Topic = require("../../models/qna/Topic");
-const Subtopic = require("../../models/qna/Subtopic");
-const Question = require("../../models/qna/Question");
-
-/* ---------------------------
-   PUBLIC: Get all exams
----------------------------- */
+/* GET /qna/exams */
 router.get("/", async (req, res) => {
-  const exams = await Exam.find().sort({ createdAt: -1 });
-  res.json(exams);
+  try {
+    const exams = await Exam.find().sort({ createdAt: -1 });
+    res.json(exams);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
 });
 
-/* ---------------------------
-   PUBLIC: Single exam detail
----------------------------- */
-router.get("/:examId", async (req, res) => {
-  const exam = await Exam.findById(req.params.examId);
-  res.json(exam);
+/* GET /qna/exams/:id */
+router.get("/:id", async (req, res) => {
+  try {
+    const exam = await Exam.findById(req.params.id);
+    if (!exam) return res.status(404).json({ message: "Exam not found" });
+    res.json(exam);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
 });
 
-/* ---------------------------
-   ADMIN: Create exam
----------------------------- */
-router.post("/", ownerCheck, async (req, res) => {
-  const exam = await Exam.create(req.body);
-  res.json(exam);
+/* POST /qna/exams */
+router.post("/", async (req, res) => {
+  try {
+    const exam = await Exam.create(req.body);
+    res.status(201).json(exam);
+  } catch (err) {
+    res.status(400).json({ message: err.message });
+  }
 });
 
-/* ---------------------------
-   ADMIN: Update exam
----------------------------- */
-router.put("/:id", ownerCheck, async (req, res) => {
-  const exam = await Exam.findByIdAndUpdate(req.params.id, req.body, { new: true });
-  res.json(exam);
+/* PUT /qna/exams/:id */
+router.put("/:id", async (req, res) => {
+  try {
+    const exam = await Exam.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    res.json(exam);
+  } catch (err) {
+    res.status(400).json({ message: err.message });
+  }
 });
 
-/* ---------------------------
-   ADMIN: Delete exam
----------------------------- */
-router.delete("/:id", ownerCheck, async (req, res) => {
-  await Exam.findByIdAndDelete(req.params.id);
-  res.json({ success: true });
+/* DELETE /qna/exams/:id */
+router.delete("/:id", async (req, res) => {
+  try {
+    await Exam.findByIdAndDelete(req.params.id);
+    res.json({ message: "Exam deleted" });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
 });
 
-/* ---------------------------
-   ADMIN: Toggle lock
----------------------------- */
-router.post("/:id/toggle-lock", ownerCheck, async (req, res) => {
-  const exam = await Exam.findById(req.params.id);
-  exam.isLocked = !exam.isLocked;
-  await exam.save();
-  res.json(exam);
+/* POST /qna/exams/:id/toggle-lock */
+router.post("/:id/toggle-lock", async (req, res) => {
+  try {
+    const exam = await Exam.findById(req.params.id);
+    if (!exam) return res.status(404).json({ message: "Exam not found" });
+
+    exam.isLocked = !exam.isLocked;
+    await exam.save();
+
+    res.json(exam);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
 });
 
-module.exports = router;
+export default router;
