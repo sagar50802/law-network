@@ -4,9 +4,9 @@ import Topic from "../models/Topic.js";
 import Subtopic from "../models/Subtopic.js";
 import Question from "../models/Question.js";
 
-/* -----------------------------------------------------------------------------
+/* =============================================================================
    EXAMS & SYLLABUS
------------------------------------------------------------------------------ */
+============================================================================= */
 
 // Create new exam
 export const createExam = async (req, res) => {
@@ -21,7 +21,6 @@ export const createExam = async (req, res) => {
     });
 
     await exam.save();
-
     res.json({ success: true, exam });
   } catch (error) {
     console.error("Error creating exam:", error);
@@ -38,24 +37,15 @@ export const createSyllabusNode = async (req, res) => {
 
     switch (type) {
       case "unit":
-        node = new Unit({
-          examId: parentId,
-          ...data,
-        });
+        node = new Unit({ examId: parentId, ...data });
         break;
 
       case "topic":
-        node = new Topic({
-          unitId: parentId,
-          ...data,
-        });
+        node = new Topic({ unitId: parentId, ...data });
         break;
 
       case "subtopic":
-        node = new Subtopic({
-          topicId: parentId,
-          ...data,
-        });
+        node = new Subtopic({ topicId: parentId, ...data });
         break;
 
       default:
@@ -64,7 +54,6 @@ export const createSyllabusNode = async (req, res) => {
 
     await node.save();
 
-    // lightweight parent count update
     await updateParentCounts(type, parentId);
 
     res.json({ success: true, node });
@@ -75,8 +64,98 @@ export const createSyllabusNode = async (req, res) => {
 };
 
 /* -----------------------------------------------------------------------------
-   QUESTIONS
+   UPDATE SYLLABUS NODE (NEW — REQUIRED)
 ----------------------------------------------------------------------------- */
+export const updateSyllabusNode = async (req, res) => {
+  try {
+    const { type, id } = req.params;
+    const updates = req.body;
+
+    let Model;
+    if (type === "unit") Model = Unit;
+    else if (type === "topic") Model = Topic;
+    else if (type === "subtopic") Model = Subtopic;
+    else return res.status(400).json({ error: "Invalid node type" });
+
+    const updatedNode = await Model.findByIdAndUpdate(id, updates, {
+      new: true,
+    });
+
+    if (!updatedNode) {
+      return res.status(404).json({ error: "Node not found" });
+    }
+
+    res.json({ success: true, updatedNode });
+  } catch (error) {
+    console.error("Error updating syllabus node:", error);
+    res.status(500).json({ error: "Failed to update syllabus node" });
+  }
+};
+
+/* -----------------------------------------------------------------------------
+   DELETE SYLLABUS NODE (NEW — REQUIRED)
+----------------------------------------------------------------------------- */
+export const deleteSyllabusNode = async (req, res) => {
+  try {
+    const { type, id } = req.params;
+
+    if (type === "unit") {
+      const topics = await Topic.find({ unitId: id });
+      for (const t of topics) {
+        await Subtopic.deleteMany({ topicId: t._id });
+      }
+      await Topic.deleteMany({ unitId: id });
+      await Unit.findByIdAndDelete(id);
+    }
+
+    else if (type === "topic") {
+      await Subtopic.deleteMany({ topicId: id });
+      await Topic.findByIdAndDelete(id);
+    }
+
+    else if (type === "subtopic") {
+      await Subtopic.findByIdAndDelete(id);
+    }
+
+    else {
+      return res.status(400).json({ error: "Invalid node type" });
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error("Error deleting syllabus node:", error);
+    res.status(500).json({ error: "Failed to delete syllabus node" });
+  }
+};
+
+/* -----------------------------------------------------------------------------
+   REORDER SYLLABUS (NEW — REQUIRED)
+----------------------------------------------------------------------------- */
+export const reorderSyllabus = async (req, res) => {
+  try {
+    const { type } = req.params;
+    const { items } = req.body;
+
+    let Model;
+    if (type === "unit") Model = Unit;
+    else if (type === "topic") Model = Topic;
+    else if (type === "subtopic") Model = Subtopic;
+    else return res.status(400).json({ error: "Invalid type" });
+
+    for (const item of items) {
+      await Model.findByIdAndUpdate(item.id, { order: item.order });
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error("Error reordering syllabus:", error);
+    res.status(500).json({ error: "Failed to reorder syllabus" });
+  }
+};
+
+/* =============================================================================
+   QUESTIONS
+============================================================================= */
 
 // Create bilingual question
 export const createQuestion = async (req, res) => {
@@ -94,7 +173,6 @@ export const createQuestion = async (req, res) => {
       isPremium,
     } = req.body;
 
-    // Get exam & chain via subtopic → topic → unit → exam
     const subtopic = await Subtopic.findById(subtopicId)
       .populate({
         path: "topicId",
@@ -108,7 +186,6 @@ export const createQuestion = async (req, res) => {
 
     const examId = subtopic.topicId.unitId.examId;
 
-    // Get next order number within subtopic
     const lastQuestion = await Question.findOne({ subtopicId })
       .sort({ order: -1 })
       .lean();
@@ -125,16 +202,13 @@ export const createQuestion = async (req, res) => {
       difficulty: difficulty || "medium",
       keywords: keywords || [],
       caseLaws: caseLaws || [],
-      scheduledRelease: scheduledRelease
-        ? new Date(scheduledRelease)
-        : null,
+      scheduledRelease: scheduledRelease ? new Date(scheduledRelease) : null,
       isReleased: !scheduledRelease,
       isPremium: !!isPremium,
     });
 
     await question.save();
 
-    // Update counts (best effort)
     await Subtopic.findByIdAndUpdate(subtopicId, {
       $inc: { totalQuestions: 1 },
     }).catch(() => {});
@@ -146,7 +220,7 @@ export const createQuestion = async (req, res) => {
   }
 };
 
-// List questions (optionally by subtopic)
+// List questions
 export const getQuestions = async (req, res) => {
   try {
     const { subtopicId } = req.query;
@@ -177,7 +251,6 @@ export const deleteQuestion = async (req, res) => {
 
     await Question.deleteOne({ _id: questionId });
 
-    // best-effort count update
     if (q.subtopicId) {
       await Subtopic.findByIdAndUpdate(q.subtopicId, {
         $inc: { totalQuestions: -1 },
@@ -191,9 +264,9 @@ export const deleteQuestion = async (req, res) => {
   }
 };
 
-/* -----------------------------------------------------------------------------
+/* =============================================================================
    SCHEDULING
------------------------------------------------------------------------------ */
+============================================================================= */
 
 export const scheduleQuestion = async (req, res) => {
   try {
@@ -213,7 +286,6 @@ export const scheduleQuestion = async (req, res) => {
       return res.status(404).json({ error: "Question not found" });
     }
 
-    // Hook for real scheduler / queue
     await addToScheduler(questionId, scheduledRelease);
 
     res.json({ success: true, question });
@@ -236,15 +308,13 @@ export const getScheduledQuestions = async (req, res) => {
     res.json({ success: true, questions: scheduledQuestions });
   } catch (error) {
     console.error("Error fetching scheduled questions:", error);
-    res
-      .status(500)
-      .json({ error: "Failed to fetch scheduled questions" });
+    res.status(500).json({ error: "Failed to fetch scheduled questions" });
   }
 };
 
-/* -----------------------------------------------------------------------------
+/* =============================================================================
    ANALYTICS
------------------------------------------------------------------------------ */
+============================================================================= */
 
 export const getAnalytics = async (req, res) => {
   try {
@@ -267,9 +337,7 @@ export const getAnalytics = async (req, res) => {
       Question.countDocuments(),
       Question.countDocuments({ isReleased: true }),
       Question.countDocuments({ isPremium: true }),
-      Question.aggregate([
-        { $group: { _id: null, total: { $sum: "$views" } } },
-      ]),
+      Question.aggregate([{ $group: { _id: null, total: { $sum: "$views" } } }]),
       Question.aggregate([
         { $group: { _id: null, total: { $sum: "$completionCount" } } },
       ]),
@@ -314,9 +382,9 @@ export const getAnalytics = async (req, res) => {
   }
 };
 
-/* -----------------------------------------------------------------------------
+/* =============================================================================
    HELPERS
------------------------------------------------------------------------------ */
+============================================================================= */
 
 const updateParentCounts = async (type, parentId) => {
   try {
@@ -330,9 +398,7 @@ const updateParentCounts = async (type, parentId) => {
   }
 };
 
-// Dummy scheduler hook (plug in node-cron / Redis / MQ later)
+// Dummy scheduler hook
 const addToScheduler = async (questionId, releaseTime) => {
-  console.log(
-    `Scheduling question ${questionId} for release at ${releaseTime}`
-  );
+  console.log(`Scheduling question ${questionId} for release at ${releaseTime}`);
 };
