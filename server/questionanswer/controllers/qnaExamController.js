@@ -1,4 +1,3 @@
-import Exam from "../models/examModel.js";
 import Unit from "../models/unitModel.js";
 import Topic from "../models/topicModel.js";
 import Subtopic from "../models/subtopicModel.js";
@@ -8,13 +7,11 @@ export const getSyllabusTree = async (req, res) => {
   try {
     const { examId } = req.params;
 
-    // Fetch all units for this exam
+    // Fetch units
     const units = await Unit.find({ examId }).sort({ order: 1 }).lean();
-
-    const fullTree = [];
+    const tree = [];
 
     for (const unit of units) {
-      // Fetch topics for this unit
       const topics = await Topic.find({ unitId: unit._id })
         .sort({ order: 1 })
         .lean();
@@ -22,7 +19,6 @@ export const getSyllabusTree = async (req, res) => {
       const topicList = [];
 
       for (const topic of topics) {
-        // Fetch subtopics for this topic
         const subtopics = await Subtopic.find({ topicId: topic._id })
           .sort({ order: 1 })
           .lean();
@@ -30,15 +26,13 @@ export const getSyllabusTree = async (req, res) => {
         const subtopicList = [];
 
         for (const st of subtopics) {
-          // Count questions under this subtopic
-          const qCount = await Question.countDocuments({
-            subtopicId: st._id,
-          });
+          const qCount = await Question.countDocuments({ subtopicId: st._id });
 
           subtopicList.push({
             id: st._id,
             name: st.name,
             nameHindi: st.nameHindi,
+            order: st.order,
             totalQuestions: qCount,
             isLocked: st.isLocked,
           });
@@ -49,24 +43,26 @@ export const getSyllabusTree = async (req, res) => {
           name: topic.name,
           nameHindi: topic.nameHindi,
           description: topic.description,
+          order: topic.order,
           totalSubtopics: subtopics.length,
           subtopics: subtopicList,
         });
       }
 
-      fullTree.push({
+      tree.push({
         id: unit._id,
         name: unit.name,
         nameHindi: unit.nameHindi,
         description: unit.description,
+        order: unit.order,
         totalTopics: topics.length,
         topics: topicList,
       });
     }
 
-    res.json(fullTree);
-  } catch (error) {
-    console.error("Syllabus tree error:", error);
+    res.json(tree);
+  } catch (err) {
+    console.error("Syllabus Tree Error:", err);
     res.status(500).json({ message: "Failed to load syllabus" });
   }
 };
