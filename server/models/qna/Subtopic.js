@@ -1,9 +1,13 @@
-const mongoose = require("mongoose");
+import mongoose from "mongoose";
 
-const SubtopicSchema = new mongoose.Schema({
-  topicId: { type: mongoose.Schema.Types.ObjectId, ref: "QnaTopic", required: true },
-  name: { type: String, required: true },
-  order: Number
-});
+const subtopicSchema = new mongoose.Schema(
+  {
+    topicId: { type: mongoose.Schema.Types.ObjectId, ref: "Topic", required: true },
+    name: { type: String, required: true },
+    order: { type: Number, default: 0 }
+  },
+  { timestamps: true }
+);
 
-module.exports = mongoose.model("QnaSubtopic", SubtopicSchema);
+const Subtopic = mongoose.model("Subtopic", subtopicSchema);
+export default Subtopic;
