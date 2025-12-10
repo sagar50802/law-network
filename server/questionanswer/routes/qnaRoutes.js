@@ -1,7 +1,6 @@
 /* ----------------------------------------------------------------------------------
-   ✅ QnA Routes (Answer Writing System) - COMPLETE & FIXED
+   ✅ QnA Routes - FINAL VERSION (NO BROKEN IMPORTS)
 ---------------------------------------------------------------------------------- */
-
 import express from 'express';
 import {
   validateSyllabusNavigation,
@@ -13,10 +12,10 @@ import {
 const router = express.Router();
 
 /* -------------------------------------------------------------------------- */
-/* 📌 CONTROLLERS                                                              */
+/* 📌 CONTROLLERS (CORRECT IMPORTS ONLY)                                     */
 /* -------------------------------------------------------------------------- */
 
-// Exam Controller
+// Exam Controller - ONLY THESE 3 FUNCTIONS EXIST
 import {
   getExams,
   getSyllabusTree,
@@ -46,16 +45,16 @@ import {
 } from '../controllers/adminController.js';
 
 /* -------------------------------------------------------------------------- */
-/* 📌 PUBLIC ROUTES — STUDENT ACCESS                                          */
+/* 📌 STUDENT ROUTES                                                          */
 /* -------------------------------------------------------------------------- */
 
-// 1. Get all exams
+// 1. Exams list
 router.get('/exams', getExams);
 
-// 2. Get syllabus tree for an exam
+// 2. Syllabus tree
 router.get('/syllabus/:examId', getSyllabusTree);
 
-// 3. Get a specific question (with validation middleware)
+// 3. Get question (with access control)
 router.get(
   '/question/:questionId',
   preventDirectAccess,
@@ -64,49 +63,52 @@ router.get(
   getQuestion
 );
 
-// 4. Save progress for a question
+// 4. Save progress
 router.post('/progress', saveProgress);
 
-// 5. Get user's progress
+// 5. Get user progress
 router.get('/progress', getUserProgress);
 
 /* -------------------------------------------------------------------------- */
-/* 📌 RECOMMENDATIONS                                                          */
+/* 📌 RECOMMENDATIONS                                                         */
 /* -------------------------------------------------------------------------- */
 
-// 6. Get recommendations based on current topic
+// 6. Get smart recommendations
 router.get('/recommendations', getRecommendations);
 
-// 7. Record user action for recommendation engine
+// 7. Record user action for ML
 router.post('/recommendations/action', recordUserAction);
 
 /* -------------------------------------------------------------------------- */
-/* 📌 TOPIC NAVIGATION                                                         */
+/* 📌 TOPIC NAVIGATION                                                        */
 /* -------------------------------------------------------------------------- */
 
-// 8. Get next topics in syllabus order
+// 8. Get next topics
 router.get('/topics/next/:topicId', validateNavigation);
 
-// 9. Get topics dependent on completed subtopic
+// 9. Get dependent topics
 router.get('/topics/dependent/:subtopicId', validateNavigation);
 
 /* -------------------------------------------------------------------------- */
-/* 📌 ADMIN ROUTES — PROTECTED                                                */
+/* 📌 ADMIN ROUTES                                                            */
 /* -------------------------------------------------------------------------- */
 
-// 10. Get all scheduled questions (admin only)
+// 10. Get scheduled questions (admin)
 router.get('/admin/questions', getScheduledQuestions);
 
-// 11. Create a new question (admin only)
+// 11. Create question (admin)
 router.post('/admin/questions', createQuestion);
 
-// 12. Schedule question release (admin only)
+// 12. Schedule question (admin)
 router.post('/admin/questions/:questionId/schedule', scheduleQuestion);
 
-// 13. Delete a question (admin only)
+// 13. Delete question (admin)
 router.delete('/admin/questions/:questionId', deleteQuestion);
 
-// 14. Get admin analytics (admin only)
+// 14. Get analytics (admin)
 router.get('/admin/analytics', getAnalytics);
 
+/* -------------------------------------------------------------------------- */
+/* 📌 EXPORT                                                                  */
+/* -------------------------------------------------------------------------- */
 export default router;
